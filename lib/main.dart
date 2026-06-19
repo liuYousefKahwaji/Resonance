@@ -27,7 +27,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
-//TODO: one window limit
+//TODO: one window limit -- dropped for now
 //TODO: Iconize
 //TODO: fade-in and out in settings
 //TODO: android discord rich presence (separate future TODO — needs different package)
