@@ -20,12 +20,12 @@ class TrackList extends StatelessWidget {
     }
 
     return ReorderableListView.builder(
-      // Use ReorderableDelayedDragStartListener for touch to avoid conflicts
-      // with scroll gestures on Android. The handle widget below uses
-      // ReorderableDragStartListener (immediate) since users tap the handle
-      // icon intentionally — delay is only needed for whole-tile dragging.
+      // IMPORTANT: disable the default trailing drag handle that
+      // ReorderableListView auto-inserts. TrackTile already has its own
+      // ReorderableDragStartListener on the leading drag_handle icon, so
+      // the default handle is redundant and visually out of place.
+      buildDefaultDragHandles: false,
       itemCount: tracks.length,
-      // Combine position + path so keys are unique even with duplicate paths
       itemBuilder: (context, index) {
         return TrackTile(
           key: ValueKey('$index-${tracks[index]}'),
@@ -35,8 +35,8 @@ class TrackList extends StatelessWidget {
         );
       },
       onReorder: onReorder,
-      // Remove the default drag handle proxy decoration to keep the existing
-      // AnimatedContainer card look during drag
+      // Preserve the AnimatedContainer card look during drag by not
+      // replacing it with a default opaque Material proxy.
       proxyDecorator: (child, index, animation) {
         return AnimatedBuilder(
           animation: animation,

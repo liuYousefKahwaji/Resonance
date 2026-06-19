@@ -27,13 +27,9 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
-//TODO: switch song order ✅ (drag-to-reorder implemented)
 //TODO: one window limit
 //TODO: Iconize
 //TODO: fade-in and out in settings
-//TODO: platfromatize (fix android) ✅
-//TODO: android background support ✅ (audio_service foreground service)
-//TODO: android notification controls ✅ (audio_service media controls)
 //TODO: android discord rich presence (separate future TODO — needs different package)
 //TODO: Add youtube support with playlists
 //TODO: themes
