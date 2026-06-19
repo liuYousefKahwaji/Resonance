@@ -1,0 +1,8 @@
+include: package:flutter_lints/flutter.yaml
+analyzer:
+  errors:
+    use_build_context_synchronously: ignore
+    deprecated_member_use: ignore
+
+formatter:
+  page_width: 120
