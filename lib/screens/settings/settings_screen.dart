@@ -10,6 +10,7 @@ import 'package:resonance/platform/desktop/tray_settings.dart';
 import 'package:resonance/services/discord_presence_service.dart';
 import 'package:restart_app/restart_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:resonance/providers/theme_provider.dart';
 
 bool get _isDesktop =>
     Platform.isWindows || Platform.isLinux || Platform.isMacOS;
@@ -102,6 +103,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── Appearance ──────────────────────────────────────────────
+            const Padding(
+              padding: EdgeInsets.only(left: 8.0, top: 8.0, bottom: 8.0),
+              child: Text(
+                'Appearance:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 24),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              child: Consumer<ThemeProvider>(
+                builder: (context, themeProvider, child) {
+                  return SwitchListTile(
+                    title: const Text('Dark Mode'),
+                    value: themeProvider.isDarkMode,
+                    onChanged: (value) => themeProvider.toggleTheme(value),
+                    secondary: const Icon(Icons.dark_mode, size: 28),
+                  );
+                },
+              ),
+            ),
+
             // ── Hotkeys (desktop only) ──────────────────────────────────
             if (_isDesktop) ...[
               const Padding(

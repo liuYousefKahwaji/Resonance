@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -10,7 +11,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
 
-// 1. The Handler: Connects just_audio to audio_service
 class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final _player = AudioPlayer();
   double savedVolume = 1.0;
@@ -20,7 +20,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   List<String> shuffledList = [];
 
   PlayerHandler() {
-    // Listen to ALL player events, not just playbackEventStream
     _player.playbackEventStream.listen((event) {
       _updatePlaybackState();
     });
@@ -29,13 +28,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       volumeNotifier.value = volume;
     });
 
-    // Also listen to playing state directly
     _player.playingStream.listen((isPlaying) {
       _updatePlaybackState();
     });
 
     _player.durationStream.listen((duration) {
-      // When duration changes (metadata loads), update the media item
       final currentItem = mediaItem.value;
       if (currentItem != null && duration != null) {
         mediaItem.add(currentItem.copyWith(duration: duration));
@@ -43,22 +40,20 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       _updatePlaybackState();
     });
 
-    _player.processingStateStream.listen((state) {
+    _player.processingStateStream.listen((state) async {
       if (state == ProcessingState.completed) {
         if (currentLoopMode == LoopMode.one) {
           _player.seek(Duration.zero);
           _player.play();
-          _player.pause();
-          _player.play();
         } else if (currentLoopMode == LoopMode.all) {
-          next(); // go to next track in queue
-        } else {
-          // stop or do nothing
+          await _player.pause();
+          await _player.seek(Duration.zero);
+          await Future.delayed(const Duration(milliseconds: 50));
+          await next();
         }
       }
     });
 
-    // Listen to playback state to update Discord presence
     _player.playingStream.listen((isPlaying) async {
       if (isPlaying) {
         final current = mediaItem.value;
@@ -73,21 +68,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _initSavedState();
   }
 
-  // =======================================================================
-  // DIAGNOSTICS
-  //
-  // skipToNext/skipToPrevious below print nothing even when the hardware
-  // Next/Previous media keys successfully change the track. That means
-  // audio_service_win is calling some OTHER AudioHandler method for these
-  // buttons. The overrides below log every plausible candidate so we can
-  // see, in the console, exactly which one fires on a real key press.
-  //
-  // Once we know which method it is, we can remove the unused overrides
-  // and fix the real one (e.g. make it call _player.pause() once before
-  // next()/previous() so the "press play/pause once first" requirement
-  // goes away).
-  // =======================================================================
-
+  // ─── Diagnostic overrides ──────────────────────────────────────────
   @override
   Future<void> click([MediaButton button = MediaButton.media]) async {
     debugPrint('[PlayerHandler] click($button)');
@@ -130,23 +111,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     return super.customAction(name, extras);
   }
 
-  // =======================================================================
-  // Unicode path workaround.
-  //
-  // just_audio_windows (Media Foundation backend) can fail to load files
-  // whose path contains non-ASCII characters (e.g. Chinese/Japanese/
-  // Korean filenames) - either silently failing to find the file, or
-  // throwing PlatformException(sourceNotSupported).
-  //
-  // If the path has non-ASCII characters, we copy the file to a temp
-  // file with a sanitized ASCII-only name and play THAT instead. The
-  // original path is still used everywhere else (playlist matching,
-  // MediaItem id, metadata, saved state) - only the actual audio source
-  // handed to just_audio is swapped.
-  //
-  // NOTE: this requires the temp directory path itself to be ASCII
-  // (normally true on Windows: C:\Users\<name>\AppData\Local\Temp).
-  // =======================================================================
+  // ─── Unicode path workaround ──────────────────────────────────────
   Future<String> _resolvePlayablePath(String filePath) async {
     final hasNonAscii = filePath.runes.any((rune) => rune > 127);
     if (!hasNonAscii) return filePath;
@@ -172,6 +137,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
   }
 
+  // ─── Playback state updates ──────────────────────────────────────
   void _updatePlaybackState() {
     playbackState.add(
       playbackState.value.copyWith(
@@ -181,8 +147,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           MediaControl.skipToNext,
           MediaControl.stop,
         ],
-        // Tells OS-level media transport controls (Windows SMTC, lock
-        // screen, etc.) which actions should be enabled.
         systemActions: const {
           MediaAction.seek,
           MediaAction.seekForward,
@@ -194,6 +158,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         },
         processingState: _getProcessingState(_player.processingState),
         playing: _player.playing,
+        updatePosition: _player.position,
         bufferedPosition: _player.bufferedPosition,
         speed: _player.speed,
         queueIndex: _player.currentIndex,
@@ -201,15 +166,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     );
   }
 
+  // ─── Saved state ──────────────────────────────────────────────────
   Future<void> _initSavedState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      // Load saved volume (fallback to 0.5)
       final savedVolume = prefs.getDouble('last_volume') ?? 0.5;
       await changeVolume(savedVolume);
 
-      // Load last track details
       final trackPath = prefs.getString('last_track_path');
       final trackTitle = prefs.getString('last_track_title');
       final trackArtist = prefs.getString('last_track_artist');
@@ -233,8 +197,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       _updatePlaybackState();
     } catch (e) {
       debugPrint("Error preloading track: $e");
-      // The saved track is unplayable. Clear it so this doesn't repeat
-      // on every future launch.
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.remove('last_track_path');
@@ -255,15 +217,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
   }
 
+  // ─── Core playback methods ───────────────────────────────────────
   @override
   Future<void> play() async {
     debugPrint('[PlayerHandler] play()');
+    if (_player.playing) return;
     await _player.play();
   }
 
   @override
   Future<void> pause() async {
     debugPrint('[PlayerHandler] pause()');
+    if (!_player.playing) return;
     await _player.pause();
   }
 
@@ -276,19 +241,22 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   @override
   Future<void> skipToNext() async {
     debugPrint('[PlayerHandler] skipToNext()');
-    await _player.pause();
     await next();
   }
 
   @override
   Future<void> skipToPrevious() async {
     debugPrint('[PlayerHandler] skipToPrevious()');
-    await _player.pause();
     await previous();
   }
 
   Future<void> loadTrack(String filePath, String title, String artist) async {
     try {
+      final wasPlaying = _player.playing;
+      if (wasPlaying) {
+        await _player.pause();
+      }
+
       final playablePath = await _resolvePlayablePath(filePath);
       final uri = Uri.file(playablePath);
       await _player.setAudioSource(AudioSource.uri(uri));
@@ -296,8 +264,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final duration = _player.duration;
       MediaItem item = MediaItem(id: filePath, title: title, artist: artist, duration: duration);
       mediaItem.add(item);
-      pause();
-      play();
+
+      await _player.play();
       _updatePlaybackState();
       await _saveTrack(filePath, title, artist);
       await DiscordPresenceService().updatePresence(title, artist);
@@ -308,6 +276,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   Future<void> changeVolume(double volume) async {
     final clamped = volume.clamp(0.0, 1.0);
+    volumeNotifier.value = clamped;
     await _player.setVolume(clamped);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -318,13 +287,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   Future<void> incrementVolume() async {
-    double newVol = _player.volume + 0.05;
+    double newVol = volumeNotifier.value + 0.05;
     newVol = newVol.clamp(0.0, 1.0);
     await changeVolume(newVol);
   }
 
   Future<void> decrementVolume() async {
-    double newVol = _player.volume - 0.05;
+    double newVol = volumeNotifier.value - 0.05;
     newVol = newVol.clamp(0.0, 1.0);
     await changeVolume(newVol);
   }
@@ -338,12 +307,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
     int index = playlist.indexOf(currentItem.id);
     if (index == -1) {
-      // Current track not found – just play first track
       index = 0;
     }
 
-    int nextIndex = (index + 1) % playlist.length; // wraps around
+    int nextIndex = (index + 1) % playlist.length;
     final nextPath = playlist[nextIndex];
+
+    final wasPlaying = _player.playing;
+    if (wasPlaying) {
+      await _player.pause();
+    }
+
     final metadata = await AudioMetadata.extract(File(nextPath));
     await loadTrack(
       nextPath,
@@ -367,35 +341,39 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     int prevIndex = (index - 1) % playlist.length;
     if (prevIndex < 0) prevIndex = playlist.length - 1;
     final prevPath = playlist[prevIndex];
-    final metadata = await AudioMetadata.extract(File(prevPath));
+
     if (_player.position > Duration(seconds: 3)) {
       await _player.seek(Duration.zero);
-    } else {
-      await loadTrack(
-        prevPath,
-        metadata?.trackName ?? p.basenameWithoutExtension(prevPath),
-        metadata?.firstArtists ?? 'Unknown Artist',
-      );
+      return;
     }
+
+    final wasPlaying = _player.playing;
+    if (wasPlaying) {
+      await _player.pause();
+    }
+
+    final metadata = await AudioMetadata.extract(File(prevPath));
+    await loadTrack(
+      prevPath,
+      metadata?.trackName ?? p.basenameWithoutExtension(prevPath),
+      metadata?.firstArtists ?? 'Unknown Artist',
+    );
   }
 
-  Future<bool> isPlaying() async {
-    return _player.playing;
-  }
+  Future<bool> isPlaying() async => _player.playing;
 
   Future<void> playPause() async {
     debugPrint('[PlayerHandler] playPause()');
     if (_player.playing) {
-      _player.pause();
+      await pause();
     } else {
-      _player.play();
+      await play();
     }
   }
 
   Stream<Duration> get positionStream => _player.positionStream;
   Stream<Duration?> get durationStream => _player.durationStream;
 
-  // Add a list of tracks to the queue
   Future<void> setQueue(List<MediaItem> tracks) async {
     await updateQueue(tracks);
     if (tracks.isNotEmpty && mediaItem.value == null) {
@@ -409,8 +387,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final playablePath = await _resolvePlayablePath(mediaItem.id);
       await _player.setAudioSource(AudioSource.uri(Uri.file(playablePath)));
       this.mediaItem.add(mediaItem);
-      play();
-
+      await _player.play();
       await _saveTrack(mediaItem.id, mediaItem.title, mediaItem.artist ?? 'Unknown Artist');
     } catch (e, st) {
       debugPrint('Error playing media item "${mediaItem.id}": $e\n$st');
@@ -420,15 +397,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> toggleLoopMode() async {
     if (currentLoopMode == LoopMode.off) {
       currentLoopMode = LoopMode.one;
-      return;
-    }
-    if (currentLoopMode == LoopMode.one) {
+    } else if (currentLoopMode == LoopMode.one) {
       currentLoopMode = LoopMode.all;
-      return;
-    }
-    if (currentLoopMode == LoopMode.all) {
+    } else {
       currentLoopMode = LoopMode.off;
-      return;
     }
   }
 

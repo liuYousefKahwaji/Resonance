@@ -36,7 +36,13 @@ class AlbumCover extends StatelessWidget {
               color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2)),
+                BoxShadow(
+                  color: Theme.of(context).brightness == Brightness.dark 
+                      ? Colors.black.withValues(alpha: 0.5) 
+                      : Colors.black.withValues(alpha: 0.1), 
+                  blurRadius: 8, 
+                  offset: const Offset(0, 4)
+                ),
               ],
             ),
             child: Row(

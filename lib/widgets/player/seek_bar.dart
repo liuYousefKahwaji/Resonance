@@ -63,6 +63,9 @@ class _SeekBarState extends State<SeekBar> {
                   // Show value indicator on hover (desktop) and long press (mobile)
                   showValueIndicator: ShowValueIndicator.onDrag,
                   valueIndicatorTextStyle: const TextStyle(color: Colors.white, fontSize: 12),
+                  activeTrackColor: Theme.of(context).colorScheme.primary,
+                  inactiveTrackColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+                  thumbColor: Theme.of(context).colorScheme.primary,
                 ),
                 child: Slider(
                   value: _sliderValue.clamp(0.0, 1.0),

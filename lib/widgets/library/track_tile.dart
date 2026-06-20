@@ -129,8 +129,8 @@ class _TrackTileState extends State<TrackTile> {
             curve: Curves.easeOut,
             decoration: BoxDecoration(
               color: isPlaying
-                  ? colorScheme.primaryContainer.withValues(alpha: 0.7)
-                  : colorScheme.surfaceContainerHighest,
+                  ? colorScheme.primary.withValues(alpha: 0.15)
+                  : Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(14),
               border: Border.all(
                 color: isPlaying ? colorScheme.primary : Colors.transparent,

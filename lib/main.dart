@@ -13,6 +13,7 @@ import 'package:resonance/widgets/library/import_track_button.dart';
 import 'package:resonance/widgets/library/track_list.dart';
 import 'package:resonance/widgets/player/album_cover.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
+import 'package:resonance/providers/theme_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // Desktop-only imports — guarded at runtime with Platform checks
@@ -27,12 +28,8 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
-//TODO: one window limit -- dropped for now
-//TODO: Iconize
-//TODO: fade-in and out in settings
-//TODO: android discord rich presence (separate future TODO — needs different package)
+//TODO: android discord rich presence - needs different package
 //TODO: Add youtube support with playlists
-//TODO: themes
 //TODO: taskbar
 //TODO: Revamp the UI
 
@@ -87,8 +84,11 @@ Future<void> main() async {
   }
 
   runApp(
-    Provider<PlayerHandler>.value(
-      value: handler,
+    MultiProvider(
+      providers: [
+        Provider<PlayerHandler>.value(value: handler),
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),
+      ],
       child: MainApp(handler: handler),
     ),
   );
@@ -253,10 +253,34 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: Builder(
-        builder: (nestedContext) {
+    return Consumer<ThemeProvider>(
+      builder: (context, themeProvider, child) {
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          themeMode: themeProvider.themeMode,
+          theme: ThemeData(
+            brightness: Brightness.light,
+            scaffoldBackgroundColor: const Color(0xFFF5F5F5),
+            cardColor: Colors.white,
+            iconTheme: const IconThemeData(color: Colors.black),
+            colorScheme: const ColorScheme.light(
+              primary: Colors.deepPurple,
+              secondary: Colors.deepPurpleAccent,
+            ),
+          ),
+          darkTheme: ThemeData(
+            brightness: Brightness.dark,
+            scaffoldBackgroundColor: const Color(0xFF1E1E1E),
+            cardColor: const Color(0xFF2C2C2C),
+            iconTheme: const IconThemeData(color: Colors.white),
+            colorScheme: const ColorScheme.dark(
+              primary: Colors.deepPurple,
+              secondary: Colors.deepPurpleAccent,
+              surface: Color(0xFF2C2C2C),
+            ),
+          ),
+          home: Builder(
+            builder: (nestedContext) {
           return Scaffold(
             appBar: AppBar(
               title: const Text('Resonance'),
@@ -273,6 +297,8 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
           );
         },
       ),
+        );
+      },
     );
   }
 
