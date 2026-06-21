@@ -15,6 +15,7 @@ import 'package:resonance/widgets/player/album_cover.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:metadata_god/metadata_god.dart';
 
 // Desktop-only imports — guarded at runtime with Platform checks
 import 'package:resonance/platform/desktop/hotkey_service.dart'
@@ -28,9 +29,9 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
-//TODO: android discord rich presence - needs different package
 //TODO: Add youtube support with playlists
 //TODO: taskbar
+//TODO: album cover
 //TODO: Revamp the UI
 
 bool get _isDesktop =>
@@ -38,6 +39,7 @@ bool get _isDesktop =>
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await MetadataGod.initialize();
 
   // Window manager is desktop-only
   if (_isDesktop) {
@@ -54,6 +56,7 @@ Future<void> main() async {
       androidNotificationChannelId: 'com.resonance.audio',
       androidNotificationChannelName: 'Resonance Playback',
       androidNotificationIcon: 'mipmap/ic_launcher',
+      androidStopForegroundOnPause: false,
     ),
   );
 
@@ -283,6 +286,11 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
             builder: (nestedContext) {
           return Scaffold(
             appBar: AppBar(
+              backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              surfaceTintColor: Colors.transparent,
+              shadowColor: Colors.transparent,
               title: const Text('Resonance'),
               centerTitle: true,
               actions: [
@@ -325,7 +333,6 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
             });
           },
         ),
-        const Divider(),
         Expanded(
           child: _isDesktop
               ? DropTarget(

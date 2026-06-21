@@ -66,6 +66,7 @@ class _SeekBarState extends State<SeekBar> {
                   activeTrackColor: Theme.of(context).colorScheme.primary,
                   inactiveTrackColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
                   thumbColor: Theme.of(context).colorScheme.primary,
+                  tickMarkShape: SliderTickMarkShape.noTickMark,
                 ),
                 child: Slider(
                   value: _sliderValue.clamp(0.0, 1.0),

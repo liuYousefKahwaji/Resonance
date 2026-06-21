@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/widgets/player/player_modes.dart';
 import 'package:resonance/widgets/player/seek_bar.dart';
+import 'package:resonance/widgets/player/speed_control.dart';
 import 'package:resonance/widgets/player/volume_bar.dart';
 
 class PlayerControls extends StatelessWidget {
@@ -75,8 +76,9 @@ class PlayerControls extends StatelessWidget {
                 Row(
                   children: const [
                     PlayerModes(),
-
-                    SizedBox(width: 12),
+                    SizedBox(width: 4),
+                    SpeedControl(),
+                    SizedBox(width: 8),
 
                     Expanded(
                       child: VolumeBar(),
@@ -113,7 +115,14 @@ class PlayerControls extends StatelessWidget {
                     // LEFT
                     Align(
                       alignment: Alignment.centerLeft,
-                      child: const PlayerModes(),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: const [
+                          PlayerModes(),
+                          SizedBox(width: 4),
+                          SpeedControl(),
+                        ],
+                      ),
                     ),
 
                     // CENTER

@@ -32,6 +32,8 @@ dependencies:
   window_proc_delegate: ^0.0.3
   win32: ^5.15.0
   ffi: ^2.2.0
+  metadata_god: ^1.1.0
+  flutter_rust_bridge: 2.11.1
 
 dev_dependencies:
   flutter_test:

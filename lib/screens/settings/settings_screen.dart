@@ -165,6 +165,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       actionName: 'Volume Down',
                       callback: () => handler.decrementVolume(),
                     ),
+                    HotkeySettingsTile(
+                      actionId: 'speed_up',
+                      actionName: 'Speed Up',
+                      callback: () => handler.incrementSpeed(),
+                    ),
+                    HotkeySettingsTile(
+                      actionId: 'speed_down',
+                      actionName: 'Speed Down',
+                      callback: () => handler.decrementSpeed(),
+                    ),
                   ],
                 ),
               ),

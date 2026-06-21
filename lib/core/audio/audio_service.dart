@@ -15,6 +15,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final _player = AudioPlayer();
   double savedVolume = 1.0;
   final ValueNotifier<double> volumeNotifier = ValueNotifier<double>(1.0);
+  final ValueNotifier<double> speedNotifier = ValueNotifier<double>(1.0);
   LoopMode currentLoopMode = LoopMode.all;
   bool isShuffle = false;
   List<String> shuffledList = [];
@@ -28,6 +29,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       volumeNotifier.value = volume;
     });
 
+    _player.speedStream.listen((speed) {
+      speedNotifier.value = speed;
+    });
+
     _player.playingStream.listen((isPlaying) {
       _updatePlaybackState();
     });
@@ -37,6 +42,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (currentItem != null && duration != null) {
         mediaItem.add(currentItem.copyWith(duration: duration));
       }
+      _updatePlaybackState();
+    });
+
+    // ── Frequent position updates for notification seekbar ──
+    _player.positionStream.listen((position) {
       _updatePlaybackState();
     });
 
@@ -158,7 +168,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         },
         processingState: _getProcessingState(_player.processingState),
         playing: _player.playing,
-        updatePosition: _player.position,
+        updatePosition: _player.position, // ✅ correct parameter
         bufferedPosition: _player.bufferedPosition,
         speed: _player.speed,
         queueIndex: _player.currentIndex,
@@ -173,6 +183,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
       final savedVolume = prefs.getDouble('last_volume') ?? 0.5;
       await changeVolume(savedVolume);
+
+      final savedSpeed = prefs.getDouble('last_speed') ?? 1.0;
+      await _player.setSpeed(savedSpeed);
 
       final trackPath = prefs.getString('last_track_path');
       final trackTitle = prefs.getString('last_track_title');
@@ -223,6 +236,20 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     debugPrint('[PlayerHandler] play()');
     if (_player.playing) return;
     await _player.play();
+    _updatePlaybackState(); // immediate update
+  }
+
+  @override
+  Future<void> setSpeed(double speed) async {
+    debugPrint('[PlayerHandler] setSpeed($speed)');
+    await _player.setSpeed(speed);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('last_speed', speed);
+    } catch (e) {
+      debugPrint("Error saving speed: $e");
+    }
+    _updatePlaybackState();
   }
 
   @override
@@ -230,12 +257,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     debugPrint('[PlayerHandler] pause()');
     if (!_player.playing) return;
     await _player.pause();
+    _updatePlaybackState(); // immediate update
   }
 
   @override
   Future<void> seek(Duration position) async {
     debugPrint('[PlayerHandler] seek($position)');
     await _player.seek(position);
+    _updatePlaybackState(); // immediate update after seek
   }
 
   @override
@@ -260,6 +289,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final playablePath = await _resolvePlayablePath(filePath);
       final uri = Uri.file(playablePath);
       await _player.setAudioSource(AudioSource.uri(uri));
+
+      final prefs = await SharedPreferences.getInstance();
+      final savedSpeed = prefs.getDouble('last_speed') ?? 1.0;
+      await _player.setSpeed(savedSpeed);
 
       final duration = _player.duration;
       MediaItem item = MediaItem(id: filePath, title: title, artist: artist, duration: duration);
@@ -296,6 +329,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     double newVol = volumeNotifier.value - 0.05;
     newVol = newVol.clamp(0.0, 1.0);
     await changeVolume(newVol);
+  }
+
+  Future<void> incrementSpeed() async {
+    double newSpeed = speedNotifier.value + 0.1;
+    newSpeed = newSpeed.clamp(0.5, 2.0);
+    await setSpeed(newSpeed);
+  }
+
+  Future<void> decrementSpeed() async {
+    double newSpeed = speedNotifier.value - 0.1;
+    newSpeed = newSpeed.clamp(0.5, 2.0);
+    await setSpeed(newSpeed);
   }
 
   Future<void> next() async {

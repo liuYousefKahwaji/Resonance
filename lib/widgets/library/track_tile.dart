@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:metadata_god/metadata_god.dart';
 
 class TrackTile extends StatefulWidget {
   final String trackPath;
@@ -93,6 +94,67 @@ class _TrackTileState extends State<TrackTile> {
     }
   }
 
+  void _showMetadataEditor(BuildContext context, String currentTitle, String currentArtist) {
+    final titleController = TextEditingController(text: currentTitle);
+    final artistController = TextEditingController(text: currentArtist);
+    
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Edit Metadata'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleController,
+                decoration: const InputDecoration(labelText: 'Title'),
+              ),
+              TextField(
+                controller: artistController,
+                decoration: const InputDecoration(labelText: 'Artist'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                try {
+                  await MetadataGod.writeMetadata(
+                    file: widget.trackPath,
+                    metadata: Metadata(
+                      title: titleController.text,
+                      artist: artistController.text,
+                    ),
+                  );
+                  await MetadataCacheService.set(widget.trackPath, titleController.text, artistController.text);
+                  if (mounted) {
+                    setState(() {
+                      _title = titleController.text;
+                      _artist = artistController.text;
+                    });
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to update metadata: $e')),
+                    );
+                  }
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      }
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context, listen: false);
@@ -145,6 +207,9 @@ class _TrackTileState extends State<TrackTile> {
                 ),
                 onTap: () {
                   handler.loadTrack(widget.trackPath, title, artist);
+                },
+                onLongPress: () {
+                  _showMetadataEditor(context, title, artist);
                 },
                 // ── Leading: drag handle + now-playing indicator ─────────
                 leading: Row(
