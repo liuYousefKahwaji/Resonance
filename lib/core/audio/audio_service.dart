@@ -16,6 +16,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   double savedVolume = 1.0;
   final ValueNotifier<double> volumeNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<double> speedNotifier = ValueNotifier<double>(1.0);
+  final ValueNotifier<double> pitchNotifier = ValueNotifier<double>(1.0);
   LoopMode currentLoopMode = LoopMode.all;
   bool isShuffle = false;
   List<String> shuffledList = [];
@@ -187,6 +188,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final savedSpeed = prefs.getDouble('last_speed') ?? 1.0;
       await _player.setSpeed(savedSpeed);
 
+      final savedPitch = prefs.getDouble('last_pitch') ?? 1.0;
+      await _player.setPitch(savedPitch);
+      pitchNotifier.value = savedPitch;
+
       final trackPath = prefs.getString('last_track_path');
       final trackTitle = prefs.getString('last_track_title');
       final trackArtist = prefs.getString('last_track_artist');
@@ -252,6 +257,19 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _updatePlaybackState();
   }
 
+  Future<void> setPitch(double pitch) async {
+  final clamped = pitch.clamp(0.5, 2.0);
+  await _player.setPitch(clamped);
+  pitchNotifier.value = clamped;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('last_pitch', clamped);
+  } catch (e) {
+    debugPrint("Error saving pitch: $e");
+  }
+  _updatePlaybackState();
+}
+
   @override
   Future<void> pause() async {
     debugPrint('[PlayerHandler] pause()');
@@ -291,8 +309,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       await _player.setAudioSource(AudioSource.uri(uri));
 
       final prefs = await SharedPreferences.getInstance();
+
       final savedSpeed = prefs.getDouble('last_speed') ?? 1.0;
       await _player.setSpeed(savedSpeed);
+
+      final savedPitch = prefs.getDouble('last_pitch') ?? 1.0;
+      await _player.setPitch(savedPitch);
 
       final duration = _player.duration;
       MediaItem item = MediaItem(id: filePath, title: title, artist: artist, duration: duration);

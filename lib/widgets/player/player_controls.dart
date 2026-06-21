@@ -1,7 +1,9 @@
+import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/widgets/player/playback_settings.dart';
 import 'package:resonance/widgets/player/player_modes.dart';
 import 'package:resonance/widgets/player/seek_bar.dart';
 import 'package:resonance/widgets/player/speed_control.dart';
@@ -14,6 +16,7 @@ class PlayerControls extends StatelessWidget {
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
     final screenWidth = MediaQuery.of(context).size.width;
+    bool isMobile = Platform.isAndroid;
 
     return StreamBuilder<PlaybackState>(
       stream: handler.playbackState,
@@ -74,13 +77,13 @@ class PlayerControls extends StatelessWidget {
                 const SizedBox(height: 10),
 
                 Row(
-                  children: const [
-                    PlayerModes(),
-                    SizedBox(width: 4),
-                    SpeedControl(),
-                    SizedBox(width: 8),
+                  children: [
+                    const PlayerModes(),
+                    const SizedBox(width: 4),
+                    isMobile ? const PlaybackSettings() : SpeedControl(),
+                    const SizedBox(width: 8),
 
-                    Expanded(
+                    const Expanded(
                       child: VolumeBar(),
                     ),
                   ],
@@ -117,10 +120,10 @@ class PlayerControls extends StatelessWidget {
                       alignment: Alignment.centerLeft,
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
-                        children: const [
-                          PlayerModes(),
-                          SizedBox(width: 4),
-                          SpeedControl(),
+                        children: [
+                          const PlayerModes(),
+                          const SizedBox(width: 4),
+                          isMobile ? const PlaybackSettings() : const SpeedControl(),
                         ],
                       ),
                     ),
