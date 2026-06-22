@@ -36,7 +36,11 @@ class HotkeyService {
 
   static Future<void> register(String actionId, HotKey hotKey, Function callback) async {
     if (_activeHotKeys.containsKey(actionId)) {
-      await hotKeyManager.unregister(_activeHotKeys[actionId]!);
+      try {
+        await hotKeyManager.unregister(_activeHotKeys[actionId]!);
+      } catch (e) {
+        // Ignore unregister errors if it wasn't registered properly
+      }
     }
     await hotKeyManager.register(
       hotKey,
@@ -48,7 +52,11 @@ class HotkeyService {
 
   static Future<void> unregister(String actionId) async {
     if (_activeHotKeys.containsKey(actionId)) {
-      await hotKeyManager.unregister(_activeHotKeys[actionId]!);
+      try {
+        await hotKeyManager.unregister(_activeHotKeys[actionId]!);
+      } catch (e) {
+        // Ignore unregister errors
+      }
       _activeHotKeys.remove(actionId);
       await _removeFromPrefs(actionId);
     }

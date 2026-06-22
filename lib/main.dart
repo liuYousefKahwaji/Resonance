@@ -14,6 +14,7 @@ import 'package:resonance/widgets/library/track_list.dart';
 import 'package:resonance/widgets/player/album_cover.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
 import 'package:resonance/providers/theme_provider.dart';
+import 'package:resonance/widgets/youtube/android_youtube.dart';
 import 'package:resonance/widgets/youtube/windows_youtube.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:metadata_god/metadata_god.dart';
@@ -70,6 +71,8 @@ Future<void> main() async {
       'previous': handler.previous,
       'volume_up': handler.incrementVolume,
       'volume_down': handler.decrementVolume,
+      'speed_up': handler.incrementSpeed,
+      'speed_down': handler.decrementSpeed,
     });
   }
 
@@ -100,7 +103,6 @@ Future<void> main() async {
 
   // ---------------------------------------------------------------
   // Hardware Media Next/Previous keys (Windows-only native plugin).
-  // See original comment for full context. Guard is already here.
   // ---------------------------------------------------------------
   if (Platform.isWindows) {
     unawaited(
@@ -145,9 +147,7 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
       setState(() {
         _currentTrayMode = mode;
       });
-      // Register window listener (desktop-only)
       windowManager.addListener(this);
-      // Register tray listener only if mode != noTray
       if (_currentTrayMode != TrayMode.noTray) {
         trayManager.addListener(this);
       }
@@ -161,7 +161,6 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
       if (_currentTrayMode != TrayMode.noTray) {
         trayManager.removeListener(this);
       }
-      // MediaKeysService is Windows-only; unregister only on Windows
       if (Platform.isWindows) {
         unawaited(MediaKeysService.unregister());
       }
@@ -179,18 +178,17 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
     }
   }
 
-  // ---------- Reorder callback ----------
   void _handleReorder(int oldIndex, int newIndex) async {
     if (newIndex > oldIndex) newIndex -= 1;
     setState(() {
       final item = playlist.removeAt(oldIndex);
       playlist.insert(newIndex, item);
     });
-    // Persist to disk so PlayerHandler.next()/previous() see the new order
     await FileService().reorderPlaylist(playlist);
   }
 
-  // ---------- WindowListener (desktop-only, safe to have as mixin stubs on Android) ----------
+  // ── WindowListener ────────────────────────────────────────────────────────
+
   @override
   void onWindowClose() async {
     final mode = await _settingsService.getTrayMode();
@@ -215,7 +213,8 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
     }
   }
 
-  // ---------- TrayListener (desktop-only) ----------
+  // ── TrayListener ──────────────────────────────────────────────────────────
+
   @override
   void onTrayIconMouseDown() => _showWindow();
 
@@ -231,7 +230,8 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
     }
   }
 
-  // ---------- Helpers ----------
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
   void _showWindow() async {
     await windowManager.show();
     await windowManager.focus();
@@ -255,6 +255,8 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
       exit(0);
     });
   }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -286,27 +288,30 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
           ),
           home: Builder(
             builder: (nestedContext) {
-          return Scaffold(
-            appBar: AppBar(
-              backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
-              elevation: 0,
-              scrolledUnderElevation: 0,
-              surfaceTintColor: Colors.transparent,
-              shadowColor: Colors.transparent,
-              title: const Text('Resonance'),
-              centerTitle: true,
-              actions: [
-                IconButton(
-                  onPressed: () =>
-                      Navigator.push(nestedContext, MaterialPageRoute(builder: (context) => SettingsScreen())),
-                  icon: const Icon(Icons.settings),
+              return Scaffold(
+                appBar: AppBar(
+                  backgroundColor:
+                      Theme.of(nestedContext).scaffoldBackgroundColor,
+                  elevation: 0,
+                  scrolledUnderElevation: 0,
+                  surfaceTintColor: Colors.transparent,
+                  shadowColor: Colors.transparent,
+                  title: const Text('Resonance'),
+                  centerTitle: true,
+                  actions: [
+                    IconButton(
+                      onPressed: () => Navigator.push(
+                          nestedContext,
+                          MaterialPageRoute(
+                              builder: (context) => SettingsScreen())),
+                      icon: const Icon(Icons.settings),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            body: _buildBody(nestedContext),
-          );
-        },
-      ),
+                body: _buildBody(nestedContext),
+              );
+            },
+          ),
         );
       },
     );
@@ -339,18 +344,22 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
                 });
               },
             ),
+            // YouTube download — desktop gets the full downloader,
+            // Android gets an explanation dialog.
             IconButton(
               icon: const Icon(Icons.download_outlined),
               onPressed: () {
                 showDialog(
                   context: nestedContext,
-                  builder: (context) => WindowsYoutube(
-                    onFileAdded: (String newPath) {
-                      setState(() {
-                        playlist.add(newPath);
-                      });
-                    },
-                  ),
+                  builder: (context) => _isDesktop
+                      ? WindowsYoutube(
+                          onFileAdded: (String newPath) {
+                            setState(() {
+                              playlist.add(newPath);
+                            });
+                          },
+                        )
+                      : const AndroidYoutube(),
                 );
               },
             ),
