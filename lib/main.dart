@@ -14,6 +14,7 @@ import 'package:resonance/widgets/library/track_list.dart';
 import 'package:resonance/widgets/player/album_cover.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
 import 'package:resonance/providers/theme_provider.dart';
+import 'package:resonance/widgets/youtube/windows_youtube.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:metadata_god/metadata_god.dart';
 
@@ -29,6 +30,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
+//TODO: fix numpad build and speed keybinds
 //TODO: Add youtube support with playlists
 //TODO: taskbar
 //TODO: album cover
@@ -301,7 +303,7 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
                 ),
               ],
             ),
-            body: _buildBody(),
+            body: _buildBody(nestedContext),
           );
         },
       ),
@@ -310,7 +312,7 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
     );
   }
 
-  Widget _buildBody() {
+  Widget _buildBody(BuildContext nestedContext) {
     final trackListWidget = isLoading
         ? const Center(child: CircularProgressIndicator())
         : TrackList(
@@ -326,12 +328,33 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
 
     return Column(
       children: [
-        ImportTrackButton(
-          onFileAdded: (String newPath) {
-            setState(() {
-              playlist.add(newPath);
-            });
-          },
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            ImportTrackButton(
+              onFileAdded: (String newPath) {
+                setState(() {
+                  playlist.add(newPath);
+                });
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.download_outlined),
+              onPressed: () {
+                showDialog(
+                  context: nestedContext,
+                  builder: (context) => WindowsYoutube(
+                    onFileAdded: (String newPath) {
+                      setState(() {
+                        playlist.add(newPath);
+                      });
+                    },
+                  ),
+                );
+              },
+            ),
+          ],
         ),
         Expanded(
           child: _isDesktop

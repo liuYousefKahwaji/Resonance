@@ -44,6 +44,10 @@ dev_dependencies:
 flutter:
   assets:
     - assets/images/tray_icon.ico
+    - assets/bin/yt-dlp.exe
+    - assets/bin/ffmpeg.exe
+    - assets/bin/ffprobe.exe
+    - assets/bin/deno.exe
   uses-material-design: true
 
 flutter_launcher_icons:

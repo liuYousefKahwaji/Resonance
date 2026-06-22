@@ -1,6 +1,7 @@
 // lib/screens/settings/settings_screen.dart
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart'; 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
@@ -25,14 +26,39 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   TrayMode _selectedMode = TrayMode.closeToTray;
   bool _discordEnabled = true;
+  String _downloadDirectory = 'Not selected (Using default)'; 
   final SettingsService _settingsService = SettingsService();
 
   @override
   void initState() {
     super.initState();
+    _loadDownloadDirectory();
     if (_isDesktop) {
       _loadTrayMode();
       _loadDiscordPreference();
+    }
+  }
+
+  Future<void> _loadDownloadDirectory() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _downloadDirectory = prefs.getString('download_directory') ?? 'Default App Folder';
+      });
+    }
+  }
+
+  Future<void> _pickDownloadDirectory() async {
+    String? selectedDirectory = await FilePicker.getDirectoryPath(
+      dialogTitle: 'Select Music Download Location',
+    );
+
+    if (selectedDirectory != null) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('download_directory', selectedDirectory);
+      setState(() {
+        _downloadDirectory = selectedDirectory;
+      });
     }
   }
 
@@ -125,10 +151,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
 
+            // ── Downloads (Cross-platform) ──────────────────────────────
+            const Padding(
+              padding: EdgeInsets.only(left: 8.0, top: 16.0, bottom: 8.0),
+              child: Text(
+                'Downloads:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 24),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              child: ListTile(
+                leading: const Icon(Icons.download_for_offline_rounded, size: 28),
+                title: const Text('Download Location'),
+                subtitle: Text(
+                  _downloadDirectory,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13),
+                ),
+                trailing: const Icon(Icons.edit_location_alt_rounded),
+                onTap: _pickDownloadDirectory, // Triggers directory selector
+              ),
+            ),
+
             // ── Hotkeys (desktop only) ──────────────────────────────────
             if (_isDesktop) ...[
               const Padding(
-                padding: EdgeInsets.only(left: 8.0, top: 8.0, bottom: 8.0),
+                padding: EdgeInsets.only(left: 8.0, top: 16.0, bottom: 8.0),
                 child: Text(
                   'Hotkeys:',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 24),
@@ -242,7 +292,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         );
                       }
                     } else {
-                      // Re-trigger permission request or open settings
                       await StoragePermissionService.requestWithRationale(
                         context,
                       );
