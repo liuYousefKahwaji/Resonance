@@ -31,12 +31,6 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
-//TODO: fix numpad build and speed keybinds
-//TODO: Add youtube support with playlists
-//TODO: taskbar
-//TODO: album cover
-//TODO: Revamp the UI
-
 bool get _isDesktop =>
     Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -44,7 +38,6 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await MetadataGod.initialize();
 
-  // Window manager is desktop-only
   if (_isDesktop) {
     await windowManager.ensureInitialized();
     await windowManager.setPreventClose(true);
@@ -63,7 +56,6 @@ Future<void> main() async {
     ),
   );
 
-  // Hotkeys are desktop-only (hotkey_manager doesn't support Android)
   if (_isDesktop) {
     await HotkeyService.init({
       'play_pause': handler.playPause,
@@ -76,7 +68,6 @@ Future<void> main() async {
     });
   }
 
-  // System tray is desktop-only
   if (_isDesktop) {
     final settingsService = SettingsService();
     final trayMode = await settingsService.getTrayMode();
@@ -88,7 +79,7 @@ Future<void> main() async {
   final prefs = await SharedPreferences.getInstance();
   final discordEnabled = prefs.getBool('discord_enabled') ?? true;
   if (_isDesktop && discordEnabled) {
-    DiscordPresenceService().initialize(); // no await
+    DiscordPresenceService().initialize();
   }
 
   runApp(
@@ -101,9 +92,6 @@ Future<void> main() async {
     ),
   );
 
-  // ---------------------------------------------------------------
-  // Hardware Media Next/Previous keys (Windows-only native plugin).
-  // ---------------------------------------------------------------
   if (Platform.isWindows) {
     unawaited(
       MediaKeysService.register(
@@ -125,54 +113,118 @@ class MainApp extends StatefulWidget {
   State<MainApp> createState() => _MainAppState();
 }
 
-class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
+// ── Desktop window/tray listener — only instantiated on desktop ───────────────
+// Keeping WindowListener and TrayListener in a separate class means Android
+// never touches window_manager or tray_manager at all, even at the mixin level.
+class _DesktopWindowHandler with WindowListener, TrayListener {
+  final VoidCallback onShow;
+  final VoidCallback onExit;
+  final SettingsService settingsService;
+
+  _DesktopWindowHandler({
+    required this.onShow,
+    required this.onExit,
+    required this.settingsService,
+  }) {
+    windowManager.addListener(this);
+    trayManager.addListener(this);
+  }
+
+  void dispose() {
+    windowManager.removeListener(this);
+    trayManager.removeListener(this);
+  }
+
+  @override
+  void onWindowClose() async {
+    final mode = await settingsService.getTrayMode();
+    switch (mode) {
+      case TrayMode.closeToTray:
+        await windowManager.hide();
+        break;
+      case TrayMode.minimizeToTray:
+      case TrayMode.noTray:
+        onExit();
+        break;
+    }
+  }
+
+  @override
+  void onWindowMinimize() async {
+    final mode = await settingsService.getTrayMode();
+    if (mode == TrayMode.minimizeToTray) {
+      await windowManager.hide();
+    } else {
+      await windowManager.minimize();
+    }
+  }
+
+  @override
+  void onTrayIconMouseDown() => onShow();
+
+  @override
+  void onTrayIconRightMouseDown() => trayManager.popUpContextMenu();
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    if (menuItem.key == 'open') {
+      onShow();
+    } else if (menuItem.key == 'exit') {
+      onExit();
+    }
+  }
+}
+
+class _MainAppState extends State<MainApp> {
   List<String> playlist = [];
   bool isLoading = true;
   bool _isDragging = false;
-  TrayMode _currentTrayMode = TrayMode.closeToTray;
+
   final SettingsService _settingsService = SettingsService();
+  _DesktopWindowHandler? _desktopHandler;
 
   @override
   void initState() {
     super.initState();
-    if (_isDesktop) {
-      _loadTrayModeAndSetup();
-    }
     _loadPlaylistFromDisk();
+    if (_isDesktop) {
+      _initDesktop();
+    }
   }
 
-  Future<void> _loadTrayModeAndSetup() async {
+  Future<void> _initDesktop() async {
+    // Load tray mode first so we only attach tray listener when needed
     final mode = await _settingsService.getTrayMode();
-    if (mounted) {
-      setState(() {
-        _currentTrayMode = mode;
-      });
-      windowManager.addListener(this);
-      if (_currentTrayMode != TrayMode.noTray) {
-        trayManager.addListener(this);
-      }
+    if (!mounted) return;
+    _desktopHandler = _DesktopWindowHandler(
+      onShow: _showWindow,
+      onExit: _exitApp,
+      settingsService: _settingsService,
+    );
+    // If noTray mode, don't listen to tray events
+    if (mode == TrayMode.noTray) {
+      trayManager.removeListener(_desktopHandler!);
     }
   }
 
   @override
   void dispose() {
-    if (_isDesktop) {
-      windowManager.removeListener(this);
-      if (_currentTrayMode != TrayMode.noTray) {
-        trayManager.removeListener(this);
-      }
-      if (Platform.isWindows) {
-        unawaited(MediaKeysService.unregister());
-      }
+    _desktopHandler?.dispose();
+    if (_isDesktop && Platform.isWindows) {
+      unawaited(MediaKeysService.unregister());
     }
     super.dispose();
   }
 
   Future<void> _loadPlaylistFromDisk() async {
-    String fileData = await FileService().readTextFromFile();
+    final fileData = await FileService().readTextFromFile();
     if (mounted) {
       setState(() {
-        playlist = fileData.split("\n").where((line) => line.isNotEmpty).skip(1).toList();
+        playlist = fileData
+            .split('\n')
+            .where((line) => line.isNotEmpty)
+            .skip(1)
+            .toList();
         isLoading = false;
       });
     }
@@ -186,51 +238,6 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
     });
     await FileService().reorderPlaylist(playlist);
   }
-
-  // ── WindowListener ────────────────────────────────────────────────────────
-
-  @override
-  void onWindowClose() async {
-    final mode = await _settingsService.getTrayMode();
-    switch (mode) {
-      case TrayMode.closeToTray:
-        await windowManager.hide();
-        break;
-      case TrayMode.minimizeToTray:
-      case TrayMode.noTray:
-        _exitApp();
-        break;
-    }
-  }
-
-  @override
-  void onWindowMinimize() async {
-    final mode = await _settingsService.getTrayMode();
-    if (mode == TrayMode.minimizeToTray) {
-      await windowManager.hide();
-    } else {
-      await windowManager.minimize();
-    }
-  }
-
-  // ── TrayListener ──────────────────────────────────────────────────────────
-
-  @override
-  void onTrayIconMouseDown() => _showWindow();
-
-  @override
-  void onTrayIconRightMouseDown() => trayManager.popUpContextMenu();
-
-  @override
-  void onTrayMenuItemClick(MenuItem menuItem) {
-    if (menuItem.key == 'open') {
-      _showWindow();
-    } else if (menuItem.key == 'exit') {
-      _exitApp();
-    }
-  }
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
 
   void _showWindow() async {
     await windowManager.show();
@@ -251,12 +258,8 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
       unawaited(windowManager.destroy());
     }
 
-    Future.delayed(const Duration(milliseconds: 200), () {
-      exit(0);
-    });
+    Future.delayed(const Duration(milliseconds: 200), () => exit(0));
   }
-
-  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -290,8 +293,7 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
             builder: (nestedContext) {
               return Scaffold(
                 appBar: AppBar(
-                  backgroundColor:
-                      Theme.of(nestedContext).scaffoldBackgroundColor,
+                  backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
                   elevation: 0,
                   scrolledUnderElevation: 0,
                   surfaceTintColor: Colors.transparent,
@@ -323,9 +325,7 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
         : TrackList(
             tracks: playlist,
             onTrackDeleted: (index, trackPath) async {
-              setState(() {
-                playlist.removeAt(index);
-              });
+              setState(() => playlist.removeAt(index));
               await FileService().removeFromPlaylist(trackPath);
             },
             onReorder: _handleReorder,
@@ -339,13 +339,9 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
           children: [
             ImportTrackButton(
               onFileAdded: (String newPath) {
-                setState(() {
-                  playlist.add(newPath);
-                });
+                setState(() => playlist.add(newPath));
               },
             ),
-            // YouTube download — desktop gets the full downloader,
-            // Android gets an explanation dialog.
             IconButton(
               icon: const Icon(Icons.download_outlined),
               onPressed: () {
@@ -354,12 +350,14 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
                   builder: (context) => _isDesktop
                       ? WindowsYoutube(
                           onFileAdded: (String newPath) {
-                            setState(() {
-                              playlist.add(newPath);
-                            });
+                            setState(() => playlist.add(newPath));
                           },
                         )
-                      : const AndroidYoutube(),
+                      : AndroidYoutube(
+                          onFileAdded: (String newPath) {
+                            setState(() => playlist.add(newPath));
+                          },
+                        ),
                 );
               },
             ),
@@ -375,9 +373,7 @@ class _MainAppState extends State<MainApp> with WindowListener, TrayListener {
                     children: [
                       DropZone(
                         onFileAdded: (newPath) {
-                          setState(() {
-                            playlist.add(newPath);
-                          });
+                          setState(() => playlist.add(newPath));
                         },
                         child: trackListWidget,
                       ),
