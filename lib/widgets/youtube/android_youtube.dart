@@ -138,8 +138,14 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     final outputDir = await _downloader.outputDir;
 
     _downloadSub?.cancel();
+
+    // Collect track paths during streaming; process them sequentially in
+    // onDone so that every ImportService.importFiles() is fully awaited
+    // before we pop — this fixes the last-track-not-added race condition.
+    final pendingTracks = <String>[];
+
     _downloadSub = _downloader.download(url, outputDir).listen(
-      (event) async {
+      (event) {
         if (event.startsWith('progress:')) {
           // "progress:<percent>:<message>"
           final parts = event.split(':');
@@ -147,39 +153,19 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
           final msg = parts.sublist(2).join(':');
           if (mounted) {
             setState(() {
-            _downloadPercentage = pct;
-            _statusMessage = msg;
-          });
+              _downloadPercentage = pct;
+              _statusMessage = msg;
+            });
           }
         } else if (event.startsWith('track:')) {
-          final filePath = event.substring('track:'.length);
-          await ImportService.importFiles([filePath], (newPath) {
-            widget.onFileAdded?.call(newPath);
-          });
+          // Queue path — will be imported sequentially in onDone
+          pendingTracks.add(event.substring('track:'.length));
         } else if (event == 'done') {
-          await _downloadSub?.cancel();
-          if (mounted) {
-            Navigator.pop(context);
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Row(children: [
-                  Icon(Icons.check_circle, color: Colors.greenAccent),
-                  SizedBox(width: 8),
-                  Text('Download & Import Complete!',
-                      style: TextStyle(
-                          color: Colors.greenAccent,
-                          fontWeight: FontWeight.w500)),
-                ]),
-                backgroundColor:
-                    Theme.of(context).colorScheme.surfaceContainerHigh,
-                behavior: SnackBarBehavior.floating,
-                duration: const Duration(seconds: 3),
-              ),
-            );
-          }
+          // Cancelling the subscription closes the stream → triggers onDone
+          _downloadSub?.cancel();
         } else if (event.startsWith('error:')) {
           final msg = event.substring('error:'.length);
-          await _downloadSub?.cancel();
+          _downloadSub?.cancel();
           if (mounted) {
             setState(() => _mode = _DialogMode.input);
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -196,6 +182,34 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             content: Text('Error: $e'),
             backgroundColor: Theme.of(context).colorScheme.error,
           ));
+        }
+      },
+      onDone: () async {
+        // Process all collected tracks sequentially — every await is
+        // properly honoured so the last track is never skipped.
+        for (final filePath in pendingTracks) {
+          await ImportService.importFiles([filePath], (newPath) {
+            widget.onFileAdded?.call(newPath);
+          });
+        }
+        if (mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Row(children: [
+                Icon(Icons.check_circle, color: Colors.greenAccent),
+                SizedBox(width: 8),
+                Text('Download & Import Complete!',
+                    style: TextStyle(
+                        color: Colors.greenAccent,
+                        fontWeight: FontWeight.w500)),
+              ]),
+              backgroundColor:
+                  Theme.of(context).colorScheme.surfaceContainerHigh,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 3),
+            ),
+          );
         }
       },
     );

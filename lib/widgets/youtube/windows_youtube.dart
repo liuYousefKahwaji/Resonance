@@ -101,7 +101,7 @@ class MediaDownloader {
 
     // Drain stderr to prevent pipe deadlock
 
-    process.stderr.drain<List<int>>();
+    process.stderr.drain();
 
     // Collect all stdout lines then parse — avoids async-forEach gotcha
 
@@ -165,8 +165,6 @@ class MediaDownloader {
 
     final ffmpegPath = p.join(binDir, 'ffmpeg.exe');
 
-    final denoPath = p.join(binDir, 'deno.exe');
-
     final prefs = await SharedPreferences.getInstance();
 
     final savedPath = prefs.getString('download_directory');
@@ -203,8 +201,10 @@ class MediaDownloader {
           '--ffmpeg-location',
           ffmpegPath,
 
-          '--js-runtimes',
-          'deno:$denoPath',
+          // NOTE: --js-runtimes deno is intentionally NOT passed here.
+          // Deno's subprocess model swallows yt-dlp's piped stderr progress
+          // lines (leaving the bar stuck at 0%) and adds cold-start latency.
+          // yt-dlp's built-in jsinterp handles decryption fine for downloads.
 
           '-x',
 
@@ -212,6 +212,11 @@ class MediaDownloader {
           'mp3',
 
           '--embed-metadata',
+
+          // --progress forces progress output even when stderr is not a TTY
+          // (i.e. when piped). Without this yt-dlp silently suppresses all
+          // [download] XX.X% lines, leaving the bar stuck at 0%.
+          '--progress',
 
           '--newline',
 
@@ -394,12 +399,13 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
         url: url,
 
         onProgress: (percent, status) {
-          if (mounted)
+          if (mounted) {
             setState(() {
               _downloadPercentage = percent;
 
               _statusMessage = status;
             });
+          }
         },
 
         onTrackDownloaded: (filePath) async {
@@ -461,12 +467,13 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     try {
       final results = await _downloader.search(query);
 
-      if (mounted)
+      if (mounted) {
         setState(() {
           _searchResults = results;
 
           _mode = _DialogMode.results;
         });
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);

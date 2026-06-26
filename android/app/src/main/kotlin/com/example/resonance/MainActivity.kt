@@ -61,15 +61,20 @@ class MainActivity : FlutterFragmentActivity() {
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
                                 val pyResults = bridge.callAttr("search", query)
+                                val builtins = py.builtins
                                 val list = mutableListOf<Map<String, Any?>>()
                                 for (item in pyResults.asList()) {
                                     val map = item.asMap()
+                                    val strTitle    = builtins.callAttr("str", "title")
+                                    val strUploader = builtins.callAttr("str", "uploader")
+                                    val strUrl      = builtins.callAttr("str", "url")
+                                    val strDuration = builtins.callAttr("str", "duration_seconds")
                                     list.add(mapOf(
-                                        "title"            to map[py.str("title")]?.toString(),
-                                        "uploader"         to map[py.str("uploader")]?.toString(),
-                                        "url"              to map[py.str("url")]?.toString(),
+                                        "title"            to map[strTitle]?.toString(),
+                                        "uploader"         to map[strUploader]?.toString(),
+                                        "url"              to map[strUrl]?.toString(),
                                         "duration_seconds" to
-                                            map[py.str("duration_seconds")]
+                                            map[strDuration]
                                                 ?.toJava(Int::class.java),
                                     ))
                                 }
