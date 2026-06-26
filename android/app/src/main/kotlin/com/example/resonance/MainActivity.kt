@@ -38,12 +38,18 @@ class MainActivity : FlutterFragmentActivity() {
         val bridge = py.getModule("ytdlp_bridge")
 
         // ── EventChannel ─────────────────────────────────────────────────────
+        // activeSink is accessed via a lambda in KotlinEventSink so the sink
+        // captured at download() call time is always the most recently
+        // registered one — avoids race if Dart subscribes after invokeMethod.
         var activeSink: EventChannel.EventSink? = null
+        val pendingEvents = mutableListOf<String>()
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
                     activeSink = sink
+                    pendingEvents.toList().forEach { sink.success(it) }
+                    pendingEvents.clear()
                 }
                 override fun onCancel(arguments: Any?) {
                     activeSink = null
@@ -60,25 +66,8 @@ class MainActivity : FlutterFragmentActivity() {
                         val query = call.argument<String>("query") ?: ""
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                val pyResults = bridge.callAttr("search", query)
-                                val builtins = py.builtins
-                                val list = mutableListOf<Map<String, Any?>>()
-                                for (item in pyResults.asList()) {
-                                    val map = item.asMap()
-                                    val strTitle    = builtins.callAttr("str", "title")
-                                    val strUploader = builtins.callAttr("str", "uploader")
-                                    val strUrl      = builtins.callAttr("str", "url")
-                                    val strDuration = builtins.callAttr("str", "duration_seconds")
-                                    list.add(mapOf(
-                                        "title"            to map[strTitle]?.toString(),
-                                        "uploader"         to map[strUploader]?.toString(),
-                                        "url"              to map[strUrl]?.toString(),
-                                        "duration_seconds" to
-                                            map[strDuration]
-                                                ?.toJava(Int::class.java),
-                                    ))
-                                }
-                                withContext(Dispatchers.Main) { result.success(list) }
+                                val json = bridge.callAttr("search", query).toString()
+                                withContext(Dispatchers.Main) { result.success(json) }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     result.error("SEARCH_ERROR", e.message, null)
@@ -96,24 +85,32 @@ class MainActivity : FlutterFragmentActivity() {
 
                         File(outputDir).mkdirs()
 
-                        // Acknowledge immediately; progress comes via EventChannel
+                        // Acknowledge immediately; progress comes via EventChannel.
                         result.success(null)
 
-                        val sink = activeSink
+                        // Use a lambda provider so KotlinEventSink always
+                        // references the CURRENT activeSink — even if Dart
+                        // subscribes to the EventChannel slightly after this
+                        // method call returns (common timing on first use).
+                        val sinkProvider: () -> EventChannel.EventSink? = { activeSink }
+
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                // KotlinEventSink is a plain Kotlin class.
-                                // Chaquopy lets Python call methods on Kotlin
-                                // objects directly — no interface needed.
                                 bridge.callAttr(
                                     "download",
                                     url,
                                     outputDir,
-                                    KotlinEventSink(sink),
+                                    KotlinEventSink(sinkProvider, pendingEvents),
                                 )
                             } catch (e: Exception) {
                                 Handler(Looper.getMainLooper()).post {
-                                    sink?.success("error:${e.message}")
+                                    val message = "error:${e.message}"
+                                    val sink = activeSink
+                                    if (sink != null) {
+                                        sink.success(message)
+                                    } else {
+                                        pendingEvents.add(message)
+                                    }
                                 }
                             }
                         }
@@ -130,13 +127,23 @@ class MainActivity : FlutterFragmentActivity() {
  * calls on Kotlin objects from Python, so `event_sink.success(msg)` in
  * Python calls this Kotlin method directly.
  *
- * Must marshal back to the main thread because Flutter channel calls
- * are not thread-safe.
+ * Uses a lambda provider instead of a direct reference so the current
+ * activeSink is always resolved at the time of the call — this avoids the
+ * race condition where the download coroutine starts before Dart's
+ * receiveBroadcastStream() triggers onListen and sets activeSink.
  */
-class KotlinEventSink(private val sink: EventChannel.EventSink?) {
+class KotlinEventSink(
+    private val sinkProvider: () -> EventChannel.EventSink?,
+    private val pendingEvents: MutableList<String>,
+) {
     fun success(message: String) {
         Handler(Looper.getMainLooper()).post {
-            sink?.success(message)
+            val sink = sinkProvider()
+            if (sink != null) {
+                sink.success(message)
+            } else {
+                pendingEvents.add(message)
+            }
         }
     }
 }

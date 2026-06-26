@@ -57,6 +57,8 @@ class YtSearchResult {
 // ─── Binary / downloader logic ────────────────────────────────────────────────
 
 class MediaDownloader {
+  static const _audioExtensions = {'mp3', 'wav', 'm4a', 'ogg', 'opus', 'webm', 'aac', 'flac'};
+
   Future<String> get _binDirPath async {
     final supportDir = await getApplicationSupportDirectory();
 
@@ -205,7 +207,6 @@ class MediaDownloader {
           // Deno's subprocess model swallows yt-dlp's piped stderr progress
           // lines (leaving the bar stuck at 0%) and adds cold-start latency.
           // yt-dlp's built-in jsinterp handles decryption fine for downloads.
-
           '-x',
 
           '--audio-format',
@@ -231,43 +232,65 @@ class MediaDownloader {
           url,
         ]);
 
-        final progressRegex = RegExp(r'\[download\]\s+(\d+\.\d+)%');
-
+        final progressRegex = RegExp(r'\[download\]\s+(\d+(?:\.\d+)?)%');
+        final fragRegex = RegExp(r'\(frag\s+(\d+)/(\d+)\)');
         final playlistItemRegex = RegExp(r'\[download\]\s+Downloading item\s+(\d+)\s+of\s+(\d+)');
+        final alreadyDownloadedRegex = RegExp(r'\[download\]\s+(.+?)\s+has already been downloaded');
 
         int currentItem = 1;
-
         int totalItems = 1;
+        final outputLines = <String>[];
 
-        // ── Read STDERR for progress (yt-dlp writes progress there, not stdout) ──
-
-        // Run concurrently with stdout reading — must NOT be awaited here.
-
-        final stderrDone = process.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+        void handleLine(String line) {
           final trimmed = line.trim();
+          if (trimmed.isEmpty) return;
+          outputLines.add(trimmed);
 
-          if (playlistItemRegex.hasMatch(trimmed)) {
-            final match = playlistItemRegex.firstMatch(trimmed)!;
+          final itemMatch = playlistItemRegex.firstMatch(trimmed);
+          if (itemMatch != null) {
+            currentItem = int.tryParse(itemMatch.group(1) ?? '1') ?? 1;
+            totalItems = int.tryParse(itemMatch.group(2) ?? '1') ?? 1;
+            return;
+          }
 
-            currentItem = int.tryParse(match.group(1) ?? '1') ?? 1;
-
-            totalItems = int.tryParse(match.group(2) ?? '1') ?? 1;
-          } else if (trimmed.contains('[download]') && trimmed.contains('%')) {
-            final match = progressRegex.firstMatch(trimmed);
-
-            if (match != null) {
-              final percent = double.tryParse(match.group(1) ?? '0') ?? 0.0;
-
-              final prefix = totalItems > 1 ? '($currentItem/$totalItems) ' : '';
-
-              onProgress(percent, '${prefix}Downloading... ${percent.toStringAsFixed(1)}%');
+          if (trimmed.contains('[download]') && trimmed.contains('%')) {
+            double? percent;
+            final fragMatch = fragRegex.firstMatch(trimmed);
+            if (fragMatch != null) {
+              final fragIdx = int.tryParse(fragMatch.group(1) ?? '0') ?? 0;
+              final fragTotal = int.tryParse(fragMatch.group(2) ?? '0') ?? 0;
+              if (fragTotal > 0) percent = (fragIdx / fragTotal) * 100.0;
             }
-          } else if (trimmed.contains('[ExtractAudio]')) {
-            final prefix = totalItems > 1 ? '($currentItem/$totalItems) ' : '';
 
+            if (percent == null || percent == 0.0) {
+              final match = progressRegex.firstMatch(trimmed);
+              if (match != null) {
+                percent = double.tryParse(match.group(1) ?? '0');
+              }
+            }
+
+            if (percent != null) {
+              final prefix = totalItems > 1 ? '($currentItem/$totalItems) ' : '';
+              onProgress(percent.clamp(0.0, 100.0), '${prefix}Downloading... ${percent.toStringAsFixed(1)}%');
+            }
+          } else if (trimmed.contains('[ExtractAudio]') ||
+              trimmed.contains('[Merger]') ||
+              trimmed.contains('[MoveFiles]')) {
+            final prefix = totalItems > 1 ? '($currentItem/$totalItems) ' : '';
             onProgress(99.0, '${prefix}Processing audio...');
           }
-        }).asFuture<void>();
+        }
+
+        final stdoutDone = process.stdout
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .listen(handleLine)
+            .asFuture<void>();
+        final stderrDone = process.stderr
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .listen(handleLine)
+            .asFuture<void>();
 
         // ── Collect ALL stdout lines first, then process sequentially ──
 
@@ -279,23 +302,20 @@ class MediaDownloader {
 
         // onTrackDownloaded call — fixing the last-track race condition.
 
-        final stdoutLines = await process.stdout.transform(utf8.decoder).transform(const LineSplitter()).toList();
-
-        // Wait for stderr listener to drain fully before checking exit code
-
+        await stdoutDone;
         await stderrDone;
 
         // ── Process filepath lines sequentially, fully awaited ──
 
         final processedPaths = <String>{};
 
-        for (final line in stdoutLines) {
+        for (final line in outputLines) {
           final trimmed = line.trim();
 
           if (trimmed.isEmpty) continue;
 
           if (trimmed.contains('has already been downloaded')) {
-            final match = RegExp(r'\[download\]\s+(.*\.mp3)\s+has already been downloaded').firstMatch(trimmed);
+            final match = alreadyDownloadedRegex.firstMatch(trimmed);
 
             if (match != null) {
               final path = p.normalize(match.group(1)!);
@@ -306,7 +326,7 @@ class MediaDownloader {
                 await onTrackDownloaded(path);
               }
             }
-          } else if (trimmed.endsWith('.mp3') && !trimmed.contains('[')) {
+          } else if (_looksLikeAudioPath(trimmed) && !trimmed.contains('[')) {
             // --print after_move:%(filepath)s line
 
             final cleanPath = p.normalize(trimmed);
@@ -336,6 +356,11 @@ class MediaDownloader {
         if (attempt >= maxAttempts) rethrow;
       }
     }
+  }
+
+  bool _looksLikeAudioPath(String value) {
+    final extension = p.extension(value).replaceFirst('.', '').toLowerCase();
+    return _audioExtensions.contains(extension);
   }
 }
 

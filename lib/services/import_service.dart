@@ -4,10 +4,7 @@ import 'package:resonance/core/storage/file_service.dart';
 class ImportService {
   /// Processes a list of file paths (audio files and/or .m3u/.m3u8 playlists).
   /// For each valid audio file or playlist entry, calls onFileAdded with the track path.
-  static Future<void> importFiles(
-    List<String> paths,
-    Function(String) onFileAdded,
-  ) async {
+  static Future<void> importFiles(List<String> paths, Function(String) onFileAdded) async {
     for (final path in paths) {
       if (path.isEmpty) continue;
       final extension = path.split('.').last.toLowerCase();
@@ -27,7 +24,7 @@ class ImportService {
             onFileAdded(trimmed);
           }
         }
-      } else if (['mp3', 'wav', 'm4a', 'ogg'].contains(extension)) {
+      } else if (['mp3', 'wav', 'm4a', 'ogg', 'opus', 'webm', 'aac', 'flac'].contains(extension)) {
         // It's a single audio file
         await FileService().writeTextToFile('$path\n', append: true);
         onFileAdded(path);
