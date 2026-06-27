@@ -1,3 +1,6 @@
+// lib/widgets/library/track_list.dart
+// Logic: UNCHANGED. proxyDecorator updated for Obsidian Pulse.
+
 import 'package:flutter/material.dart';
 import 'package:resonance/widgets/library/track_tile.dart';
 
@@ -16,15 +19,12 @@ class TrackList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (tracks.isEmpty) {
-      return const Center(child: Text('No tracks found.'));
+      return _EmptyState();
     }
 
     return ReorderableListView.builder(
-      // IMPORTANT: disable the default trailing drag handle that
-      // ReorderableListView auto-inserts. TrackTile already has its own
-      // ReorderableDragStartListener on the leading drag_handle icon, so
-      // the default handle is redundant and visually out of place.
       buildDefaultDragHandles: false,
+      padding: const EdgeInsets.only(top: 4, bottom: 8),
       itemCount: tracks.length,
       itemBuilder: (context, index) {
         return TrackTile(
@@ -35,23 +35,75 @@ class TrackList extends StatelessWidget {
         );
       },
       onReorder: onReorder,
-      // Preserve the AnimatedContainer card look during drag by not
-      // replacing it with a default opaque Material proxy.
       proxyDecorator: (child, index, animation) {
         return AnimatedBuilder(
           animation: animation,
           builder: (context, child) {
-            final elevation = (animation.value * 8).clamp(0.0, 8.0);
+            final primary = Theme.of(context).colorScheme.primary;
+            final elevation = (animation.value * 12).clamp(0.0, 12.0);
             return Material(
               elevation: elevation,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(12),
               color: Colors.transparent,
+              shadowColor: primary.withValues(alpha: 0.25),
               child: child,
             );
           },
           child: child,
         );
       },
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).colorScheme.primary;
+
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: isDark
+                  ? primary.withValues(alpha: 0.08)
+                  : primary.withValues(alpha: 0.06),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.library_music_rounded,
+              size: 32,
+              color: primary.withValues(alpha: 0.5),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Your library is empty',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: isDark
+                  ? const Color(0xFF94A3B8)
+                  : const Color(0xFF64748B),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Import tracks or download from YouTube',
+            style: TextStyle(
+              fontSize: 12,
+              color: isDark
+                  ? const Color(0xFF475569)
+                  : const Color(0xFF94A3B8),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

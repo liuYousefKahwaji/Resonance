@@ -1,3 +1,6 @@
+// lib/widgets/library/drop_overlay.dart
+// Logic: UNCHANGED. Visual only.
+
 import 'package:flutter/material.dart';
 
 class DropOverlay extends StatelessWidget {
@@ -9,41 +12,72 @@ class DropOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!isDragging) return const SizedBox.shrink();
 
-    return Container(
-      color: Colors.black.withValues(alpha: 0.6),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.all(32),
-          decoration: BoxDecoration(
-            color: Theme.of(context).cardColor,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
-                blurRadius: 20,
-                offset: const Offset(0, 8),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).colorScheme.primary;
+
+    return AnimatedOpacity(
+      opacity: isDragging ? 1.0 : 0.0,
+      duration: const Duration(milliseconds: 150),
+      child: Container(
+        color: (isDark ? const Color(0xFF0D0D14) : const Color(0xFFF0EFF5))
+            .withValues(alpha: 0.85),
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 32),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1A1A2A) : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: primary.withValues(alpha: 0.5),
+                width: 1.5,
               ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.cloud_upload,
-                size: 64,
-                color: Theme.of(context).primaryColor,
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Drop files here to import',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Supports MP3, WAV, M4A, OGG, M3U, M3U8',
-                style: TextStyle(fontSize: 14, color: Colors.grey),
-              ),
-            ],
+              boxShadow: [
+                BoxShadow(
+                  color: primary.withValues(alpha: 0.15),
+                  blurRadius: 30,
+                  spreadRadius: 0,
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 60,
+                  height: 60,
+                  decoration: BoxDecoration(
+                    color: primary.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.file_upload_rounded,
+                    size: 28,
+                    color: primary,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Drop to import',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: isDark
+                        ? const Color(0xFFE2E8F0)
+                        : const Color(0xFF0F172A),
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'MP3, WAV, M4A, OGG, M3U, M3U8',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF64748B),
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

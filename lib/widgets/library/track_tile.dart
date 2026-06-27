@@ -1,3 +1,9 @@
+// lib/widgets/library/track_tile.dart
+//
+// Redesigned track tile — Obsidian Pulse aesthetic.
+// Now-playing state: violet left-accent border + subtle glow background.
+// Logic: UNCHANGED.
+
 import 'dart:async';
 import 'dart:io';
 
@@ -94,25 +100,47 @@ class _TrackTileState extends State<TrackTile> {
     }
   }
 
-  void _showMetadataEditor(BuildContext context, String currentTitle, String currentArtist) {
+  void _showMetadataEditor(
+    BuildContext context,
+    String currentTitle,
+    String currentArtist,
+  ) {
     final titleController = TextEditingController(text: currentTitle);
     final artistController = TextEditingController(text: currentArtist);
-    
+
     showDialog(
       context: context,
       builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
         return AlertDialog(
-          title: const Text('Edit Metadata'),
+          title: Row(
+            children: [
+              Icon(
+                Icons.edit_rounded,
+                size: 18,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 10),
+              const Text('Edit Metadata'),
+            ],
+          ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: titleController,
-                decoration: const InputDecoration(labelText: 'Title'),
+                decoration: const InputDecoration(
+                  labelText: 'Title',
+                  prefixIcon: Icon(Icons.music_note_rounded, size: 18),
+                ),
               ),
+              const SizedBox(height: 12),
               TextField(
                 controller: artistController,
-                decoration: const InputDecoration(labelText: 'Artist'),
+                decoration: const InputDecoration(
+                  labelText: 'Artist',
+                  prefixIcon: Icon(Icons.person_rounded, size: 18),
+                ),
               ),
             ],
           ),
@@ -132,7 +160,11 @@ class _TrackTileState extends State<TrackTile> {
                       artist: artistController.text,
                     ),
                   );
-                  await MetadataCacheService.set(widget.trackPath, titleController.text, artistController.text);
+                  await MetadataCacheService.set(
+                    widget.trackPath,
+                    titleController.text,
+                    artistController.text,
+                  );
                   if (mounted) {
                     setState(() {
                       _title = titleController.text;
@@ -142,7 +174,9 @@ class _TrackTileState extends State<TrackTile> {
                 } catch (e) {
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed to update metadata: $e')),
+                      SnackBar(
+                        content: Text('Failed to update metadata: $e'),
+                      ),
                     );
                   }
                 }
@@ -151,14 +185,15 @@ class _TrackTileState extends State<TrackTile> {
             ),
           ],
         );
-      }
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context, listen: false);
-    final colorScheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).colorScheme.primary;
     final fileName = p.basenameWithoutExtension(widget.trackPath);
 
     return StreamBuilder<MediaItem?>(
@@ -168,15 +203,66 @@ class _TrackTileState extends State<TrackTile> {
 
         if (_loading) {
           return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: ListTile(
-              leading: const Icon(Icons.music_note),
-              title: Text(
-                fileName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+            child: Container(
+              height: 64,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? const Color(0xFF1A1A2A)
+                    : Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isDark
+                      ? const Color(0xFF2D2D42)
+                      : const Color(0xFFDDD9F3),
+                  width: 1,
+                ),
               ),
-              subtitle: const Text('Loading metadata...'),
+              child: Row(
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? const Color(0xFF242436)
+                          : const Color(0xFFEEECF8),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          height: 12,
+                          width: 140,
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF242436)
+                                : const Color(0xFFEEECF8),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Container(
+                          height: 10,
+                          width: 80,
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF1E1E30)
+                                : const Color(0xFFF5F3FF),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           );
         }
@@ -185,88 +271,172 @@ class _TrackTileState extends State<TrackTile> {
         final artist = _artist ?? 'Unknown Artist';
 
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
+            duration: const Duration(milliseconds: 250),
             curve: Curves.easeOut,
             decoration: BoxDecoration(
               color: isPlaying
-                  ? colorScheme.primary.withValues(alpha: 0.15)
-                  : Theme.of(context).cardColor,
-              borderRadius: BorderRadius.circular(14),
+                  ? (isDark
+                      ? primary.withValues(alpha: 0.12)
+                      : primary.withValues(alpha: 0.06))
+                  : (isDark ? const Color(0xFF1A1A2A) : Colors.white),
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: isPlaying ? colorScheme.primary : Colors.transparent,
-                width: 2,
+                color: isPlaying
+                    ? primary.withValues(alpha: 0.45)
+                    : (isDark
+                        ? const Color(0xFF2D2D42)
+                        : const Color(0xFFDDD9F3)),
+                width: isPlaying ? 1.5 : 1,
               ),
+              boxShadow: isPlaying
+                  ? [
+                      BoxShadow(
+                        color: primary.withValues(alpha: isDark ? 0.12 : 0.08),
+                        blurRadius: 12,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : [],
             ),
             child: Material(
               type: MaterialType.transparency,
-              child: ListTile(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                onTap: () {
-                  handler.loadTrack(widget.trackPath, title, artist);
-                },
-                onLongPress: () {
-                  _showMetadataEditor(context, title, artist);
-                },
-                // ── Leading: drag handle + now-playing indicator ─────────
-                leading: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Drag handle — wrapped in ReorderableDragStartListener so
-                    // only intentional drags on this icon start a reorder.
-                    // This avoids gesture conflicts with onTap (play) and the
-                    // trailing delete button.
-                    ReorderableDragStartListener(
-                      index: widget.index,
-                      child: Padding(
-                        padding: const EdgeInsets.only(right: 4.0),
-                        child: Icon(
-                          Icons.drag_handle,
-                          color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+              child: InkWell(
+                onTap: () => handler.loadTrack(widget.trackPath, title, artist),
+                onLongPress: () => _showMetadataEditor(context, title, artist),
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    children: [
+                      // ── Drag handle ─────────────────────────────────
+                      ReorderableDragStartListener(
+                        index: widget.index,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: Icon(
+                            Icons.drag_handle_rounded,
+                            size: 18,
+                            color: isPlaying
+                                ? primary.withValues(alpha: 0.5)
+                                : (isDark
+                                    ? const Color(0xFF3D3D55)
+                                    : const Color(0xFFBDB8E0)),
+                          ),
                         ),
                       ),
-                    ),
-                    // Now-playing icon
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 200),
-                      child: Icon(
-                        isPlaying ? Icons.graphic_eq : Icons.music_note,
-                        key: ValueKey(isPlaying),
-                        color: isPlaying ? colorScheme.primary : null,
+
+                      // ── Album icon / playing indicator ──────────────
+                      _TrackIcon(isPlaying: isPlaying),
+                      const SizedBox(width: 12),
+
+                      // ── Title + artist ──────────────────────────────
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontWeight: isPlaying
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                                fontSize: 13,
+                                color: isPlaying
+                                    ? primary
+                                    : (isDark
+                                        ? const Color(0xFFE2E8F0)
+                                        : const Color(0xFF0F172A)),
+                                letterSpacing: -0.1,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              artist,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF64748B),
+                                fontWeight: FontWeight.w400,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-                title: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: isPlaying ? FontWeight.bold : FontWeight.normal,
-                    color: isPlaying ? colorScheme.primary : null,
+
+                      // ── Delete button ────────────────────────────────
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded, size: 16),
+                        tooltip: 'Remove',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 32,
+                          minHeight: 32,
+                        ),
+                        color: isDark
+                            ? const Color(0xFF475569)
+                            : const Color(0xFF94A3B8),
+                        onPressed: () {
+                          MetadataCacheService.remove(widget.trackPath);
+                          widget.onDelete();
+                        },
+                      ),
+                    ],
                   ),
-                ),
-                subtitle: Text(
-                  artist,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  tooltip: 'Remove',
-                  onPressed: () {
-                    MetadataCacheService.remove(widget.trackPath);
-                    widget.onDelete();
-                  },
                 ),
               ),
             ),
           ),
         );
       },
+    );
+  }
+}
+
+/// Small icon box: pulsing graphic_eq when playing, music note otherwise.
+class _TrackIcon extends StatelessWidget {
+  final bool isPlaying;
+
+  const _TrackIcon({required this.isPlaying});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).colorScheme.primary;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: isPlaying
+            ? primary.withValues(alpha: isDark ? 0.2 : 0.12)
+            : (isDark
+                ? const Color(0xFF242436)
+                : const Color(0xFFEEECF8)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        child: Icon(
+          isPlaying ? Icons.graphic_eq_rounded : Icons.music_note_rounded,
+          key: ValueKey(isPlaying),
+          size: 17,
+          color: isPlaying
+              ? primary
+              : (isDark
+                  ? const Color(0xFF64748B)
+                  : const Color(0xFF94A3B8)),
+        ),
+      ),
     );
   }
 }

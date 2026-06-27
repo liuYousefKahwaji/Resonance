@@ -1,4 +1,6 @@
-// widgets/player/seek_bar.dart
+// lib/widgets/player/seek_bar.dart
+// Logic: UNCHANGED. Only color tokens updated to Obsidian Pulse palette.
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
@@ -51,7 +53,6 @@ class _SeekBarState extends State<SeekBar> {
 
   void _updateHoverPosition(double localX, double maxWidth) {
     if (maxWidth <= 0 || _duration.inMilliseconds <= 0) return;
-    
     final ratio = (localX / maxWidth).clamp(0.0, 1.0);
     setState(() {
       _hoverX = localX;
@@ -62,29 +63,25 @@ class _SeekBarState extends State<SeekBar> {
   @override
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
-    final theme = Theme.of(context);
-    
-    // Determine context brightness
-    final isDarkMode = theme.brightness == Brightness.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).colorScheme.primary;
 
-    // Tailored Color Design for your palette
-    final Color previewBgColor = isDarkMode 
-        ? Colors.grey[850]!          // Subtle deep dark gray card for Dark Mode
-        : theme.colorScheme.primary; // Rich Purple card for Light Mode
+    final previewBgColor = isDark
+        ? const Color(0xFF242436)
+        : primary;
+    final previewTextColor = isDark ? primary : Colors.white;
 
-    final Color previewTextColor = isDarkMode 
-        ? theme.colorScheme.primary  // Vibrant Purple text sitting on Gray card
-        : Colors.white;              // Crisp White text sitting on Purple card
-
-    final labelStyle = theme.textTheme.bodySmall?.copyWith(
-      fontSize: 12,
-      fontWeight: FontWeight.w500,
+    final timestampStyle = TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w600,
+      letterSpacing: 0.3,
+      color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
     );
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Text(_formatDuration(_position), style: labelStyle),
+        Text(_formatDuration(_position), style: timestampStyle),
         const SizedBox(width: 8),
         Flexible(
           flex: 2,
@@ -96,30 +93,35 @@ class _SeekBarState extends State<SeekBar> {
                 cursor: SystemMouseCursors.click,
                 onEnter: (_) => setState(() => _isHovering = true),
                 onExit: (_) => setState(() => _isHovering = false),
-                onHover: (event) => _updateHoverPosition(event.localPosition.dx, maxWidth),
+                onHover: (event) =>
+                    _updateHoverPosition(event.localPosition.dx, maxWidth),
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    // Native Slider Theme UI
                     SliderTheme(
                       data: SliderTheme.of(context).copyWith(
                         showValueIndicator: ShowValueIndicator.never,
-                        activeTrackColor: theme.colorScheme.primary,
-                        inactiveTrackColor: theme.colorScheme.primary.withValues(alpha: 0.2),
-                        thumbColor: theme.colorScheme.primary,
+                        activeTrackColor: primary,
+                        inactiveTrackColor: isDark
+                            ? const Color(0xFF2D2D42)
+                            : const Color(0xFFDDD9F3),
+                        thumbColor: primary,
                         tickMarkShape: SliderTickMarkShape.noTickMark,
-                        trackHeight: _isHovering ? 5.0 : 3.0,
+                        trackHeight: _isHovering ? 4.0 : 3.0,
                         thumbShape: RoundSliderThumbShape(
-                          enabledThumbRadius: _isHovering ? 7.0 : 0.0,
+                          enabledThumbRadius: _isHovering ? 6.0 : 0.0,
                           elevation: 2,
                         ),
-                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 14.0),
+                        overlayShape:
+                            const RoundSliderOverlayShape(overlayRadius: 12.0),
+                        overlayColor: primary.withValues(alpha: 0.15),
                       ),
                       child: Slider(
                         value: _sliderValue.clamp(0.0, 1.0),
                         min: 0,
                         max: 1,
-                        divisions: _duration.inSeconds > 0 ? _duration.inSeconds : null,
+                        divisions:
+                            _duration.inSeconds > 0 ? _duration.inSeconds : null,
                         onChanged: (value) {
                           setState(() {
                             _isScrubbing = true;
@@ -130,19 +132,18 @@ class _SeekBarState extends State<SeekBar> {
                         onChangeEnd: (value) {
                           final newPosition = _duration * value;
                           handler.seek(newPosition);
-                          setState(() {
-                            _isScrubbing = false;
-                          });
+                          setState(() => _isScrubbing = false);
                         },
                       ),
                     ),
 
-                    // Modern Floating Preview Timestamp Card
+                    // Floating timestamp preview
                     AnimatedPositioned(
-                      duration: Duration(milliseconds: _isScrubbing ? 0 : 50),
+                      duration:
+                          Duration(milliseconds: _isScrubbing ? 0 : 50),
                       curve: Curves.easeOutCubic,
-                      left: (_hoverX - 28).clamp(0.0, maxWidth - 56), 
-                      top: -34, 
+                      left: (_hoverX - 28).clamp(0.0, maxWidth - 56),
+                      top: -34,
                       child: AnimatedOpacity(
                         duration: const Duration(milliseconds: 150),
                         opacity: (_isHovering || _isScrubbing) ? 1.0 : 0.0,
@@ -155,8 +156,8 @@ class _SeekBarState extends State<SeekBar> {
                               borderRadius: BorderRadius.circular(6),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.15),
-                                  blurRadius: 6,
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  blurRadius: 8,
                                   offset: const Offset(0, 3),
                                 ),
                               ],
@@ -167,7 +168,7 @@ class _SeekBarState extends State<SeekBar> {
                                 style: TextStyle(
                                   color: previewTextColor,
                                   fontSize: 11,
-                                  fontWeight: FontWeight.bold,
+                                  fontWeight: FontWeight.w700,
                                   letterSpacing: 0.2,
                                 ),
                               ),
@@ -183,7 +184,7 @@ class _SeekBarState extends State<SeekBar> {
           ),
         ),
         const SizedBox(width: 8),
-        Text(_formatDuration(_duration), style: labelStyle),
+        Text(_formatDuration(_duration), style: timestampStyle),
       ],
     );
   }

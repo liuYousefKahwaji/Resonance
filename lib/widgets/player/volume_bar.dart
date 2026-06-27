@@ -1,4 +1,4 @@
-// widgets/player/volume_bar.dart
+// lib/widgets/player/volume_bar.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
@@ -20,7 +20,6 @@ class _VolumeBarState extends State<VolumeBar> {
     if (maxWidth <= 0) return;
     setState(() {
       _hoverX = localX;
-      // Converts pixel location into a 0.0 -> 1.0 ratio
       _hoverPercentage = (localX / maxWidth).clamp(0.0, 1.0);
     });
   }
@@ -28,68 +27,71 @@ class _VolumeBarState extends State<VolumeBar> {
   @override
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
-    final theme = Theme.of(context);
-    final isDarkMode = theme.brightness == Brightness.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).colorScheme.primary;
 
-    // Matching color styles from your palette
-    final Color previewBgColor = isDarkMode 
-        ? Colors.grey[850]!          
-        : theme.colorScheme.primary; 
-
-    final Color previewTextColor = isDarkMode 
-        ? theme.colorScheme.primary  
-        : Colors.white;
+    final previewBgColor = isDark ? const Color(0xFF242436) : primary;
+    final previewTextColor = isDark ? primary : Colors.white;
 
     return ValueListenableBuilder<double>(
       valueListenable: handler.volumeNotifier,
       builder: (context, currentVolume, child) {
-        // Dynamic volume icon mapping
-        IconData icon;
+        final IconData icon;
         if (currentVolume == 0) {
-          icon = Icons.volume_off;
+          icon = Icons.volume_off_rounded;
         } else if (currentVolume < 0.33) {
-          icon = Icons.volume_down;
-        } else if (currentVolume < 0.66) {
-          icon = Icons.volume_up; // Material 3 defaults to volume_up/down or custom mid icons if preferred
+          icon = Icons.volume_down_rounded;
         } else {
-          icon = Icons.volume_up;
+          icon = Icons.volume_up_rounded;
         }
 
         return Row(
           children: [
             IconButton(
-              icon: Icon(icon),
-              tooltip: currentVolume == 0 ? "Unmute" : "Mute",
+              icon: Icon(
+                icon,
+                size: 18,
+                color: isDark
+                    ? const Color(0xFF64748B)
+                    : const Color(0xFF94A3B8),
+              ),
+              tooltip: currentVolume == 0 ? 'Unmute' : 'Mute',
               onPressed: handler.toggleMute,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             ),
-            
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final maxWidth = constraints.maxWidth;
+                  if (maxWidth <= 0) return const SizedBox.shrink();
 
                   return MouseRegion(
                     cursor: SystemMouseCursors.click,
                     onEnter: (_) => setState(() => _isHovering = true),
                     onExit: (_) => setState(() => _isHovering = false),
-                    onHover: (event) => _updateHoverPosition(event.localPosition.dx, maxWidth),
+                    onHover: (event) =>
+                        _updateHoverPosition(event.localPosition.dx, maxWidth),
                     child: Stack(
                       clipBehavior: Clip.none,
                       children: [
-                        // Interactive Slider Styling
                         SliderTheme(
                           data: SliderTheme.of(context).copyWith(
                             showValueIndicator: ShowValueIndicator.never,
-                            activeTrackColor: theme.colorScheme.primary,
-                            inactiveTrackColor: theme.colorScheme.primary.withValues(alpha: 0.2),
-                            thumbColor: theme.colorScheme.primary,
+                            activeTrackColor: primary,
+                            inactiveTrackColor: isDark
+                                ? const Color(0xFF2D2D42)
+                                : const Color(0xFFDDD9F3),
+                            thumbColor: primary,
                             tickMarkShape: SliderTickMarkShape.noTickMark,
-                            trackHeight: _isHovering ? 5.0 : 3.0,
+                            trackHeight: _isHovering ? 4.0 : 3.0,
                             thumbShape: RoundSliderThumbShape(
-                              enabledThumbRadius: _isHovering ? 7.0 : 0.0,
+                              enabledThumbRadius: _isHovering ? 6.0 : 0.0,
                               elevation: 2,
                             ),
-                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 14.0),
+                            overlayShape: const RoundSliderOverlayShape(
+                                overlayRadius: 12.0),
+                            overlayColor: primary.withValues(alpha: 0.15),
                           ),
                           child: Slider(
                             value: currentVolume.clamp(0.0, 1.0),
@@ -97,51 +99,57 @@ class _VolumeBarState extends State<VolumeBar> {
                             max: 1,
                             divisions: 100,
                             onChanged: (value) {
-                              setState(() {
-                                _isScrubbing = true;
-                              });
+                              setState(() => _isScrubbing = true);
                               handler.changeVolume(value.clamp(0.0, 1.0));
-                              _updateHoverPosition(value * maxWidth, maxWidth);
+                              _updateHoverPosition(
+                                  value * maxWidth, maxWidth);
                             },
-                            onChangeEnd: (_) {
-                              setState(() {
-                                _isScrubbing = false;
-                              });
-                            },
+                            onChangeEnd: (_) =>
+                                setState(() => _isScrubbing = false),
                           ),
                         ),
 
-                        // Floating Percentage Card (Matches SeekBar design exactly)
+                        // ── Floating percentage preview ──
+                        // SAFE CLAMP: ensure maxLeft >= 0
                         AnimatedPositioned(
-                          duration: Duration(milliseconds: _isScrubbing ? 0 : 50),
+                          duration: Duration(
+                              milliseconds: _isScrubbing ? 0 : 50),
                           curve: Curves.easeOutCubic,
-                          left: (_hoverX - 25).clamp(0.0, maxWidth - 50), 
-                          top: -34, 
+                          left: _isHovering || _isScrubbing
+                              ? (_hoverX - 25).clamp(
+                                  0.0,
+                                  (maxWidth - 50).clamp(0.0, double.infinity),
+                                )
+                              : 0,
+                          top: -34,
                           child: AnimatedOpacity(
                             duration: const Duration(milliseconds: 150),
-                            opacity: (_isHovering || _isScrubbing) ? 1.0 : 0.0,
+                            opacity:
+                                (_isHovering || _isScrubbing) ? 1.0 : 0.0,
                             child: IgnorePointer(
                               child: Container(
                                 width: 50,
-                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 4),
                                 decoration: BoxDecoration(
                                   color: previewBgColor,
                                   borderRadius: BorderRadius.circular(6),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.15),
-                                      blurRadius: 6,
+                                      color:
+                                          Colors.black.withValues(alpha: 0.2),
+                                      blurRadius: 8,
                                       offset: const Offset(0, 3),
                                     ),
                                   ],
                                 ),
                                 child: Center(
                                   child: Text(
-                                    "${(_hoverPercentage * 100).toInt()}%",
+                                    '${(_hoverPercentage * 100).toInt()}%',
                                     style: TextStyle(
                                       color: previewTextColor,
                                       fontSize: 11,
-                                      fontWeight: FontWeight.bold,
+                                      fontWeight: FontWeight.w700,
                                       letterSpacing: 0.2,
                                     ),
                                   ),

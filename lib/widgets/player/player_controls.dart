@@ -1,3 +1,9 @@
+// lib/widgets/player/player_controls.dart
+//
+// Redesigned player controls panel — frosted dark/light surface with
+// rounded top corners, elevated above the track list.
+// Logic: UNCHANGED. Only visual presentation changed.
+
 import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
@@ -16,7 +22,12 @@ class PlayerControls extends StatelessWidget {
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
     final screenWidth = MediaQuery.of(context).size.width;
-    bool isMobile = Platform.isAndroid;
+    final isMobile = Platform.isAndroid;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    // Panel surface colors
+    final panelColor = isDark ? const Color(0xFF15151F) : Colors.white;
+    final panelBorder = isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3);
 
     return StreamBuilder<PlaybackState>(
       stream: handler.playbackState,
@@ -24,156 +35,210 @@ class PlayerControls extends StatelessWidget {
       builder: (context, snapshot) {
         final isPlaying = snapshot.data?.playing ?? false;
 
-        // =======================
-        // MOBILE
-        // =======================
-        if (screenWidth < 500) {
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+        return Container(
+          decoration: BoxDecoration(
+            color: panelColor,
+            border: Border(top: BorderSide(color: panelBorder, width: 1)),
+          ),
+          child: screenWidth < 500
+              ? _MobileControls(handler: handler, isPlaying: isPlaying, isMobile: isMobile)
+              : _DesktopControls(handler: handler, isPlaying: isPlaying, isMobile: isMobile, screenWidth: screenWidth),
+        );
+      },
+    );
+  }
+}
+
+class _MobileControls extends StatelessWidget {
+  final PlayerHandler handler;
+  final bool isPlaying;
+  final bool isMobile;
+
+  const _MobileControls({
+    required this.handler,
+    required this.isPlaying,
+    required this.isMobile,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isNarrow = screenWidth < 380;
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SeekBar(),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.skip_previous, size: 28),
-                      onPressed: handler.previous,
-                    ),
+                // Left: modes + settings
+                const PlayerModes(),
+                const SizedBox(width: 2),
+                if (isMobile)
+                  const PlaybackSettings()
+                else
+                  const SpeedControl(),
 
-                    const SizedBox(width: 12),
-
-                    Container(
-                      decoration: BoxDecoration(
-                        color:
-                            Theme.of(context).colorScheme.primaryContainer,
-                        shape: BoxShape.circle,
-                      ),
-                      child: IconButton(
-                        icon: Icon(
-                          isPlaying ? Icons.pause : Icons.play_arrow,
-                          size: 38,
-                        ),
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onPrimaryContainer,
-                        onPressed: handler.playPause,
-                      ),
-                    ),
-
-                    const SizedBox(width: 12),
-
-                    IconButton(
-                      icon: const Icon(Icons.skip_next, size: 28),
-                      onPressed: handler.next,
-                    ),
-                  ],
+                // Middle: play controls
+                _SkipButton(
+                  icon: Icons.skip_previous_rounded,
+                  onTap: handler.previous,
+                  size: isNarrow ? 18 : 22,
+                ),
+                const SizedBox(width: 2),
+                _PlayPauseButton(
+                  isPlaying: isPlaying,
+                  onTap: handler.playPause,
+                  size: isNarrow ? 34 : 40,
+                ),
+                const SizedBox(width: 2),
+                _SkipButton(
+                  icon: Icons.skip_next_rounded,
+                  onTap: handler.next,
+                  size: isNarrow ? 18 : 22,
                 ),
 
-                const SizedBox(height: 8),
-
-                const SeekBar(),
-
-                const SizedBox(height: 10),
-
-                Row(
-                  children: [
-                    const PlayerModes(),
-                    const SizedBox(width: 4),
-                    isMobile ? const PlaybackSettings() : SpeedControl(),
-                    const SizedBox(width: 8),
-
-                    const Expanded(
-                      child: VolumeBar(),
-                    ),
-                  ],
+                // Right: volume bar (takes remaining space)
+                const Expanded(
+                  child: VolumeBar(),
                 ),
               ],
             ),
-          );
-        }
+          ],
+        ),
+      ),
+    );
+  }
+}
 
-        // =======================
-        // DESKTOP
-        // =======================
+class _DesktopControls extends StatelessWidget {
+  final PlayerHandler handler;
+  final bool isPlaying;
+  final bool isMobile;
+  final double screenWidth;
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: 24,
-            vertical: 8,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SeekBar(),
+  const _DesktopControls({
+    required this.handler,
+    required this.isPlaying,
+    required this.isMobile,
+    required this.screenWidth,
+  });
 
-              const SizedBox(height: 8),
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SeekBar(),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 52,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // LEFT — modes + speed
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const PlayerModes(),
+                      const SizedBox(width: 4),
+                      isMobile ? const PlaybackSettings() : const SpeedControl(),
+                    ],
+                  ),
+                ),
 
-              SizedBox(
-                height: 52,
-                child: Stack(
-                  alignment: Alignment.center,
-
+                // CENTER — prev / play-pause / next
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    // LEFT
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const PlayerModes(),
-                          const SizedBox(width: 4),
-                          isMobile ? const PlaybackSettings() : const SpeedControl(),
-                        ],
-                      ),
-                    ),
-
-                    // CENTER
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.skip_previous),
-                          onPressed: handler.previous,
-                        ),
-
-                        const SizedBox(width: 8),
-
-                        IconButton(
-                          icon: Icon(
-                            isPlaying
-                                ? Icons.pause
-                                : Icons.play_arrow,
-                            size: 32,
-                          ),
-                          onPressed: handler.playPause,
-                        ),
-
-                        const SizedBox(width: 8),
-
-                        IconButton(
-                          icon: const Icon(Icons.skip_next),
-                          onPressed: handler.next,
-                        ),
-                      ],
-                    ),
-
-                    // RIGHT
-                    Positioned(
-                      right: 0,
-                      top: 0,
-                      bottom: 0,
-                      width: screenWidth * 0.22,
-                      child: const VolumeBar(),
-                    ),
+                    _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: 24),
+                    const SizedBox(width: 12),
+                    _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: 48),
+                    const SizedBox(width: 12),
+                    _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: 24),
                   ],
                 ),
-              ),
-            ],
+
+                // RIGHT — volume bar
+                Positioned(right: 0, top: 0, bottom: 0, width: screenWidth * 0.22, child: const VolumeBar()),
+              ],
+            ),
           ),
-        );
-      },
+        ],
+      ),
+    );
+  }
+}
+
+// ── Reusable button widgets ────────────────────────────────────────────────────
+
+class _PlayPauseButton extends StatelessWidget {
+  final bool isPlaying;
+  final VoidCallback onTap;
+  final double size;
+
+  const _PlayPauseButton({required this.isPlaying, required this.onTap, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: primary,
+          boxShadow: isPlaying
+              ? [
+                  BoxShadow(
+                    color: primary.withValues(alpha: isDark ? 0.45 : 0.3),
+                    blurRadius: 16,
+                    spreadRadius: 0,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : [],
+        ),
+        child: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.white, size: size * 0.5),
+      ),
+    );
+  }
+}
+
+class _SkipButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final double size;
+
+  const _SkipButton({required this.icon, required this.onTap, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final iconColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+
+    return IconButton(
+      onPressed: onTap,
+      icon: Icon(icon, size: size, color: iconColor),
+      splashRadius: 20,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
     );
   }
 }
