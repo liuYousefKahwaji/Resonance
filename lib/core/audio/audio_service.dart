@@ -55,6 +55,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (state == ProcessingState.completed) {
         if (currentLoopMode == LoopMode.one) {
           _player.seek(Duration.zero);
+          _player.pause();
           _player.play();
         } else if (currentLoopMode == LoopMode.all) {
           await _player.pause();
