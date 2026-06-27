@@ -39,7 +39,10 @@ class _PlayerModesState extends State<PlayerModes> {
                     color: loopMode == LoopMode.all ? primary : inactiveColor,
                     size: 20),
           ),
-          onPressed: () => setState(() => handler.toggleLoopMode()),
+          onPressed: ()async{
+            await handler.toggleLoopMode();
+            setState((){});
+          },
           tooltip: loopMode == LoopMode.off
               ? 'Loop off'
               : loopMode == LoopMode.one
@@ -55,7 +58,10 @@ class _PlayerModesState extends State<PlayerModes> {
             size: 20,
             color: shuffleOn ? primary : inactiveColor,
           ),
-          onPressed: () => setState(() => handler.toggleShuffle()),
+          onPressed: ()async{
+            await handler.toggleShuffle();
+            setState((){});
+          },
           tooltip: shuffleOn ? 'Shuffle on' : 'Shuffle off',
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
