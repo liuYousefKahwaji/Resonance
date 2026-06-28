@@ -59,7 +59,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           _player.play();
         } else if (currentLoopMode == LoopMode.all) {
           await _player.pause();
-          await _player.seek(Duration.zero);
+          //await _player.seek(Duration.zero); fixes occasional skipping
           await Future.delayed(const Duration(milliseconds: 50));
           await next();
         }
