@@ -304,6 +304,7 @@ class _WaveformIconState extends State<_WaveformIcon> {
   }
 }
 
+// ignore: unused_element
 class _Bar extends StatelessWidget {
   final double height;
   final Color color;

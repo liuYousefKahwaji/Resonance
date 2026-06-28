@@ -111,6 +111,7 @@ class _TrackTileState extends State<TrackTile> {
     showDialog(
       context: context,
       builder: (context) {
+        // ignore: unused_local_variable
         final isDark = Theme.of(context).brightness == Brightness.dark;
         return AlertDialog(
           title: Row(

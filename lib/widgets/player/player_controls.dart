@@ -62,52 +62,57 @@ class _MobileControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isNarrow = screenWidth < 380;
-
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // ── Row 1: Seek bar ──────────────────────────────────────
             const SeekBar(),
-            const SizedBox(height: 6),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                // Left: modes + settings
-                const PlayerModes(),
-                const SizedBox(width: 2),
-                if (isMobile)
-                  const PlaybackSettings()
-                else
-                  const SpeedControl(),
 
-                // Middle: play controls
+            const SizedBox(height: 6),
+
+            // ── Row 2: Transport controls (centred) ──────────────────
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
                 _SkipButton(
                   icon: Icons.skip_previous_rounded,
                   onTap: handler.previous,
-                  size: isNarrow ? 18 : 22,
+                  size: 26,
                 ),
-                const SizedBox(width: 2),
+                const SizedBox(width: 16),
                 _PlayPauseButton(
                   isPlaying: isPlaying,
                   onTap: handler.playPause,
-                  size: isNarrow ? 34 : 40,
+                  size: 48,
                 ),
-                const SizedBox(width: 2),
+                const SizedBox(width: 16),
                 _SkipButton(
                   icon: Icons.skip_next_rounded,
                   onTap: handler.next,
-                  size: isNarrow ? 18 : 22,
+                  size: 26,
                 ),
+              ],
+            ),
 
-                // Right: volume bar (takes remaining space)
-                const Expanded(
-                  child: VolumeBar(),
-                ),
+            const SizedBox(height: 4),
+
+            // ── Row 3: Modes + settings  |  Volume bar ───────────────
+            Row(
+              children: [
+                // Left cluster — loop, shuffle, speed/pitch
+                const PlayerModes(),
+                isMobile
+                    ? const PlaybackSettings()
+                    : const SpeedControl(),
+
+                const SizedBox(width: 8),
+
+                // Volume bar takes all remaining space
+                const Expanded(child: VolumeBar()),
               ],
             ),
           ],
@@ -238,7 +243,7 @@ class _SkipButton extends StatelessWidget {
       icon: Icon(icon, size: size, color: iconColor),
       splashRadius: 20,
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
     );
   }
 }
