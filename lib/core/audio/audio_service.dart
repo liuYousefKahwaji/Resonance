@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/services/discord_presence_service.dart';
+import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
@@ -147,6 +150,49 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
   }
 
+  Future<String> _resolveStreamUrl(String url) async {
+    if (Platform.isWindows) {
+      final supportDir = await getApplicationSupportDirectory();
+      final binDir = p.join(supportDir.path, 'bin');
+      final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
+      final denoPath = p.join(binDir, 'deno.exe');
+
+      final process = await Process.start(ytDlpPath, [
+        '--js-runtimes',
+        'deno:$denoPath',
+        '-g',
+        '-f',
+        'bestaudio/best',
+        url,
+      ]);
+
+      process.stderr.drain();
+      final lines = await process.stdout.transform(utf8.decoder).transform(const LineSplitter()).toList();
+      await process.exitCode;
+
+      if (lines.isNotEmpty) {
+        return lines.first.trim();
+      }
+      throw Exception('Failed to extract streaming URL via yt-dlp');
+    } else if (Platform.isAndroid) {
+      const channel = MethodChannel('resonance/android_youtube');
+      final streamUrl = await channel.invokeMethod<String>('getStreamUrl', {'url': url});
+      if (streamUrl != null && streamUrl.isNotEmpty) {
+        return streamUrl;
+      }
+      throw Exception('Failed to extract streaming URL via MethodChannel');
+    }
+    throw UnsupportedError('Platform not supported for streaming');
+  }
+
+  void _updatePlaybackStateToLoading() {
+    playbackState.add(
+      playbackState.value.copyWith(
+        processingState: AudioProcessingState.loading,
+      ),
+    );
+  }
+
   // ─── Playback state updates ──────────────────────────────────────
   void _updatePlaybackState() {
     playbackState.add(
@@ -205,8 +251,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   Future<void> _preloadTrack(String filePath, String title, String artist) async {
     try {
-      final playablePath = await _resolvePlayablePath(filePath);
-      final uri = Uri.file(playablePath);
+      final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
+      Uri uri;
+      if (isStream) {
+        final resolvedUrl = await _resolveStreamUrl(filePath);
+        uri = Uri.parse(resolvedUrl);
+      } else {
+        final playablePath = await _resolvePlayablePath(filePath);
+        uri = Uri.file(playablePath);
+      }
       await _player.setAudioSource(AudioSource.uri(uri));
       final duration = _player.duration;
       MediaItem item = MediaItem(id: filePath, title: title, artist: artist, duration: duration);
@@ -303,8 +356,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         await _player.pause();
       }
 
-      final playablePath = await _resolvePlayablePath(filePath);
-      final uri = Uri.file(playablePath);
+      final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
+      Uri uri;
+      if (isStream) {
+        _updatePlaybackStateToLoading();
+        final resolvedUrl = await _resolveStreamUrl(filePath);
+        uri = Uri.parse(resolvedUrl);
+      } else {
+        final playablePath = await _resolvePlayablePath(filePath);
+        uri = Uri.file(playablePath);
+      }
+
       await _player.setAudioSource(AudioSource.uri(uri));
 
       final prefs = await SharedPreferences.getInstance();
@@ -325,6 +387,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       await DiscordPresenceService().updatePresence(title, artist);
     } catch (e, st) {
       debugPrint('Error loading track "$filePath": $e\n$st');
+      _updatePlaybackState();
     }
   }
 
@@ -364,6 +427,30 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await setSpeed(newSpeed);
   }
 
+  Future<({String title, String artist})> _getTrackMetadata(String path) async {
+    final isStream = path.startsWith('http://') || path.startsWith('https://');
+    if (isStream) {
+      final cached = await MetadataCacheService.get(path);
+      if (cached != null) {
+        return (title: cached.title, artist: cached.artist);
+      }
+      return (title: 'Streaming Audio', artist: 'YouTube');
+    } else {
+      try {
+        final metadata = await AudioMetadata.extract(File(path));
+        return (
+          title: metadata?.trackName ?? p.basenameWithoutExtension(path),
+          artist: metadata?.firstArtists ?? 'Unknown Artist',
+        );
+      } catch (_) {
+        return (
+          title: p.basenameWithoutExtension(path),
+          artist: 'Unknown Artist',
+        );
+      }
+    }
+  }
+
   Future<void> next() async {
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
@@ -384,12 +471,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       await _player.pause();
     }
 
-    final metadata = await AudioMetadata.extract(File(nextPath));
-    await loadTrack(
-      nextPath,
-      metadata?.trackName ?? p.basenameWithoutExtension(nextPath),
-      metadata?.firstArtists ?? 'Unknown Artist',
-    );
+    final meta = await _getTrackMetadata(nextPath);
+    await loadTrack(nextPath, meta.title, meta.artist);
   }
 
   Future<void> previous() async {
@@ -418,12 +501,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       await _player.pause();
     }
 
-    final metadata = await AudioMetadata.extract(File(prevPath));
-    await loadTrack(
-      prevPath,
-      metadata?.trackName ?? p.basenameWithoutExtension(prevPath),
-      metadata?.firstArtists ?? 'Unknown Artist',
-    );
+    final meta = await _getTrackMetadata(prevPath);
+    await loadTrack(prevPath, meta.title, meta.artist);
   }
 
   Future<bool> isPlaying() async => _player.playing;
@@ -450,13 +529,23 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   @override
   Future<void> playMediaItem(MediaItem mediaItem) async {
     try {
-      final playablePath = await _resolvePlayablePath(mediaItem.id);
-      await _player.setAudioSource(AudioSource.uri(Uri.file(playablePath)));
+      final isStream = mediaItem.id.startsWith('http://') || mediaItem.id.startsWith('https://');
+      Uri uri;
+      if (isStream) {
+        _updatePlaybackStateToLoading();
+        final resolvedUrl = await _resolveStreamUrl(mediaItem.id);
+        uri = Uri.parse(resolvedUrl);
+      } else {
+        final playablePath = await _resolvePlayablePath(mediaItem.id);
+        uri = Uri.file(playablePath);
+      }
+      await _player.setAudioSource(AudioSource.uri(uri));
       this.mediaItem.add(mediaItem);
       await _player.play();
       await _saveTrack(mediaItem.id, mediaItem.title, mediaItem.artist ?? 'Unknown Artist');
     } catch (e, st) {
       debugPrint('Error playing media item "${mediaItem.id}": $e\n$st');
+      _updatePlaybackState();
     }
   }
 

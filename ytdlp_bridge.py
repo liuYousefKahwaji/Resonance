@@ -184,3 +184,35 @@ def download(url: str, output_dir: str, event_sink) -> None:
 
     except Exception as e:
         event_sink.success(f"error:{str(e)}")
+
+
+def get_stream_url(url: str) -> str:
+    """
+    Extract the direct media stream URL for the given video/audio link.
+    """
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "quiet": True,
+        "no_warnings": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return info.get("url") or ""
+
+
+def get_metadata(url: str) -> str:
+    """
+    Extract title and artist metadata for a URL without downloading.
+    """
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return json.dumps({
+            "title": info.get("title") or "Streaming Track",
+            "artist": info.get("uploader") or info.get("channel") or "YouTube"
+        })
+

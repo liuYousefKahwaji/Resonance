@@ -57,7 +57,8 @@ class _TrackTileState extends State<TrackTile> {
   }
 
   Future<void> _loadMetadata() async {
-    final fileName = p.basenameWithoutExtension(widget.trackPath);
+    final isStream = widget.trackPath.startsWith('http://') || widget.trackPath.startsWith('https://');
+    final fileName = isStream ? widget.trackPath : p.basenameWithoutExtension(widget.trackPath);
 
     final cached = await MetadataCacheService.get(widget.trackPath);
     if (cached != null) {
@@ -65,6 +66,17 @@ class _TrackTileState extends State<TrackTile> {
         setState(() {
           _title = cached.title;
           _artist = cached.artist;
+          _loading = false;
+        });
+      }
+      return;
+    }
+
+    if (isStream) {
+      if (mounted) {
+        setState(() {
+          _title = 'Streaming Audio';
+          _artist = 'YouTube';
           _loading = false;
         });
       }
@@ -196,6 +208,7 @@ class _TrackTileState extends State<TrackTile> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = Theme.of(context).colorScheme.primary;
     final fileName = p.basenameWithoutExtension(widget.trackPath);
+    final isStream = widget.trackPath.startsWith('http://') || widget.trackPath.startsWith('https://');
 
     return StreamBuilder<MediaItem?>(
       stream: handler.mediaItem,
@@ -305,7 +318,7 @@ class _TrackTileState extends State<TrackTile> {
               type: MaterialType.transparency,
               child: InkWell(
                 onTap: () => handler.loadTrack(widget.trackPath, title, artist),
-                onLongPress: () => _showMetadataEditor(context, title, artist),
+                onLongPress: isStream ? null : () => _showMetadataEditor(context, title, artist),
                 borderRadius: BorderRadius.circular(12),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
@@ -332,7 +345,7 @@ class _TrackTileState extends State<TrackTile> {
                       ),
 
                       // ── Album icon / playing indicator ──────────────
-                      _TrackIcon(isPlaying: isPlaying),
+                      _TrackIcon(isPlaying: isPlaying, isStream: isStream),
                       const SizedBox(width: 12),
 
                       // ── Title + artist ──────────────────────────────
@@ -402,11 +415,12 @@ class _TrackTileState extends State<TrackTile> {
   }
 }
 
-/// Small icon box: pulsing graphic_eq when playing, music note otherwise.
+/// Small icon box: pulsing graphic_eq when playing, music note/sensors otherwise.
 class _TrackIcon extends StatelessWidget {
   final bool isPlaying;
+  final bool isStream;
 
-  const _TrackIcon({required this.isPlaying});
+  const _TrackIcon({required this.isPlaying, this.isStream = false});
 
   @override
   Widget build(BuildContext context) {
@@ -428,7 +442,9 @@ class _TrackIcon extends StatelessWidget {
       child: AnimatedSwitcher(
         duration: const Duration(milliseconds: 200),
         child: Icon(
-          isPlaying ? Icons.graphic_eq_rounded : Icons.music_note_rounded,
+          isPlaying
+              ? Icons.graphic_eq_rounded
+              : (isStream ? Icons.sensors_rounded : Icons.music_note_rounded),
           key: ValueKey(isPlaying),
           size: 17,
           color: isPlaying

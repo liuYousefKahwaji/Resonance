@@ -76,6 +76,21 @@ class MainActivity : FlutterFragmentActivity() {
                         }
                     }
 
+                    // ── getMetadata ──────────────────────────────────────────
+                    "getMetadata" -> {
+                        val url = call.argument<String>("url") ?: ""
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = bridge.callAttr("get_metadata", url).toString()
+                                withContext(Dispatchers.Main) { result.success(json) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("METADATA_ERROR", e.message, null)
+                                }
+                            }
+                        }
+                    }
+
                     // ── download ──────────────────────────────────────────────
                     "download" -> {
                         val url       = call.argument<String>("url") ?: ""
@@ -111,6 +126,19 @@ class MainActivity : FlutterFragmentActivity() {
                                     } else {
                                         pendingEvents.add(message)
                                     }
+                                }
+                            }
+                        }
+                    // ── getStreamUrl ──────────────────────────────────────────
+                    "getStreamUrl" -> {
+                        val url = call.argument<String>("url") ?: ""
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val streamUrl = bridge.callAttr("get_stream_url", url).toString()
+                                withContext(Dispatchers.Main) { result.success(streamUrl) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("STREAM_ERROR", e.message, null)
                                 }
                             }
                         }

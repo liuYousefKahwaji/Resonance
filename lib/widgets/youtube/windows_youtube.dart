@@ -15,6 +15,8 @@ import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:resonance/services/import_service.dart';
+import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/core/storage/file_service.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -59,14 +61,14 @@ class YtSearchResult {
 class MediaDownloader {
   static const _audioExtensions = {'mp3', 'wav', 'm4a', 'ogg', 'opus', 'webm', 'aac', 'flac'};
 
-  Future<String> get _binDirPath async {
+  Future<String> get binDirPath async {
     final supportDir = await getApplicationSupportDirectory();
 
     return p.join(supportDir.path, 'bin');
   }
 
   Future<void> initBinaries() async {
-    final binDir = Directory(await _binDirPath);
+    final binDir = Directory(await binDirPath);
 
     if (!await binDir.exists()) await binDir.create(recursive: true);
 
@@ -82,7 +84,7 @@ class MediaDownloader {
   }
 
   Future<List<YtSearchResult>> search(String query) async {
-    final binDir = await _binDirPath;
+    final binDir = await binDirPath;
 
     final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
 
@@ -161,7 +163,7 @@ class MediaDownloader {
 
     required Function(String filePath) onTrackDownloaded,
   }) async {
-    final binDir = await _binDirPath;
+    final binDir = await binDirPath;
 
     final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
 
@@ -472,10 +474,83 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
         setState(() => _mode = _DialogMode.input);
 
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: Theme.of(context).colorScheme.error),
+          SnackBar(content: Text('Error: $e'), backgroundColor: Theme.of(context).colorScheme.error),
         );
       }
     }
+  }
+
+  Future<void> _startStream(String url, {String? title, String? artist}) async {
+    final targetTitle = title ?? 'Streaming Track';
+    final targetArtist = artist ?? 'YouTube';
+
+    await MetadataCacheService.set(url, targetTitle, targetArtist);
+
+    final playlistContent = await FileService().readTextFromFile();
+    final updatedContent = '${playlistContent.trim()}\n$url\n';
+    await FileService().writeTextToFile(updatedContent, append: false);
+
+    widget.onFileAdded?.call(url);
+
+    if (mounted) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.sensors_rounded, color: Colors.greenAccent),
+              SizedBox(width: 8),
+              Text(
+                'Stream URL Added to Playlist!',
+                style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<({String title, String artist})> _fetchMetadata(String url) async {
+    try {
+      final binDir = await _downloader.binDirPath;
+      final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
+      final denoPath = p.join(binDir, 'deno.exe');
+
+      final process = await Process.start(ytDlpPath, [
+        '--js-runtimes',
+        'deno:$denoPath',
+        '--dump-json',
+        '--no-download',
+        url,
+      ]);
+
+      process.stderr.drain();
+      final lines = await process.stdout.transform(utf8.decoder).transform(const LineSplitter()).toList();
+      await process.exitCode;
+
+      if (lines.isNotEmpty) {
+        final json = jsonDecode(lines.first) as Map<String, dynamic>;
+        return (
+          title: json['title'] as String? ?? 'Streaming Track',
+          artist: json['uploader'] as String? ?? json['channel'] as String? ?? 'YouTube',
+        );
+      }
+    } catch (_) {}
+    return (title: 'Streaming Track', artist: 'YouTube');
+  }
+
+  Future<void> _startStreamUrl(String url) async {
+    setState(() {
+      _mode = _DialogMode.searching;
+      _statusMessage = 'Extracting Video Info...';
+    });
+
+    final meta = await _fetchMetadata(url);
+    await _startStream(url, title: meta.title, artist: meta.artist);
   }
 
   Future<void> _runSearch() async {
@@ -543,7 +618,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
                   const SizedBox(width: 12),
 
-                  Text('YouTube Downloader', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                  Text('YouTube · Stream or Download', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
                 ],
               ),
 
@@ -618,26 +693,41 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
             children: [
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
 
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
 
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-
+              // ── Stream button ──────────────────────────────────────
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  side: BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6)),
+                  foregroundColor: Theme.of(context).colorScheme.primary,
                 ),
-
                 onPressed: () {
                   final url = _urlController.text.trim();
+                  if (url.isNotEmpty) _startStreamUrl(url);
+                },
+                icon: const Icon(Icons.sensors_rounded, size: 18),
+                label: const Text('Stream'),
+              ),
 
+              const SizedBox(width: 8),
+
+              // ── Download button ────────────────────────────────────
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  final url = _urlController.text.trim();
                   if (url.isNotEmpty) _startDownload(url);
                 },
-
                 icon: const Icon(Icons.download_rounded, size: 18),
-
                 label: const Text('Download'),
               ),
             ],
+
           ),
         ] else ...[
           TextField(
@@ -789,15 +879,25 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                   style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant),
                 ),
 
-                trailing: IconButton(
-                  icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary),
-
-                  tooltip: 'Download',
-
-                  onPressed: () => _startDownload(result.url),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // ── Stream button ──────────────────────────────────
+                    IconButton(
+                      icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary),
+                      tooltip: 'Stream Now',
+                      onPressed: () => _startStream(result.url, title: result.title, artist: result.uploader),
+                    ),
+                    // ── Download button ────────────────────────────────
+                    IconButton(
+                      icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary),
+                      tooltip: 'Download',
+                      onPressed: () => _startDownload(result.url),
+                    ),
+                  ],
                 ),
 
-                onTap: () => _startDownload(result.url),
+                onTap: () => _startStream(result.url, title: result.title, artist: result.uploader),
               );
             },
           ),

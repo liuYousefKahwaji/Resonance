@@ -67,6 +67,9 @@ class MetadataCacheService {
     }
   }
 
+  static bool _isStreamUrl(String path) =>
+      path.startsWith('http://') || path.startsWith('https://');
+
   /// Returns cached metadata for [filePath] if present and still valid
   /// (i.e. the file's last-modified time hasn't changed since caching).
   /// Returns null on cache miss or invalidation - caller should extract
@@ -76,15 +79,17 @@ class MetadataCacheService {
     final entry = _cache![filePath];
     if (entry == null || entry is! Map) return null;
 
-    try {
-      final cachedMtime = entry['mtime'] as int?;
-      final currentMtime = (await File(filePath).lastModified()).millisecondsSinceEpoch;
-      if (cachedMtime == null || cachedMtime != currentMtime) {
+    if (!_isStreamUrl(filePath)) {
+      try {
+        final cachedMtime = entry['mtime'] as int?;
+        final currentMtime = (await File(filePath).lastModified()).millisecondsSinceEpoch;
+        if (cachedMtime == null || cachedMtime != currentMtime) {
+          return null;
+        }
+      } catch (_) {
+        // If we can't stat the file, don't trust the cache.
         return null;
       }
-    } catch (_) {
-      // If we can't stat the file, don't trust the cache.
-      return null;
     }
 
     final title = entry['title'] as String?;
@@ -99,17 +104,20 @@ class MetadataCacheService {
   static Future<void> set(String filePath, String title, String artist) async {
     await _ensureLoaded();
 
-    int mtime;
-    try {
-      mtime = (await File(filePath).lastModified()).millisecondsSinceEpoch;
-    } catch (_) {
-      mtime = 0;
+    int mtime = 0;
+    if (!_isStreamUrl(filePath)) {
+      try {
+        mtime = (await File(filePath).lastModified()).millisecondsSinceEpoch;
+      } catch (_) {
+        mtime = 0;
+      }
     }
 
     _cache![filePath] = {
       'title': title,
       'artist': artist,
       'mtime': mtime,
+      'isStream': _isStreamUrl(filePath),
     };
 
     await _persist();

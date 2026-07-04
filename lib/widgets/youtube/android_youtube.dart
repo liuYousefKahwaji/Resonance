@@ -25,6 +25,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/services/import_service.dart';
+import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/core/storage/file_service.dart';
 
 // ─── Models (same shape as YtSearchResult in windows_youtube.dart) ───────────
 
@@ -256,6 +258,60 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
         );
   }
 
+  Future<void> _startStream(String url, {String? title, String? artist}) async {
+    final targetTitle = title ?? 'Streaming Track';
+    final targetArtist = artist ?? 'YouTube';
+
+    await MetadataCacheService.set(url, targetTitle, targetArtist);
+
+    final playlistContent = await FileService().readTextFromFile();
+    final updatedContent = '${playlistContent.trim()}\n$url\n';
+    await FileService().writeTextToFile(updatedContent, append: false);
+
+    widget.onFileAdded?.call(url);
+
+    if (mounted) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.sensors_rounded, color: Colors.greenAccent),
+              SizedBox(width: 8),
+              Text(
+                'Stream URL Added to Playlist!',
+                style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<void> _startStreamUrl(String url) async {
+    setState(() {
+      _mode = _DialogMode.searching;
+      _statusMessage = 'Extracting Video Info...';
+    });
+
+    try {
+      const channel = MethodChannel('resonance/android_youtube');
+      final raw = await channel.invokeMethod<String>('getMetadata', {'url': url});
+      final data = jsonDecode(raw ?? '{}') as Map<String, dynamic>;
+      await _startStream(
+        url,
+        title: data['title'] as String?,
+        artist: data['artist'] as String?,
+      );
+    } catch (_) {
+      await _startStream(url);
+    }
+  }
+
   Future<void> _runSearch() async {
     final query = _searchController.text.trim();
     if (query.isEmpty) return;
@@ -306,7 +362,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'YouTube Downloader',
+                      'YouTube · Stream or Download',
                       style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
                       maxLines: 2,
                       softWrap: true,
@@ -363,10 +419,27 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
+              // ── Stream button ──────────────────────────────────────
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  side: BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6)),
+                  foregroundColor: Theme.of(context).colorScheme.primary,
+                ),
+                onPressed: () {
+                  final url = _urlController.text.trim();
+                  if (url.isNotEmpty) _startStreamUrl(url);
+                },
+                icon: const Icon(Icons.sensors_rounded, size: 18),
+                label: const Text('Stream'),
+              ),
+              const SizedBox(width: 8),
+              // ── Download button ────────────────────────────────────
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
                 onPressed: () {
@@ -483,12 +556,24 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                   [result.uploader, if (result.formattedDuration.isNotEmpty) result.formattedDuration].join(' · '),
                   style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant),
                 ),
-                trailing: IconButton(
-                  icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary),
-                  tooltip: 'Download',
-                  onPressed: () => _startDownload(result.url),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // ── Stream button ──────────────────────────────────
+                    IconButton(
+                      icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary),
+                      tooltip: 'Stream Now',
+                      onPressed: () => _startStream(result.url, title: result.title, artist: result.uploader),
+                    ),
+                    // ── Download button ────────────────────────────────
+                    IconButton(
+                      icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary),
+                      tooltip: 'Download',
+                      onPressed: () => _startDownload(result.url),
+                    ),
+                  ],
                 ),
-                onTap: () => _startDownload(result.url),
+                onTap: () => _startStream(result.url, title: result.title, artist: result.uploader),
               );
             },
           ),
