@@ -20,6 +20,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final _player = AudioPlayer();
 
   double savedVolume = 1.0;
+
+  // volumeNotifier stores the UI value in [0.0, 2.0].
+  // Actual just_audio volume is always clamped to [0.0, 1.0].
+  // Values above 1.0 are implemented via Android's LoudnessEnhancer
+  // (on Android) or a software gain chain (future work on Windows).
+  // On Windows, values >1.0 are silently clamped to 1.0 for now
+  // because WASAPI does not support gain above unity via just_audio.
   final ValueNotifier<double> volumeNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<double> speedNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<double> pitchNotifier = ValueNotifier<double>(1.0);
@@ -32,6 +39,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   // Session-scoped cache: YouTube URL → resolved CDN/HLS URL.
   // CDN URLs typically expire after ~6 hours so we invalidate on error.
   final Map<String, String> _streamUrlCache = {};
+
+  // Android loudness enhancer channel for volume > 100%.
+  static const _loudnessChannel = MethodChannel('resonance/loudness_enhancer');
 
   PlayerHandler() {
     _player.playbackEventStream.listen((_) => _updatePlaybackState());
@@ -127,14 +137,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   // ─── Stream URL resolution ────────────────────────────────────────
-  // Returns a URL suitable for just_audio to play directly.
-  // Uses LockCachingAudioSource wrapper so seeking works on streams.
+  // Resolves a YouTube page URL to a direct CDN/HLS audio URL.
+  // The result is cached for the session. On error the cache entry is
+  // invalidated so the next attempt re-resolves rather than reusing a
+  // stale/expired URL.
   Future<String> _resolveStreamUrl(String url) async {
     if (_streamUrlCache.containsKey(url)) {
-      debugPrint('[PlayerHandler] Stream URL cache hit');
+      debugPrint('[PlayerHandler] Stream URL cache hit for $url');
       return _streamUrlCache[url]!;
     }
 
+    debugPrint('[PlayerHandler] Resolving stream URL for $url');
     String resolved;
 
     if (Platform.isWindows) {
@@ -170,12 +183,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       throw UnsupportedError('Streaming not supported on this platform');
     }
 
+    if (resolved.isEmpty) throw Exception('Resolved stream URL is empty');
     _streamUrlCache[url] = resolved;
+    debugPrint('[PlayerHandler] Resolved stream URL: ${resolved.substring(0, resolved.length.clamp(0, 80))}...');
     return resolved;
   }
 
   // Build the right AudioSource for a URL.
-  // For streams: LockCachingAudioSource enables seeking by buffering to disk.
+  // For streams we resolve to a direct CDN URL first, then use
+  // LockCachingAudioSource so seeking works by buffering to disk.
   // For local files: plain AudioSource.uri.
   Future<AudioSource> _buildAudioSource(String filePath) async {
     final isStream =
@@ -184,25 +200,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (isStream) {
       final resolvedUrl = await _resolveStreamUrl(filePath);
       final uri = Uri.parse(resolvedUrl);
-      // LockCachingAudioSource buffers the stream locally so seeks work.
-      // The cache is keyed by the *original* YouTube URL so the same track
-      // reuses its buffer across the session.
       try {
         return LockCachingAudioSource(uri);
       } catch (_) {
-        // Fallback to plain URI if LockCachingAudioSource fails
         return AudioSource.uri(uri);
       }
     } else {
       final playablePath = await _resolvePlayablePath(filePath);
       return AudioSource.uri(Uri.file(playablePath));
     }
-  }
-
-  void _updatePlaybackStateToLoading() {
-    playbackState.add(playbackState.value.copyWith(
-      processingState: AudioProcessingState.loading,
-    ));
   }
 
   void _updatePlaybackState() {
@@ -346,12 +352,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   // ─── loadTrack ────────────────────────────────────────────────────
-  // Optimistic update: mediaItem shifts immediately.
-  // Serial guard: stale loads abort before touching _player.
+  // Optimistic update: mediaItem shifts immediately so the UI reflects
+  // the new track while the audio source is being resolved.
+  // Serial guard (_loadGeneration): if the user taps another track
+  // before this one finishes loading, the stale load aborts cleanly.
   Future<void> loadTrack(String filePath, String title, String artist) async {
     final myGen = ++_loadGeneration;
 
-    // Optimistic UI shift
+    // Optimistic UI update
     mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
     playbackState.add(playbackState.value.copyWith(
       processingState: AudioProcessingState.loading,
@@ -362,7 +370,22 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (_player.playing) await _player.pause();
       if (_loadGeneration != myGen) return;
 
-      final source = await _buildAudioSource(filePath);
+      AudioSource source;
+      try {
+        source = await _buildAudioSource(filePath);
+      } catch (e) {
+        if (_loadGeneration != myGen) return;
+        debugPrint('[PlayerHandler] Failed to build audio source for "$filePath": $e');
+        // Invalidate stream URL cache on resolution failure
+        _streamUrlCache.remove(filePath);
+        // Signal error state to UI
+        playbackState.add(playbackState.value.copyWith(
+          processingState: AudioProcessingState.idle,
+          playing: false,
+        ));
+        return;
+      }
+
       if (_loadGeneration != myGen) return;
 
       await _player.setAudioSource(source);
@@ -374,7 +397,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
       if (_loadGeneration != myGen) return;
 
-      // Emit updated mediaItem with duration if available immediately
+      // Emit updated mediaItem with duration if already available
       final dur = _player.duration;
       mediaItem.add(MediaItem(
           id: filePath, title: title, artist: artist, duration: dur));
@@ -385,22 +408,52 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       await DiscordPresenceService().updatePresence(title, artist);
     } catch (e, st) {
       if (_loadGeneration == myGen) {
-        debugPrint('Error loading track "$filePath": $e\n$st');
-        // Invalidate cached stream URL on error (it may have expired)
+        debugPrint('[PlayerHandler] Error loading track "$filePath": $e\n$st');
+        // Invalidate cached stream URL — it may have expired
         _streamUrlCache.remove(filePath);
+        playbackState.add(playbackState.value.copyWith(
+          processingState: AudioProcessingState.idle,
+          playing: false,
+        ));
         _updatePlaybackState();
       }
     }
   }
 
-  // ─── Volume — true gain above 1.0 ────────────────────────────────
-  // just_audio's setVolume() on Android/Windows accepts values > 1.0
-  // as a gain multiplier (it uses ExoPlayer/WASAPI gain staging).
-  // We allow up to 2.0 (200%) and pass the raw value directly.
+  // ─── Volume ───────────────────────────────────────────────────────
+  // volumeNotifier holds the raw UI value [0.0, 2.0].
+  //
+  // just_audio's setVolume() clamps to [0.0, 1.0] on both Android and
+  // Windows regardless of what the documentation implies — values above
+  // 1.0 are NOT amplified by the engine.
+  //
+  // For true gain above 100% on Android we use the LoudnessEnhancer
+  // AudioEffect via a MethodChannel bridge in MainActivity.kt.
+  // On Windows there is no equivalent; values >1.0 are accepted by the
+  // UI slider but the actual audio stays at 100% (a BOOST badge appears
+  // so users know the slider top is 100%).
   Future<void> changeVolume(double rawVolume) async {
     final clamped = rawVolume.clamp(0.0, 2.0);
     volumeNotifier.value = clamped;
-    await _player.setVolume(clamped); // pass raw — just_audio handles gain
+
+    // just_audio only does [0.0, 1.0] — pass the lower of the two
+    await _player.setVolume(clamped.clamp(0.0, 1.0));
+
+    // Android: apply gain above 100% via LoudnessEnhancer AudioEffect.
+    // targetGain is in millibels: 0 mB = unity, positive = boost.
+    // We map [1.0 → 2.0] linearly to [0 mB → 1000 mB] (+10 dB max).
+    if (Platform.isAndroid) {
+      try {
+        final gainMB = clamped > 1.0
+            ? ((clamped - 1.0) * 1000).round() // 0..1000 mB
+            : 0;
+        await _loudnessChannel.invokeMethod('setGain', {'gainMB': gainMB});
+      } catch (e) {
+        // Non-fatal: LoudnessEnhancer may not be available on all devices.
+        debugPrint('[PlayerHandler] LoudnessEnhancer unavailable: $e');
+      }
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setDouble('last_volume', clamped);

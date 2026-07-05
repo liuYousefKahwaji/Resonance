@@ -1,8 +1,15 @@
 // lib/widgets/player/seek_bar.dart
+//
 // Fixes:
-//  1. Duration format: H:MM:SS only when track >= 1 hour
-//  2. Loading indicator: grey out + show spinner while audio is buffering/loading
-//  3. Seek bar pauses updating while buffering after a seek
+//  1. Duration format: H:MM:SS only when track >= 1 hour.
+//  2. Loading indicator: grey out + spinner while audio is buffering/loading.
+//  3. Pending seek position: after the user releases the thumb the bar
+//     shows the chosen position immediately instead of snapping back to
+//     the pre-seek position while the player is still buffering.
+//     _pendingSeekPosition is held until the player's reported position
+//     "catches up" (within 2 s of the target), then cleared so normal
+//     tracking resumes. This makes stream-seeks feel responsive even
+//     though re-buffering takes a few seconds.
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
@@ -24,6 +31,10 @@ class _SeekBarState extends State<SeekBar> {
   Duration _duration = Duration.zero;
   bool _isLoading = false;
 
+  // After a seek, hold the target position until the player catches up.
+  // This prevents the thumb from snapping back during stream re-buffering.
+  Duration? _pendingSeekPosition;
+
   double _hoverX = 0.0;
   Duration _hoverDuration = Duration.zero;
 
@@ -37,33 +48,52 @@ class _SeekBarState extends State<SeekBar> {
     final handler = Provider.of<PlayerHandler>(context, listen: false);
 
     handler.positionStream.listen((position) {
-      if (!_isScrubbing && mounted) {
-        setState(() {
-          _position = position;
-          if (_duration.inMilliseconds > 0) {
-            _sliderValue = _position.inMilliseconds / _duration.inMilliseconds;
-          }
-        });
+      if (!mounted) return;
+      if (_isScrubbing) return;
+
+      // If we have a pending seek, check whether the player has caught up.
+      // "Caught up" = reported position is within 2 s of the target.
+      if (_pendingSeekPosition != null) {
+        final diff = (position - _pendingSeekPosition!).abs();
+        if (diff > const Duration(seconds: 2)) {
+          // Player hasn't arrived yet — keep showing the pending position.
+          return;
+        }
+        // Player has caught up — resume normal tracking.
+        _pendingSeekPosition = null;
       }
+
+      setState(() {
+        _position = position;
+        if (_duration.inMilliseconds > 0) {
+          _sliderValue = _position.inMilliseconds / _duration.inMilliseconds;
+        }
+      });
     });
 
     handler.durationStream.listen((duration) {
       if (duration != null && mounted) {
-        setState(() {
-          _duration = duration;
-        });
+        setState(() => _duration = duration);
       }
     });
 
-    // Listen to playback state for loading/buffering detection
     handler.playbackState.listen((state) {
-      if (mounted) {
-        final loading = state.processingState == AudioProcessingState.loading ||
-            state.processingState == AudioProcessingState.buffering;
-        if (loading != _isLoading) {
-          setState(() => _isLoading = loading);
+      if (!mounted) return;
+      final loading = state.processingState == AudioProcessingState.loading ||
+          state.processingState == AudioProcessingState.buffering;
+
+      // When a new track starts loading, clear any stale pending seek
+      // from the previous track.
+      final isIdle = state.processingState == AudioProcessingState.idle;
+
+      setState(() {
+        _isLoading = loading;
+        if (isIdle) {
+          _pendingSeekPosition = null;
+          _position = Duration.zero;
+          _sliderValue = 0.0;
         }
-      }
+      });
     });
   }
 
@@ -90,6 +120,18 @@ class _SeekBarState extends State<SeekBar> {
     }
   }
 
+  // The position we actually display: pending seek target (if any),
+  // otherwise the live player position.
+  Duration get _displayPosition => _pendingSeekPosition ?? _position;
+
+  double get _displaySliderValue {
+    if (_pendingSeekPosition != null && _duration.inMilliseconds > 0) {
+      return (_pendingSeekPosition!.inMilliseconds / _duration.inMilliseconds)
+          .clamp(0.0, 1.0);
+    }
+    return _sliderValue.clamp(0.0, 1.0);
+  }
+
   @override
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
@@ -108,19 +150,21 @@ class _SeekBarState extends State<SeekBar> {
       color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
     );
 
-    // When loading, dim the active track color
-    final activeTrackColor = _isLoading
+    // Dim the track while loading OR while waiting for a seek to settle.
+    final isWaiting = _isLoading || _pendingSeekPosition != null;
+    final activeTrackColor = isWaiting
         ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8))
         : primary;
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Text(_formatDuration(_position, showHours: showHours), style: timestampStyle),
+        Text(_formatDuration(_displayPosition, showHours: showHours),
+            style: timestampStyle),
         const SizedBox(width: 8),
 
-        // Loading spinner inline with seek bar
-        if (_isLoading)
+        // Spinner shown while loading OR re-buffering after a seek
+        if (isWaiting)
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: SizedBox(
@@ -128,7 +172,9 @@ class _SeekBarState extends State<SeekBar> {
               height: 12,
               child: CircularProgressIndicator(
                 strokeWidth: 1.5,
-                color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                color: isDark
+                    ? const Color(0xFF64748B)
+                    : const Color(0xFF94A3B8),
               ),
             ),
           ),
@@ -155,61 +201,86 @@ class _SeekBarState extends State<SeekBar> {
                         inactiveTrackColor: isDark
                             ? const Color(0xFF2D2D42)
                             : const Color(0xFFDDD9F3),
-                        thumbColor: _isLoading
-                            ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8))
+                        thumbColor: isWaiting
+                            ? (isDark
+                                ? const Color(0xFF3D3D55)
+                                : const Color(0xFFABA8C8))
                             : primary,
                         tickMarkShape: SliderTickMarkShape.noTickMark,
                         trackHeight: _isHovering ? 4.0 : 3.0,
                         thumbShape: RoundSliderThumbShape(
-                          enabledThumbRadius: _isHovering && !_isLoading ? 6.0 : 0.0,
+                          enabledThumbRadius:
+                              _isHovering && !isWaiting ? 6.0 : 0.0,
                           elevation: 2,
                         ),
-                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 12.0),
+                        overlayShape:
+                            const RoundSliderOverlayShape(overlayRadius: 12.0),
                         overlayColor: primary.withValues(alpha: 0.15),
                       ),
                       child: Slider(
-                        value: _sliderValue.clamp(0.0, 1.0),
+                        value: _isScrubbing
+                            ? _sliderValue.clamp(0.0, 1.0)
+                            : _displaySliderValue,
                         min: 0,
                         max: 1,
-                        divisions: _duration.inSeconds > 0 ? _duration.inSeconds : null,
-                        onChanged: _isLoading
+                        divisions: _duration.inSeconds > 0
+                            ? _duration.inSeconds
+                            : null,
+                        // Disable interaction while initially loading a new
+                        // track, but ALLOW it during post-seek buffering so
+                        // users can re-seek without waiting for re-buffering
+                        // to complete first.
+                        onChanged: _isLoading && _pendingSeekPosition == null
                             ? null
                             : (value) {
                                 setState(() {
                                   _isScrubbing = true;
                                   _sliderValue = value;
                                 });
-                                _updateHoverPosition(value * maxWidth, maxWidth);
+                                _updateHoverPosition(
+                                    value * maxWidth, maxWidth);
                               },
-                        onChangeEnd: _isLoading
-                            ? null
-                            : (value) {
-                                final newPosition = _duration * value;
-                                handler.seek(newPosition);
-                                setState(() => _isScrubbing = false);
-                              },
+                        onChangeEnd:
+                            _isLoading && _pendingSeekPosition == null
+                                ? null
+                                : (value) {
+                                    final newPosition = _duration * value;
+                                    // Record as pending immediately so the
+                                    // thumb doesn't snap back.
+                                    setState(() {
+                                      _pendingSeekPosition = newPosition;
+                                      _isScrubbing = false;
+                                    });
+                                    handler.seek(newPosition);
+                                  },
                       ),
                     ),
 
                     // Floating timestamp preview
                     AnimatedPositioned(
-                      duration: Duration(milliseconds: _isScrubbing ? 0 : 50),
+                      duration: Duration(
+                          milliseconds: _isScrubbing ? 0 : 50),
                       curve: Curves.easeOutCubic,
                       left: (_hoverX - 28).clamp(0.0, maxWidth - 56),
                       top: -34,
                       child: AnimatedOpacity(
                         duration: const Duration(milliseconds: 150),
-                        opacity: (_isHovering || _isScrubbing) && !_isLoading ? 1.0 : 0.0,
+                        opacity:
+                            (_isHovering || _isScrubbing) && !_isLoading
+                                ? 1.0
+                                : 0.0,
                         child: IgnorePointer(
                           child: Container(
                             width: 56,
-                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 4),
                             decoration: BoxDecoration(
                               color: previewBgColor,
                               borderRadius: BorderRadius.circular(6),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.2),
+                                  color:
+                                      Colors.black.withValues(alpha: 0.2),
                                   blurRadius: 8,
                                   offset: const Offset(0, 3),
                                 ),
@@ -217,7 +288,8 @@ class _SeekBarState extends State<SeekBar> {
                             ),
                             child: Center(
                               child: Text(
-                                _formatDuration(_hoverDuration, showHours: showHours),
+                                _formatDuration(_hoverDuration,
+                                    showHours: showHours),
                                 style: TextStyle(
                                   color: previewTextColor,
                                   fontSize: 11,
@@ -237,7 +309,8 @@ class _SeekBarState extends State<SeekBar> {
           ),
         ),
         const SizedBox(width: 8),
-        Text(_formatDuration(_duration, showHours: showHours), style: timestampStyle),
+        Text(_formatDuration(_duration, showHours: showHours),
+            style: timestampStyle),
       ],
     );
   }

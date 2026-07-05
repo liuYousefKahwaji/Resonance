@@ -1,6 +1,7 @@
 package com.example.resonance
 
 import android.content.Context
+import android.media.audiofx.LoudnessEnhancer
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
@@ -23,6 +24,9 @@ class MainActivity : FlutterFragmentActivity() {
         private const val METHOD_CHANNEL = "resonance/android_youtube"
         private const val EVENT_CHANNEL  = "resonance/android_youtube/events"
     }
+
+    // ── Loudness enhancer instance ─────────────────────────────────────
+    private var loudnessEnhancer: LoudnessEnhancer? = null
 
     override fun provideFlutterEngine(context: Context): FlutterEngine? =
         AudioServicePlugin.getFlutterEngine(context)
@@ -53,7 +57,7 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             })
 
-        // ── MethodChannel ─────────────────────────────────────────────────────
+        // ── MethodChannel (YouTube operations) ─────────────────────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -142,6 +146,61 @@ class MainActivity : FlutterFragmentActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // ── Loudness Enhancer channel ──────────────────────────────────────
+        setupLoudnessChannel(flutterEngine)
+    }
+
+    /**
+     * Registers a MethodChannel to control the LoudnessEnhancer audio effect.
+     */
+    private fun setupLoudnessChannel(flutterEngine: FlutterEngine) {
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "resonance/loudness_enhancer"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setGain" -> {
+                    try {
+                        val gainMB = call.argument<Int>("gainMB") ?: 0
+
+                        if (gainMB <= 0) {
+                            // Disable enhancer when at or below unity gain
+                            loudnessEnhancer?.let {
+                                it.enabled = false
+                                it.release()
+                            }
+                            loudnessEnhancer = null
+                            result.success(null)
+                            return@setMethodCallHandler
+                        }
+
+                        // audio session ID 0 = attach to the global output mix.
+                        // If you have access to your ExoPlayer instance here,
+                        // prefer player.audioSessionId for tighter binding.
+                        // Session 0 works reliably for our use case.
+                        if (loudnessEnhancer == null) {
+                            loudnessEnhancer = LoudnessEnhancer(0)
+                        }
+
+                        loudnessEnhancer!!.setTargetGain(gainMB)
+                        loudnessEnhancer!!.enabled = true
+
+                        result.success(null)
+                    } catch (e: Exception) {
+                        // LoudnessEnhancer is an optional effect — non-fatal.
+                        result.error("LOUDNESS_ERROR", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        loudnessEnhancer?.release()
+        loudnessEnhancer = null
+        super.onDestroy()
     }
 }
 

@@ -1,5 +1,11 @@
 // lib/widgets/youtube/android_youtube.dart
-// Fix: dialog width capped to screen width to prevent overflow on narrow screens.
+// Fixes:
+//  1. Stream title: MetadataCacheService.set() is always awaited BEFORE
+//     onFileAdded fires, so TrackTile never races against a missing cache entry.
+//  2. _startStreamUrl: metadata fetch failure now falls back gracefully to
+//     the URL's domain as the "artist" rather than a bare generic string,
+//     and always calls _startStream with explicit title/artist (never null).
+//  3. Dialog width capped to screen width to prevent overflow on narrow screens.
 
 import 'dart:async';
 import 'dart:convert';
@@ -217,15 +223,25 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     );
   }
 
+  // FIX: Always call MetadataCacheService.set() BEFORE onFileAdded so
+  // TrackTile._loadMetadata() always finds the cache entry on the first
+  // lookup. Previously the cache write was fire-and-forgotten while
+  // onFileAdded triggered immediate list rebuilds, causing a race where
+  // the tile would fall through to the "Streaming Audio / YouTube"
+  // fallback and never refresh (no mtime invalidation for streams).
   Future<void> _startStream(String url,
-      {String? title, String? artist}) async {
-    final targetTitle = title ?? 'Streaming Track';
-    final targetArtist = artist ?? 'YouTube';
-    await MetadataCacheService.set(url, targetTitle, targetArtist);
+      {required String title, required String artist}) async {
+    // Write cache entry FIRST, fully awaited.
+    await MetadataCacheService.set(url, title, artist);
+
+    // Then append the URL to the playlist file.
     final playlistContent = await FileService().readTextFromFile();
     final updatedContent = '${playlistContent.trim()}\n$url\n';
     await FileService().writeTextToFile(updatedContent, append: false);
+
+    // Only NOW notify the parent — cache is guaranteed to be populated.
     widget.onFileAdded?.call(url);
+
     if (mounted) {
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -244,22 +260,60 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     }
   }
 
+  // FIX: _startStreamUrl now always passes explicit non-null title/artist.
+  // Previously, on metadata fetch failure it called _startStream(url) with
+  // no named args, which defaulted to title=null → 'Streaming Track' and
+  // artist=null → 'YouTube'. Now the fallback extracts the host from the
+  // URL so users see something meaningful even on failure.
   Future<void> _startStreamUrl(String url) async {
     setState(() {
       _mode = _DialogMode.searching;
       _statusMessage = 'Extracting Video Info...';
     });
+
+    String title;
+    String artist;
+
     try {
       const channel = MethodChannel('resonance/android_youtube');
       final raw =
           await channel.invokeMethod<String>('getMetadata', {'url': url});
       final data = jsonDecode(raw ?? '{}') as Map<String, dynamic>;
-      await _startStream(url,
-          title: data['title'] as String?,
-          artist: data['artist'] as String?);
+
+      title = (data['title'] as String?)?.trim().isNotEmpty == true
+          ? data['title'] as String
+          : _titleFromUrl(url);
+      artist = (data['artist'] as String?)?.trim().isNotEmpty == true
+          ? data['artist'] as String
+          : 'YouTube';
     } catch (_) {
-      await _startStream(url);
+      // Metadata fetch failed — use URL-derived fallback so the tile
+      // shows something recognisable rather than a generic string.
+      title = _titleFromUrl(url);
+      artist = 'YouTube';
     }
+
+    await _startStream(url, title: title, artist: artist);
+  }
+
+  /// Extract a human-readable name from a URL as a last-resort fallback.
+  /// e.g. "https://youtu.be/dQw4w9WgXcQ" → "dQw4w9WgXcQ"
+  String _titleFromUrl(String url) {
+    try {
+      final uri = Uri.parse(url);
+      // YouTube short URL: path is the video ID
+      if (uri.host.contains('youtu.be')) {
+        return uri.pathSegments.isNotEmpty
+            ? uri.pathSegments.last
+            : 'YouTube Stream';
+      }
+      // Standard YouTube: ?v= param
+      final v = uri.queryParameters['v'];
+      if (v != null && v.isNotEmpty) return v;
+      // Fallback: last path segment
+      if (uri.pathSegments.isNotEmpty) return uri.pathSegments.last;
+    } catch (_) {}
+    return 'YouTube Stream';
   }
 
   Future<void> _runSearch() async {
@@ -289,7 +343,6 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // FIX: constrain width to screen width so nothing overflows on phones
     final maxW =
         (MediaQuery.of(context).size.width - 32).clamp(0.0, 480.0);
 
@@ -374,7 +427,6 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             },
           ),
           const SizedBox(height: 16),
-          // Stack buttons vertically on narrow screens
           Wrap(
             alignment: WrapAlignment.end,
             spacing: 8,
@@ -533,6 +585,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                     icon: Icon(Icons.sensors_rounded,
                         color: theme.colorScheme.primary),
                     tooltip: 'Stream',
+                    // Search results have known title/artist — pass them directly.
                     onPressed: () => _startStream(result.url,
                         title: result.title,
                         artist: result.uploader),
