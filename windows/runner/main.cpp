@@ -21,7 +21,7 @@
 namespace {
 
 constexpr wchar_t kMutexName[] = L"Resonance_SingleInstance_Mutex_8F3D2A1C";
-constexpr wchar_t kWindowTitle[] = L"resonance";
+constexpr wchar_t kWindowTitle[] = L"Resonance";
 
 // Brings an already-running instance's window to the foreground.
 // Handles the case where it's minimized (restores it first) and the

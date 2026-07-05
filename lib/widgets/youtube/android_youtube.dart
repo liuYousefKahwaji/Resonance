@@ -1,18 +1,5 @@
 // lib/widgets/youtube/android_youtube.dart
-//
-// Android YouTube downloader — mirrors WindowsYoutube UI exactly.
-// Instead of spawning yt-dlp.exe as a subprocess, calls into Kotlin via
-// MethodChannel, which runs yt-dlp through Chaquopy (embedded Python).
-//
-// Channel protocol (defined in MainActivity.kt / ytdlp_bridge.py):
-//   MethodChannel "resonance/android_youtube"
-//     search(query)  → List<Map> [{title, uploader, url, duration_seconds}]
-//     download(url, outputDir) → null  (progress via EventChannel)
-//   EventChannel "resonance/android_youtube/events"
-//     "progress:<percent>:<message>"
-//     "track:<filepath>"
-//     "done"
-//     "error:<message>"
+// Fix: dialog width capped to screen width to prevent overflow on narrow screens.
 
 import 'dart:async';
 import 'dart:convert';
@@ -28,15 +15,17 @@ import 'package:resonance/services/import_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 
-// ─── Models (same shape as YtSearchResult in windows_youtube.dart) ───────────
-
 class YtSearchResult {
   final String title;
   final String uploader;
   final String url;
   final int? durationSeconds;
 
-  const YtSearchResult({required this.title, required this.uploader, required this.url, this.durationSeconds});
+  const YtSearchResult(
+      {required this.title,
+      required this.uploader,
+      required this.url,
+      this.durationSeconds});
 
   String get formattedDuration {
     if (durationSeconds == null) return '';
@@ -55,8 +44,6 @@ class YtSearchResult {
   }
 }
 
-// ─── Bridge ───────────────────────────────────────────────────────────────────
-
 class _AndroidYoutubeDownloader {
   static const _method = MethodChannel('resonance/android_youtube');
   static const _event = EventChannel('resonance/android_youtube/events');
@@ -67,28 +54,21 @@ class _AndroidYoutubeDownloader {
     return decoded.map((e) => YtSearchResult.fromMap(e as Map)).toList();
   }
 
-  /// Starts download. Returns a stream of raw event strings.
-  /// Caller parses "progress:...", "track:...", "done", "error:...".
   Stream<String> download(String url, String outputDir) {
-    // Fire the download method call (returns immediately)
     _method.invokeMethod('download', {'url': url, 'outputDir': outputDir});
-    // Listen on the event channel
-    return _event.receiveBroadcastStream().map((event) => event as String);
+    return _event.receiveBroadcastStream().map((e) => e as String);
   }
 
   Future<String> _resolveOutputDir() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('download_directory');
     if (saved != null && saved != 'Default App Folder') return saved;
-    // On Android, use the app's external Music directory
     final dir = await getExternalStorageDirectory();
     return dir?.path ?? (await getApplicationDocumentsDirectory()).path;
   }
 
   Future<String> get outputDir => _resolveOutputDir();
 }
-
-// ─── UI ───────────────────────────────────────────────────────────────────────
 
 enum _DialogMode { input, searching, results, downloading }
 
@@ -107,41 +87,34 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
 
   _DialogMode _mode = _DialogMode.input;
   bool _isUrlMode = true;
-
   List<YtSearchResult> _searchResults = [];
   double _downloadPercentage = 0.0;
   String _statusMessage = '';
-
   StreamSubscription<String>? _downloadSub;
 
-  Future<String> _convertToMp3(String inputPath, {String? title, String? artist}) async {
-    final outputPath = p.join(p.dirname(inputPath), '${p.basenameWithoutExtension(inputPath)}.mp3');
-
+  Future<String> _convertToMp3(String inputPath,
+      {String? title, String? artist}) async {
+    final outputPath = p.join(
+        p.dirname(inputPath),
+        '${p.basenameWithoutExtension(inputPath)}.mp3');
     if (p.equals(inputPath, outputPath)) return inputPath;
-
     final command =
-        '-y -i ${_ffmpegQuote(inputPath)} -vn -map_metadata 0 '
-        '${title == null ? '' : '-metadata title=${_ffmpegQuote(title)} '}'
-        '${artist == null ? '' : '-metadata artist=${_ffmpegQuote(artist)} '}'
-        '-codec:a libmp3lame -b:a 192k ${_ffmpegQuote(outputPath)}';
+        '-y -i ${_q(inputPath)} -vn -map_metadata 0 '
+        '${title == null ? '' : '-metadata title=${_q(title)} '}'
+        '${artist == null ? '' : '-metadata artist=${_q(artist)} '}'
+        '-codec:a libmp3lame -b:a 192k ${_q(outputPath)}';
     final session = await FFmpegKit.execute(command);
-    final returnCode = await session.getReturnCode();
-
-    if (!ReturnCode.isSuccess(returnCode)) {
+    final rc = await session.getReturnCode();
+    if (!ReturnCode.isSuccess(rc)) {
       final logs = await session.getAllLogsAsString();
       throw Exception('Audio conversion failed: ${(logs ?? '').trim()}');
     }
-
-    try {
-      await File(inputPath).delete();
-    } catch (_) {}
-
+    try { await File(inputPath).delete(); } catch (_) {}
     return outputPath;
   }
 
-  String _ffmpegQuote(String value) {
-    return '"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"';
-  }
+  String _q(String v) =>
+      '"${v.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"';
 
   @override
   void dispose() {
@@ -151,30 +124,22 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     super.dispose();
   }
 
-  // ── Actions ──────────────────────────────────────────────────────────────
-
   Future<void> _startDownload(String url) async {
     setState(() {
       _mode = _DialogMode.downloading;
       _downloadPercentage = 0.0;
       _statusMessage = 'Analyzing URL...';
     });
-
     final outputDir = await _downloader.outputDir;
-
     _downloadSub?.cancel();
-
-    // Collect track paths during streaming; process them sequentially in
-    // onDone so that every ImportService.importFiles() is fully awaited
-    // before we pop — this fixes the last-track-not-added race condition.
-    final pendingTracks = <({String path, String? title, String? artist})>[];
+    final pendingTracks =
+        <({String path, String? title, String? artist})>[];
     var completed = false;
 
     Future<void> finishDownload() async {
       if (completed) return;
       completed = true;
       await _downloadSub?.cancel();
-
       for (final track in pendingTracks) {
         if (mounted) {
           setState(() {
@@ -182,113 +147,100 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             _statusMessage = 'Converting audio...';
           });
         }
-        final convertedPath = await _convertToMp3(track.path, title: track.title, artist: track.artist);
-        await ImportService.importFiles([convertedPath], (newPath) {
+        final converted = await _convertToMp3(track.path,
+            title: track.title, artist: track.artist);
+        await ImportService.importFiles([converted], (newPath) {
           widget.onFileAdded?.call(newPath);
         });
       }
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.greenAccent),
-                SizedBox(width: 8),
-                Text(
-                  'Download & Import Complete!',
-                  style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
-                ),
-              ],
-            ),
-            backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Row(children: [
+            Icon(Icons.check_circle, color: Colors.greenAccent),
+            SizedBox(width: 8),
+            Text('Download & Import Complete!',
+                style: TextStyle(
+                    color: Colors.greenAccent,
+                    fontWeight: FontWeight.w500)),
+          ]),
+          backgroundColor:
+              Theme.of(context).colorScheme.surfaceContainerHigh,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ));
       }
     }
 
-    _downloadSub = _downloader
-        .download(url, outputDir)
-        .listen(
-          (event) {
-            if (event.startsWith('progress:')) {
-              // "progress:<percent>:<message>"
-              final parts = event.split(':');
-              final pct = double.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0.0;
-              final msg = parts.sublist(2).join(':');
-              if (mounted) {
-                setState(() {
-                  _downloadPercentage = pct;
-                  _statusMessage = msg;
-                });
-              }
-            } else if (event.startsWith('track:')) {
-              final parts = event.substring('track:'.length).split('|');
-              pendingTracks.add((
-                path: parts[0],
-                title: parts.length > 1 ? Uri.decodeComponent(parts[1]) : null,
-                artist: parts.length > 2 ? Uri.decodeComponent(parts[2]) : null,
-              ));
-            } else if (event == 'done') {
-              unawaited(finishDownload());
-            } else if (event.startsWith('error:')) {
-              final msg = event.substring('error:'.length);
-              _downloadSub?.cancel();
-              if (mounted) {
-                setState(() => _mode = _DialogMode.input);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error: $msg'), backgroundColor: Theme.of(context).colorScheme.error),
-                );
-              }
-            }
-          },
-          onError: (e) {
-            if (mounted) {
-              setState(() => _mode = _DialogMode.input);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Error: $e'), backgroundColor: Theme.of(context).colorScheme.error),
-              );
-            }
-          },
-          onDone: () async {
-            await finishDownload();
-          },
-        );
+    _downloadSub = _downloader.download(url, outputDir).listen(
+      (event) {
+        if (event.startsWith('progress:')) {
+          final parts = event.split(':');
+          final pct =
+              double.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0.0;
+          final msg = parts.sublist(2).join(':');
+          if (mounted) setState(() {
+            _downloadPercentage = pct;
+            _statusMessage = msg;
+          });
+        } else if (event.startsWith('track:')) {
+          final parts = event.substring('track:'.length).split('|');
+          pendingTracks.add((
+            path: parts[0],
+            title: parts.length > 1 ? Uri.decodeComponent(parts[1]) : null,
+            artist: parts.length > 2 ? Uri.decodeComponent(parts[2]) : null,
+          ));
+        } else if (event == 'done') {
+          unawaited(finishDownload());
+        } else if (event.startsWith('error:')) {
+          final msg = event.substring('error:'.length);
+          _downloadSub?.cancel();
+          if (mounted) {
+            setState(() => _mode = _DialogMode.input);
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('Error: $msg'),
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ));
+          }
+        }
+      },
+      onError: (e) {
+        if (mounted) {
+          setState(() => _mode = _DialogMode.input);
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ));
+        }
+      },
+      onDone: () async => finishDownload(),
+    );
   }
 
-  Future<void> _startStream(String url, {String? title, String? artist}) async {
+  Future<void> _startStream(String url,
+      {String? title, String? artist}) async {
     final targetTitle = title ?? 'Streaming Track';
     final targetArtist = artist ?? 'YouTube';
-
     await MetadataCacheService.set(url, targetTitle, targetArtist);
-
     final playlistContent = await FileService().readTextFromFile();
     final updatedContent = '${playlistContent.trim()}\n$url\n';
     await FileService().writeTextToFile(updatedContent, append: false);
-
     widget.onFileAdded?.call(url);
-
     if (mounted) {
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Row(
-            children: [
-              Icon(Icons.sensors_rounded, color: Colors.greenAccent),
-              SizedBox(width: 8),
-              Text(
-                'Stream URL Added to Playlist!',
-                style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
-              ),
-            ],
-          ),
-          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Row(children: [
+          Icon(Icons.sensors_rounded, color: Colors.greenAccent),
+          SizedBox(width: 8),
+          Text('Stream URL Added to Playlist!',
+              style: TextStyle(
+                  color: Colors.greenAccent, fontWeight: FontWeight.w500)),
+        ]),
+        backgroundColor:
+            Theme.of(context).colorScheme.surfaceContainerHigh,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+      ));
     }
   }
 
@@ -297,16 +249,14 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
       _mode = _DialogMode.searching;
       _statusMessage = 'Extracting Video Info...';
     });
-
     try {
       const channel = MethodChannel('resonance/android_youtube');
-      final raw = await channel.invokeMethod<String>('getMetadata', {'url': url});
+      final raw =
+          await channel.invokeMethod<String>('getMetadata', {'url': url});
       final data = jsonDecode(raw ?? '{}') as Map<String, dynamic>;
-      await _startStream(
-        url,
-        title: data['title'] as String?,
-        artist: data['artist'] as String?,
-      );
+      await _startStream(url,
+          title: data['title'] as String?,
+          artist: data['artist'] as String?);
     } catch (_) {
       await _startStream(url);
     }
@@ -315,69 +265,70 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
   Future<void> _runSearch() async {
     final query = _searchController.text.trim();
     if (query.isEmpty) return;
-
     setState(() {
       _mode = _DialogMode.searching;
       _searchResults = [];
     });
-
     try {
       final results = await _downloader.search(query);
-      if (mounted) {
-        setState(() {
-          _searchResults = results;
-          _mode = _DialogMode.results;
-        });
-      }
+      if (mounted) setState(() {
+        _searchResults = results;
+        _mode = _DialogMode.results;
+      });
     } catch (e) {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Search failed: $e'), backgroundColor: Theme.of(context).colorScheme.error),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Search failed: $e'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ));
       }
     }
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // FIX: constrain width to screen width so nothing overflows on phones
+    final maxW =
+        (MediaQuery.of(context).size.width - 32).clamp(0.0, 480.0);
+
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: AnimatedSize(
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
-        child: Container(
-          width: 480,
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.video_library_rounded, color: theme.colorScheme.primary, size: 28),
-                  const SizedBox(width: 12),
+        child: SizedBox(
+          width: maxW,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(Icons.video_library_rounded,
+                      color: theme.colorScheme.primary, size: 24),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       'YouTube · Stream or Download',
-                      style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.bold),
                       maxLines: 2,
-                      softWrap: true,
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              switch (_mode) {
-                _DialogMode.input => _buildInputBody(theme),
-                _DialogMode.searching => _buildSearchingBody(theme),
-                _DialogMode.results => _buildResultsBody(theme),
-                _DialogMode.downloading => _buildDownloadingBody(theme),
-              },
-            ],
+                ]),
+                const SizedBox(height: 16),
+                switch (_mode) {
+                  _DialogMode.input => _buildInputBody(theme),
+                  _DialogMode.searching => _buildSearchingBody(theme),
+                  _DialogMode.results => _buildResultsBody(theme),
+                  _DialogMode.downloading => _buildDownloadingBody(theme),
+                },
+              ],
+            ),
           ),
         ),
       ),
@@ -390,43 +341,59 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
       children: [
         SegmentedButton<bool>(
           segments: const [
-            ButtonSegment(value: true, label: Text('URL'), icon: Icon(Icons.link_rounded)),
-            ButtonSegment(value: false, label: Text('Search'), icon: Icon(Icons.search_rounded)),
+            ButtonSegment(
+                value: true,
+                label: Text('URL'),
+                icon: Icon(Icons.link_rounded)),
+            ButtonSegment(
+                value: false,
+                label: Text('Search'),
+                icon: Icon(Icons.search_rounded)),
           ],
           selected: {_isUrlMode},
-          onSelectionChanged: (s) => setState(() => _isUrlMode = s.first),
-          style: const ButtonStyle(tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          onSelectionChanged: (s) =>
+              setState(() => _isUrlMode = s.first),
+          style: const ButtonStyle(
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
         if (_isUrlMode) ...[
           TextField(
             controller: _urlController,
             decoration: InputDecoration(
-              labelText: 'Video, Track, or Playlist URL',
-              hintText: 'https://music.youtube.com/...',
+              labelText: 'Video / Playlist URL',
+              hintText: 'https://youtu.be/...',
               prefixIcon: const Icon(Icons.link_rounded),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10)),
               filled: true,
             ),
             onSubmitted: (_) {
-              if (_urlController.text.trim().isNotEmpty) {
-                _startDownload(_urlController.text.trim());
-              }
+              final url = _urlController.text.trim();
+              if (url.isNotEmpty) _startDownload(url);
             },
           ),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          const SizedBox(height: 16),
+          // Stack buttons vertically on narrow screens
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-              const SizedBox(width: 8),
-              // ── Stream button ──────────────────────────────────────
+              TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel')),
               OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  side: BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6)),
-                  foregroundColor: Theme.of(context).colorScheme.primary,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  side: BorderSide(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.6)),
+                  foregroundColor:
+                      Theme.of(context).colorScheme.primary,
                 ),
                 onPressed: () {
                   final url = _urlController.text.trim();
@@ -435,12 +402,10 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                 icon: const Icon(Icons.sensors_rounded, size: 18),
                 label: const Text('Stream'),
               ),
-              const SizedBox(width: 8),
-              // ── Download button ────────────────────────────────────
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
                 ),
                 onPressed: () {
                   final url = _urlController.text.trim();
@@ -456,30 +421,30 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             controller: _searchController,
             decoration: InputDecoration(
               labelText: 'Search YouTube',
-              hintText: 'Artist, song name, album...',
+              hintText: 'Artist, song name...',
               prefixIcon: const Icon(Icons.search_rounded),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10)),
               filled: true,
             ),
             onSubmitted: (_) => _runSearch(),
           ),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                onPressed: _runSearch,
-                icon: const Icon(Icons.search_rounded, size: 18),
-                label: const Text('Search'),
+          const SizedBox(height: 16),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel')),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
-            ],
-          ),
+              onPressed: _runSearch,
+              icon: const Icon(Icons.search_rounded, size: 18),
+              label: const Text('Search'),
+            ),
+          ]),
         ],
       ],
     );
@@ -489,14 +454,17 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 24),
       child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 16),
-            Text('Searching for "${_searchController.text}"...', style: theme.textTheme.bodyMedium),
-          ],
-        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 16),
+          Text(
+            _isUrlMode
+                ? 'Extracting info...'
+                : 'Searching for "${_searchController.text}"...',
+            style: theme.textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+          ),
+        ]),
       ),
     );
   }
@@ -506,23 +474,21 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => setState(() => _mode = _DialogMode.input),
-              tooltip: 'Back',
+        Row(children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => setState(() => _mode = _DialogMode.input),
+          ),
+          Expanded(
+            child: Text(
+              'Results for "${_searchController.text}"',
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w500),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            Expanded(
-              child: Text(
-                'Results for "${_searchController.text}"',
-                style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
+          ),
+        ]),
         const SizedBox(height: 8),
         if (_searchResults.isEmpty)
           const Padding(
@@ -538,49 +504,57 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             itemBuilder: (context, i) {
               final result = _searchResults[i];
               return ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                 leading: CircleAvatar(
                   backgroundColor: theme.colorScheme.primaryContainer,
-                  child: Text(
-                    '${i + 1}',
-                    style: TextStyle(color: theme.colorScheme.onPrimaryContainer, fontWeight: FontWeight.bold),
-                  ),
+                  child: Text('${i + 1}',
+                      style: TextStyle(
+                          color: theme.colorScheme.onPrimaryContainer,
+                          fontWeight: FontWeight.bold)),
                 ),
-                title: Text(
-                  result.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                ),
+                title: Text(result.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w500)),
                 subtitle: Text(
-                  [result.uploader, if (result.formattedDuration.isNotEmpty) result.formattedDuration].join(' · '),
-                  style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant),
+                  [
+                    result.uploader,
+                    if (result.formattedDuration.isNotEmpty)
+                      result.formattedDuration
+                  ].join(' · '),
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: theme.colorScheme.onSurfaceVariant),
                 ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // ── Stream button ──────────────────────────────────
-                    IconButton(
-                      icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary),
-                      tooltip: 'Stream Now',
-                      onPressed: () => _startStream(result.url, title: result.title, artist: result.uploader),
-                    ),
-                    // ── Download button ────────────────────────────────
-                    IconButton(
-                      icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary),
-                      tooltip: 'Download',
-                      onPressed: () => _startDownload(result.url),
-                    ),
-                  ],
-                ),
-                onTap: () => _startStream(result.url, title: result.title, artist: result.uploader),
+                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  IconButton(
+                    icon: Icon(Icons.sensors_rounded,
+                        color: theme.colorScheme.primary),
+                    tooltip: 'Stream',
+                    onPressed: () => _startStream(result.url,
+                        title: result.title,
+                        artist: result.uploader),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.download_rounded,
+                        color: theme.colorScheme.primary),
+                    tooltip: 'Download',
+                    onPressed: () => _startDownload(result.url),
+                  ),
+                ]),
+                onTap: () => _startStream(result.url,
+                    title: result.title, artist: result.uploader),
               );
             },
           ),
         const SizedBox(height: 8),
         Align(
           alignment: Alignment.centerRight,
-          child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          child: TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
         ),
       ],
     );
@@ -593,14 +567,17 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(_statusMessage, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500)),
+          Text(_statusMessage,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w500)),
           const SizedBox(height: 12),
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: LinearProgressIndicator(
               value: _downloadPercentage / 100.0,
               minHeight: 10,
-              backgroundColor: theme.colorScheme.surfaceContainerHighest,
+              backgroundColor:
+                  theme.colorScheme.surfaceContainerHighest,
             ),
           ),
           const SizedBox(height: 8),
@@ -608,7 +585,8 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             alignment: Alignment.centerRight,
             child: Text(
               '${_downloadPercentage.toStringAsFixed(1)}%',
-              style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(fontWeight: FontWeight.bold),
             ),
           ),
         ],

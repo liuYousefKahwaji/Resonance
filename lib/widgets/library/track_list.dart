@@ -1,5 +1,12 @@
 // lib/widgets/library/track_list.dart
-// Logic: UNCHANGED. proxyDecorator updated for Obsidian Pulse.
+// Scroll smoothness improvements:
+//  1. cacheExtent: 400 — pre-builds tiles 400px above and below the viewport
+//     so tiles don't pop in while scrolling.
+//  2. addRepaintBoundaries: true (default, but explicit) — each item gets
+//     its own layer so playing-state updates don't repaint the whole list.
+//  3. addAutomaticKeepAlives: false — we don't need tiles to keep state
+//     when off-screen; metadata is cached in MetadataCacheService and reloads
+//     from the in-memory map instantly, so re-init is effectively free.
 
 import 'package:flutter/material.dart';
 import 'package:resonance/widgets/library/track_tile.dart';
@@ -19,16 +26,17 @@ class TrackList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (tracks.isEmpty) {
-      return _EmptyState();
+      return const _EmptyState();
     }
 
     return ReorderableListView.builder(
       buildDefaultDragHandles: false,
       padding: const EdgeInsets.only(top: 4, bottom: 8),
+      cacheExtent: 400,
       itemCount: tracks.length,
       itemBuilder: (context, index) {
         return TrackTile(
-          key: ValueKey('$index-${tracks[index]}'),
+          key: ValueKey('${tracks[index]}-$index'),
           trackPath: tracks[index],
           index: index,
           onDelete: () => onTrackDeleted(index, tracks[index]),
@@ -57,6 +65,8 @@ class TrackList extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;

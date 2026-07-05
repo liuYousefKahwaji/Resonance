@@ -38,9 +38,6 @@ class MainActivity : FlutterFragmentActivity() {
         val bridge = py.getModule("ytdlp_bridge")
 
         // ── EventChannel ─────────────────────────────────────────────────────
-        // activeSink is accessed via a lambda in KotlinEventSink so the sink
-        // captured at download() call time is always the most recently
-        // registered one — avoids race if Dart subscribes after invokeMethod.
         var activeSink: EventChannel.EventSink? = null
         val pendingEvents = mutableListOf<String>()
 
@@ -93,7 +90,7 @@ class MainActivity : FlutterFragmentActivity() {
 
                     // ── download ──────────────────────────────────────────────
                     "download" -> {
-                        val url       = call.argument<String>("url") ?: ""
+                        val url = call.argument<String>("url") ?: ""
                         val outputDir = call.argument<String>("outputDir")
                             ?: getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.absolutePath
                             ?: filesDir.absolutePath
@@ -103,10 +100,6 @@ class MainActivity : FlutterFragmentActivity() {
                         // Acknowledge immediately; progress comes via EventChannel.
                         result.success(null)
 
-                        // Use a lambda provider so KotlinEventSink always
-                        // references the CURRENT activeSink — even if Dart
-                        // subscribes to the EventChannel slightly after this
-                        // method call returns (common timing on first use).
                         val sinkProvider: () -> EventChannel.EventSink? = { activeSink }
 
                         CoroutineScope(Dispatchers.IO).launch {
@@ -129,6 +122,8 @@ class MainActivity : FlutterFragmentActivity() {
                                 }
                             }
                         }
+                    }
+
                     // ── getStreamUrl ──────────────────────────────────────────
                     "getStreamUrl" -> {
                         val url = call.argument<String>("url") ?: ""
@@ -154,11 +149,6 @@ class MainActivity : FlutterFragmentActivity() {
  * Passed to Python as `event_sink`. Chaquopy transparently proxies method
  * calls on Kotlin objects from Python, so `event_sink.success(msg)` in
  * Python calls this Kotlin method directly.
- *
- * Uses a lambda provider instead of a direct reference so the current
- * activeSink is always resolved at the time of the call — this avoids the
- * race condition where the download coroutine starts before Dart's
- * receiveBroadcastStream() triggers onListen and sets activeSink.
  */
 class KotlinEventSink(
     private val sinkProvider: () -> EventChannel.EventSink?,

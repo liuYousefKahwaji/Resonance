@@ -1,189 +1,231 @@
-"""
-ytdlp_bridge.py
----------------
-Called from Kotlin via Chaquopy. All functions return plain Python
-dicts/lists which Chaquopy auto-converts to Java/Kotlin types.
-
-Progress is reported by calling back into Kotlin via the `event_sink`
-object passed in — Chaquopy lets Python call Kotlin objects directly.
-
-Android-specific: FFmpeg is NOT available, so we download natively
-(m4a/webm/opus). No postprocessors are used. just_audio handles m4a
-and webm/opus fine on Android without conversion.
-"""
+# android/app/src/main/python/ytdlp_bridge.py
+#
+# Chaquopy Python bridge for yt-dlp on Android.
+#
+# get_stream_url() fix:
+#   Previously returned a raw CDN chunk URL. Raw CDN URLs for YouTube
+#   typically require cookies/headers and don't support HTTP range requests
+#   the way just_audio expects for seeking. The fix is to return an HLS
+#   (.m3u8) manifest URL instead, which just_audio (via ExoPlayer on Android)
+#   handles natively with full seek support.
+#   Format selector: "hls/bestaudio[ext=m4a]/bestaudio/best"
+#   - hls: prefers HLS manifest (ExoPlayer handles seeking transparently)
+#   - bestaudio[ext=m4a]: direct m4a CDN fallback (single stream, seekable)
+#   - bestaudio/best: last resort
 
 import json
-import os
-from urllib.parse import quote
 import yt_dlp
 
 
+# ── Shared yt-dlp options ──────────────────────────────────────────────────────
+
+_BASE_OPTS = {
+    "quiet": True,
+    "no_warnings": True,
+    "extractor_retries": 3,
+    "socket_timeout": 20,
+}
+
+
+def _make_ydl(extra=None):
+    opts = dict(_BASE_OPTS)
+    if extra:
+        opts.update(extra)
+    return yt_dlp.YoutubeDL(opts)
+
+
+# ── search ─────────────────────────────────────────────────────────────────────
+
 def search(query: str) -> str:
-    """
-    Search YouTube for `query`, return up to 5 results as a JSON string.
-    JSON avoids fragile PyObject dict conversion on the Kotlin side.
-    """
-    results = []
-
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": "in_playlist",
+    """Return JSON array of up to 5 search results."""
+    opts = {
+        **_BASE_OPTS,
+        "extract_flat": True,
         "skip_download": True,
-        "default_search": "ytsearch",
     }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    with _make_ydl(opts) as ydl:
         info = ydl.extract_info(f"ytsearch5:{query}", download=False)
-        if info and "entries" in info:
-            for entry in info["entries"]:
-                if entry is None:
-                    continue
-                # duration may be None for some entries — keep it as None,
-                # Kotlin handles None → null via Integer boxing.
-                duration = entry.get("duration")
-                video_id = entry.get("id") or entry.get("url") or ""
-                webpage_url = entry.get("webpage_url")
-                if not webpage_url and video_id and not str(video_id).startswith("http"):
-                    webpage_url = f"https://www.youtube.com/watch?v={video_id}"
 
-                results.append({
-                    "title":            entry.get("title") or "Unknown",
-                    "uploader":         entry.get("uploader") or entry.get("channel") or "Unknown",
-                    "url":              webpage_url or entry.get("url") or "",
-                    "duration_seconds": int(duration) if duration is not None else None,
-                })
+    results = []
+    for entry in (info.get("entries") or []):
+        title = entry.get("title") or "Unknown"
+        uploader = (
+            entry.get("uploader")
+            or entry.get("channel")
+            or entry.get("uploader_id")
+            or "Unknown"
+        )
+        url = entry.get("webpage_url") or entry.get("url") or ""
+        duration = entry.get("duration")
+        results.append({
+            "title": title,
+            "uploader": uploader,
+            "url": url,
+            "duration_seconds": int(duration) if duration else None,
+        })
 
-    return json.dumps(results)
+    return json.dumps(results, ensure_ascii=False)
 
+
+# ── get_metadata ───────────────────────────────────────────────────────────────
+
+def get_metadata(url: str) -> str:
+    """Return JSON object with title and artist for a single video."""
+    opts = {
+        **_BASE_OPTS,
+        "skip_download": True,
+        "extract_flat": False,
+    }
+    with _make_ydl(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    title = info.get("title") or "Streaming Track"
+    artist = (
+        info.get("uploader")
+        or info.get("channel")
+        or info.get("uploader_id")
+        or "YouTube"
+    )
+    return json.dumps({"title": title, "artist": artist}, ensure_ascii=False)
+
+
+# ── get_stream_url ─────────────────────────────────────────────────────────────
+
+def get_stream_url(url: str) -> str:
+    """
+    Return a URL that just_audio (ExoPlayer) can play and seek through.
+
+    Priority:
+      1. HLS manifest (.m3u8) — ExoPlayer handles seeking natively via
+         the manifest's segment list. Best option for long tracks / podcasts.
+      2. Direct m4a CDN URL — single-stream, supports HTTP range requests
+         so ExoPlayer can seek by byte offset.
+      3. Any bestaudio/best — last resort.
+
+    We request the URL only (no download) using yt-dlp's get_url option.
+    """
+    # Try HLS first
+    for fmt in [
+        "hls/bestaudio[ext=m4a]/bestaudio/best",
+        "bestaudio[ext=m4a]/bestaudio/best",
+    ]:
+        opts = {
+            **_BASE_OPTS,
+            "skip_download": True,
+            "format": fmt,
+            "get_url": True,          # print URL only, very fast
+            "no_playlist": True,
+        }
+        try:
+            with _make_ydl(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+            # When get_url=True, the url is in info["url"] or the first format
+            stream_url = None
+            if isinstance(info, dict):
+                stream_url = info.get("url")
+                if not stream_url:
+                    fmts = info.get("formats") or []
+                    if fmts:
+                        stream_url = fmts[-1].get("url")
+
+            if stream_url:
+                return stream_url
+        except Exception:
+            continue
+
+    raise RuntimeError(f"Could not resolve stream URL for: {url}")
+
+
+# ── download ───────────────────────────────────────────────────────────────────
 
 def download(url: str, output_dir: str, event_sink) -> None:
     """
-    Download audio for `url` to `output_dir`.
+    Download audio to output_dir, reporting progress via event_sink.
 
-    NO ffmpeg/ffprobe required — downloads best native audio (m4a preferred,
-    falls back to webm/opus). just_audio on Android plays all these natively.
-
-    Reports progress via event_sink.success(str):
-      "progress:<percent>:<message>"   – 0.0–100.0
-      "track:<filepath>"               – one per downloaded track
+    event_sink.success(msg) is called with:
+      "progress:<percent>:<message>"
+      "track:<filepath>|<title_encoded>|<artist_encoded>"
       "done"
       "error:<message>"
     """
+    import os
+    from urllib.parse import quote
+
+    output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
 
     current_item = [1]
-    total_items  = [1]
-    processed    = set()
+    total_items = [1]
 
     def progress_hook(d):
         status = d.get("status")
         if status == "downloading":
-            # ── Try percentage first ────────────────────────────────────────
-            pct = None
-            pct_str = d.get("_percent_str", "").strip().rstrip("%")
+            pct_str = d.get("_percent_str", "0%").strip().replace("%", "")
             try:
                 pct = float(pct_str)
-            except (ValueError, TypeError):
-                pass
-
-            # ── Fragment-based fallback (HLS / DASH / YouTube adaptive) ────
-            # YouTube almost always uses fragmented delivery, where
-            # _percent_str is "0.0%" throughout because total bytes are
-            # unknown. Fragment index gives reliable progress instead.
-            if pct is None or pct == 0.0:
-                frag_index = d.get("fragment_index")
-                frag_count = d.get("fragment_count")
-                if frag_index and frag_count and frag_count > 0:
-                    pct = (frag_index / frag_count) * 100.0
-                else:
-                    # Last resort: bytes ratio
-                    downloaded = d.get("downloaded_bytes") or 0
-                    total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                    pct = (downloaded / total * 100.0) if total > 0 else 0.0
-
-            prefix = f"({current_item[0]}/{total_items[0]}) " if total_items[0] > 1 else ""
-            event_sink.success(f"progress:{pct:.1f}:{prefix}Downloading... {pct:.1f}%")
-
+            except ValueError:
+                pct = 0.0
+            prefix = (
+                f"({current_item[0]}/{total_items[0]}) "
+                if total_items[0] > 1
+                else ""
+            )
+            msg = f"progress:{pct:.1f}:{prefix}Downloading... {pct:.1f}%"
+            event_sink.success(msg)
         elif status == "finished":
-            prefix = f"({current_item[0]}/{total_items[0]}) " if total_items[0] > 1 else ""
-            event_sink.success(f"progress:99.0:{prefix}Finalizing...")
+            prefix = (
+                f"({current_item[0]}/{total_items[0]}) "
+                if total_items[0] > 1
+                else ""
+            )
+            event_sink.success(f"progress:99.0:{prefix}Processing audio...")
 
-    output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
+    def postprocessor_hook(d):
+        if d.get("status") == "finished":
+            filepath = d.get("info_dict", {}).get("filepath") or d.get("filepath", "")
+            if not filepath:
+                return
+            info = d.get("info_dict", {})
+            title = info.get("title") or ""
+            artist = (
+                info.get("uploader")
+                or info.get("channel")
+                or info.get("artist")
+                or ""
+            )
+            encoded = (
+                f"track:{filepath}"
+                f"|{quote(title, safe='')}"
+                f"|{quote(artist, safe='')}"
+            )
+            event_sink.success(encoded)
+            current_item[0] += 1
 
-    base_opts = {
+    opts = {
+        **_BASE_OPTS,
+        "format": "bestaudio/best",
         "outtmpl": output_template,
         "progress_hooks": [progress_hook],
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": False,
-        # Embed available metadata without ffmpeg (only works for some containers)
+        "postprocessor_hooks": [postprocessor_hook],
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            },
+            {"key": "EmbedThumbnail"},
+            {"key": "FFmpegMetadata"},
+        ],
         "writethumbnail": False,
-        "postprocessors": [],
+        "yes_playlist": True,
     }
 
-    attempts = [
-        {
-            **base_opts,
-            # Let yt-dlp choose. This avoids Android/Web client format bugs
-            # where even "best" is reported unavailable.
-        },
-        {
-            **base_opts,
-            "format": "bestaudio/best",
-            "extractor_args": {"youtube": {"player_client": ["ios"]}},
-        },
-        {
-            **base_opts,
-            "format": "bestaudio/best",
-            "extractor_args": {"youtube": {"player_client": ["android"]}},
-        },
-    ]
-
     try:
-        info = None
-        last_error = None
-        active_ydl = None
-
-        for ydl_opts in attempts:
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    active_ydl = ydl
-                    break
-            except Exception as e:
-                last_error = e
-
-        if info is None or active_ydl is None:
-            raise last_error or Exception("Download failed")
-
-        # Update playlist size from actual result
-        if info and info.get("_type") == "playlist":
-            entries = [e for e in (info.get("entries") or []) if e]
-            total_items[0] = len(entries)
-
-        def collect_paths(info_dict, item_index=1):
-            if info_dict is None:
-                return
-            if info_dict.get("_type") == "playlist":
-                for idx, entry in enumerate(info_dict.get("entries") or [], start=1):
-                    current_item[0] = idx
-                    collect_paths(entry, idx)
-            else:
-                filepath = None
-                requested = info_dict.get("requested_downloads") or []
-                if requested:
-                    filepath = requested[0].get("filepath")
-                if not filepath:
-                    filepath = active_ydl.prepare_filename(info_dict)
-                if filepath and filepath not in processed and os.path.exists(filepath):
-                    processed.add(filepath)
-                    title = quote(info_dict.get("title") or os.path.splitext(os.path.basename(filepath))[0], safe="")
-                    artist = quote(info_dict.get("artist") or info_dict.get("uploader") or info_dict.get("channel") or "", safe="")
-                    event_sink.success(f"track:{filepath}|{title}|{artist}")
-
-        collect_paths(info)
-
+        with _make_ydl(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            entries = info.get("entries") if info else None
+            if entries:
+                total_items[0] = len(list(entries))
         event_sink.success("done")
-
     except Exception as e:
-        event_sink.success(f"error:{str(e)}")
+        event_sink.success(f"error:{e}")
