@@ -1,9 +1,4 @@
 // lib/widgets/player/album_cover.dart
-// Added loading state display:
-//  - When AudioProcessingState is loading/buffering, show a small spinner
-//    next to the track title in the now-playing card.
-//  - Pulse animation pauses while loading (it would look odd to pulse while
-//    the track hasn't started yet).
 
 import 'dart:math' as math;
 
@@ -71,7 +66,6 @@ class _AlbumCoverState extends State<AlbumCover>
                 processingState == AudioProcessingState.loading ||
                     processingState == AudioProcessingState.buffering;
 
-            // Pause glow pulse while loading
             if (isLoading) {
               if (_pulseController.isAnimating) _pulseController.stop();
             } else if (isPlaying && !_pulseController.isAnimating) {
@@ -171,10 +165,14 @@ class _NowPlayingCard extends StatelessWidget {
             width: isActive ? 1.5 : 1),
       ),
       child: Row(
+        // Prevent the Row from overflowing — each child must be sized.
+        mainAxisSize: MainAxisSize.max,
         children: [
           _AlbumIcon(
               isPlaying: isPlaying, hasTrack: hasTrack, isLoading: isLoading),
           const SizedBox(width: 14),
+          // Expanded forces the text column to take remaining space and
+          // enables Text overflow / ellipsis to work correctly.
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -183,12 +181,14 @@ class _NowPlayingCard extends StatelessWidget {
                 Text(
                   title,
                   style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                      color: textPrimary,
-                      letterSpacing: -0.1),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                    color: textPrimary,
+                    letterSpacing: -0.1,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  softWrap: false,
                 ),
                 if (artist.isNotEmpty) ...[
                   const SizedBox(height: 3),
@@ -200,6 +200,7 @@ class _NowPlayingCard extends StatelessWidget {
                         fontWeight: FontWeight.w400),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                   ),
                 ],
               ],
@@ -313,7 +314,6 @@ class _AlbumIconState extends State<_AlbumIcon>
 
 class _WaveformIcon extends StatefulWidget {
   final Color color;
-
   const _WaveformIcon({super.key, required this.color});
 
   @override
@@ -322,17 +322,14 @@ class _WaveformIcon extends StatefulWidget {
 
 class _WaveformIconState extends State<_WaveformIcon> {
   final _random = math.Random();
-
   late final List<double> _heights;
   late final List<int> _durations;
 
   @override
   void initState() {
     super.initState();
-
     _heights = List.generate(4, (_) => _nextHeight());
     _durations = List.generate(4, (_) => _nextDuration());
-
     for (int i = 0; i < 4; i++) {
       _animateBar(i);
     }
@@ -381,8 +378,7 @@ class _LoadingBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final color =
-        isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8);
+    final color = isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -396,10 +392,7 @@ class _LoadingBadge extends StatelessWidget {
           SizedBox(
             width: 8,
             height: 8,
-            child: CircularProgressIndicator(
-              strokeWidth: 1.5,
-              color: color,
-            ),
+            child: CircularProgressIndicator(strokeWidth: 1.5, color: color),
           ),
           const SizedBox(width: 5),
           Text(

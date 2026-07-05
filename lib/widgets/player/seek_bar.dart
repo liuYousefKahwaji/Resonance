@@ -2,16 +2,17 @@
 //
 // Fixes:
 //  1. Duration format: H:MM:SS only when track >= 1 hour.
-//  2. Loading indicator: grey out + spinner while audio is buffering/loading.
+//  2. Loading indicator: only shown while audio is genuinely loading a new
+//     track (AudioProcessingState.loading). Buffering state (which fires
+//     during seeks on streamed tracks) shows a dimmed seek bar but NOT
+//     the spinner, so local-file seeks feel instant.
 //  3. Pending seek position: after the user releases the thumb the bar
-//     shows the chosen position immediately instead of snapping back to
-//     the pre-seek position while the player is still buffering.
-//     _pendingSeekPosition is held until the player's reported position
-//     "catches up" (within 2 s of the target), then cleared so normal
-//     tracking resumes. This makes stream-seeks feel responsive even
-//     though re-buffering takes a few seconds.
+//     shows the chosen position immediately instead of snapping back.
+//     _pendingSeekPosition is cleared as soon as the player's reported
+//     position catches up (within 1 s for local files, 3 s for streams).
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
@@ -31,10 +32,18 @@ class _SeekBarState extends State<SeekBar> {
   bool _isHovering = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
-  bool _isLoading = false;
+
+  // Only true while a brand-new track is loading (not during seeks).
+  bool _isLoadingNewTrack = false;
+
+  // True while the player is buffering (stream re-buffers after seek, etc.)
+  // Does NOT block interaction — the seek bar stays interactive.
+  bool _isBuffering = false;
+
+  // Whether the current track is a stream URL.
+  bool _currentTrackIsStream = false;
 
   // After a seek, hold the target position until the player catches up.
-  // This prevents the thumb from snapping back during stream re-buffering.
   Duration? _pendingSeekPosition;
 
   double _hoverX = 0.0;
@@ -53,18 +62,18 @@ class _SeekBarState extends State<SeekBar> {
     final handler = Provider.of<PlayerHandler>(context, listen: false);
 
     _positionSub = handler.positionStream.listen((position) {
-      if (!mounted) return;
-      if (_isScrubbing) return;
+      if (!mounted || _isScrubbing) return;
 
-      // If we have a pending seek, check whether the player has caught up.
-      // "Caught up" = reported position is within 2 s of the target.
       if (_pendingSeekPosition != null) {
+        // Catchup window: 1 s for local files, 3 s for streams.
+        final window = _currentTrackIsStream
+            ? const Duration(seconds: 3)
+            : const Duration(seconds: 1);
         final diff = (position - _pendingSeekPosition!).abs();
-        if (diff > const Duration(seconds: 2)) {
-          // Player hasn't arrived yet — keep showing the pending position.
+        if (diff > window) {
+          // Not caught up yet — keep showing pending position.
           return;
         }
-        // Player has caught up — resume normal tracking.
         _pendingSeekPosition = null;
       }
 
@@ -84,20 +93,30 @@ class _SeekBarState extends State<SeekBar> {
 
     _playbackSub = handler.playbackState.listen((state) {
       if (!mounted) return;
-      final loading =
-          state.processingState == AudioProcessingState.loading ||
-          state.processingState == AudioProcessingState.buffering;
 
-      // When a new track starts loading, clear any stale pending seek
-      // from the previous track.
+      // Determine if the current item is a stream.
+      final handler2 = Provider.of<PlayerHandler>(context, listen: false);
+      final currentId = handler2.mediaItem.value?.id ?? '';
+      _currentTrackIsStream =
+          currentId.startsWith('http://') || currentId.startsWith('https://');
+
+      final isLoading = state.processingState == AudioProcessingState.loading;
+      final isBuffering = state.processingState == AudioProcessingState.buffering;
       final isIdle = state.processingState == AudioProcessingState.idle;
 
       setState(() {
-        _isLoading = loading;
+        _isLoadingNewTrack = isLoading;
+        // Only show buffering indicator for streamed tracks.
+        _isBuffering = isBuffering && _currentTrackIsStream;
+
         if (isIdle) {
           _pendingSeekPosition = null;
           _position = Duration.zero;
           _sliderValue = 0.0;
+        }
+        // When a new track starts loading, clear stale pending seek.
+        if (isLoading) {
+          _pendingSeekPosition = null;
         }
       });
     });
@@ -120,7 +139,6 @@ class _SeekBarState extends State<SeekBar> {
     });
   }
 
-  /// Format duration — H:MM:SS only when track is >= 1 hour.
   String _formatDuration(Duration duration, {required bool showHours}) {
     if (showHours) {
       final h = duration.inHours;
@@ -134,8 +152,6 @@ class _SeekBarState extends State<SeekBar> {
     }
   }
 
-  // The position we actually display: pending seek target (if any),
-  // otherwise the live player position.
   Duration get _displayPosition => _pendingSeekPosition ?? _position;
 
   double get _displaySliderValue {
@@ -163,9 +179,15 @@ class _SeekBarState extends State<SeekBar> {
       color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
     );
 
-    // Dim the track while loading OR while waiting for a seek to settle.
-    final isWaiting = _isLoading || _pendingSeekPosition != null;
-    final activeTrackColor = isWaiting ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8)) : primary;
+    // Dim the track while loading a new track OR while a stream is buffering
+    // after a seek. Local-file seeks never dim the bar.
+    final isDimmed = _isLoadingNewTrack || _isBuffering;
+    final activeTrackColor = isDimmed
+        ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8))
+        : primary;
+
+    // Slider is disabled only while a NEW track is loading (not during seeks).
+    final sliderDisabled = _isLoadingNewTrack;
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -173,8 +195,8 @@ class _SeekBarState extends State<SeekBar> {
         Text(_formatDuration(_displayPosition, showHours: showHours), style: timestampStyle),
         const SizedBox(width: 8),
 
-        // Spinner shown while loading OR re-buffering after a seek
-        if (isWaiting)
+        // Spinner: only shown while a genuinely new track is loading.
+        if (_isLoadingNewTrack)
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: SizedBox(
@@ -206,26 +228,26 @@ class _SeekBarState extends State<SeekBar> {
                         showValueIndicator: ShowValueIndicator.never,
                         activeTrackColor: activeTrackColor,
                         inactiveTrackColor: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3),
-                        thumbColor: isWaiting ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8)) : primary,
+                        thumbColor: isDimmed
+                            ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8))
+                            : primary,
                         tickMarkShape: SliderTickMarkShape.noTickMark,
                         trackHeight: _isHovering ? 4.0 : 3.0,
                         thumbShape: RoundSliderThumbShape(
-                          enabledThumbRadius: _isHovering && !isWaiting ? 6.0 : 0.0,
+                          enabledThumbRadius: (_isHovering && !sliderDisabled) ? 6.0 : 0.0,
                           elevation: 2,
                         ),
                         overlayShape: const RoundSliderOverlayShape(overlayRadius: 12.0),
                         overlayColor: primary.withValues(alpha: 0.15),
                       ),
                       child: Slider(
-                        value: _isScrubbing ? _sliderValue.clamp(0.0, 1.0) : _displaySliderValue,
+                        value: _isScrubbing
+                            ? _sliderValue.clamp(0.0, 1.0)
+                            : _displaySliderValue,
                         min: 0,
                         max: 1,
                         divisions: null,
-                        // Disable interaction while initially loading a new
-                        // track, but ALLOW it during post-seek buffering so
-                        // users can re-seek without waiting for re-buffering
-                        // to complete first.
-                        onChanged: _isLoading && _pendingSeekPosition == null
+                        onChanged: sliderDisabled
                             ? null
                             : (value) {
                                 setState(() {
@@ -234,12 +256,10 @@ class _SeekBarState extends State<SeekBar> {
                                 });
                                 _updateHoverPosition(value * maxWidth, maxWidth);
                               },
-                        onChangeEnd: _isLoading && _pendingSeekPosition == null
+                        onChangeEnd: sliderDisabled
                             ? null
                             : (value) {
                                 final newPosition = _duration * value;
-                                // Record as pending immediately so the
-                                // thumb doesn't snap back.
                                 setState(() {
                                   _pendingSeekPosition = newPosition;
                                   _isScrubbing = false;
@@ -257,7 +277,7 @@ class _SeekBarState extends State<SeekBar> {
                       top: -34,
                       child: AnimatedOpacity(
                         duration: const Duration(milliseconds: 150),
-                        opacity: (_isHovering || _isScrubbing) && !_isLoading ? 1.0 : 0.0,
+                        opacity: (_isHovering || _isScrubbing) && !_isLoadingNewTrack ? 1.0 : 0.0,
                         child: IgnorePointer(
                           child: Container(
                             width: 56,

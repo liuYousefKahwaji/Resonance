@@ -24,12 +24,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   double savedVolume = 1.0;
 
-  // volumeNotifier stores the UI value in [0.0, 2.0].
-  // Actual just_audio volume is always clamped to [0.0, 1.0].
-  // Values above 1.0 are implemented via Android's LoudnessEnhancer
-  // (on Android) or a software gain chain (future work on Windows).
-  // On Windows, values >1.0 are silently clamped to 1.0 for now
-  // because WASAPI does not support gain above unity via just_audio.
   final ValueNotifier<double> volumeNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<double> speedNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<double> pitchNotifier = ValueNotifier<double>(1.0);
@@ -39,8 +33,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   int _loadGeneration = 0;
 
+  // Tracks whether the current track is a stream (URL), for seek behaviour.
+  bool _currentTrackIsStream = false;
+
   // Session-scoped cache: YouTube URL → resolved CDN/HLS URL.
-  // CDN URLs typically expire after ~6 hours so we invalidate on error.
   final Map<String, String> _streamUrlCache = {};
   final _windowsStreamProxy = _WindowsStreamProxy();
   bool _windowsIsBuffering = false;
@@ -74,18 +70,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         _updatePlaybackState();
       });
       player.stream.completed.listen((completed) async {
+        if (!completed) return;
         _windowsIsCompleted = completed;
         _updatePlaybackState();
-        if (completed) {
-          final genAtCompletion = _loadGeneration;
-          if (currentLoopMode == LoopMode.one) {
-            await player.seek(Duration.zero);
-            await player.play();
-          } else if (currentLoopMode == LoopMode.all && _loadGeneration == genAtCompletion) {
-            await next();
-            await player.pause();
-            await player.play();
-          }
+        final genAtCompletion = _loadGeneration;
+        if (currentLoopMode == LoopMode.one) {
+          await player.seek(Duration.zero);
+          await player.play();
+        } else if (currentLoopMode == LoopMode.all && _loadGeneration == genAtCompletion) {
+          await next();
         }
       });
       player.stream.rate.listen((s) => speedNotifier.value = s);
@@ -143,29 +136,19 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   @override
-  Future<void> fastForward() async {
-    await super.fastForward();
-  }
+  Future<void> fastForward() async => super.fastForward();
 
   @override
-  Future<void> rewind() async {
-    await super.rewind();
-  }
+  Future<void> rewind() async => super.rewind();
 
   @override
-  Future<void> seekForward(bool begin) async {
-    await super.seekForward(begin);
-  }
+  Future<void> seekForward(bool begin) async => super.seekForward(begin);
 
   @override
-  Future<void> seekBackward(bool begin) async {
-    await super.seekBackward(begin);
-  }
+  Future<void> seekBackward(bool begin) async => super.seekBackward(begin);
 
   @override
-  Future<void> stop() async {
-    await super.stop();
-  }
+  Future<void> stop() async => super.stop();
 
   // ─── Unicode path workaround ──────────────────────────────────────
   Future<String> _resolvePlayablePath(String filePath) async {
@@ -188,10 +171,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   // ─── Stream URL resolution ────────────────────────────────────────
-  // Resolves a YouTube page URL to a direct CDN/HLS audio URL.
-  // The result is cached for the session. On error the cache entry is
-  // invalidated so the next attempt re-resolves rather than reusing a
-  // stale/expired URL.
   Future<String> _resolveStreamUrl(String url) async {
     if (_streamUrlCache.containsKey(url)) {
       debugPrint('[PlayerHandler] Stream URL cache hit for $url');
@@ -244,17 +223,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     return resolved;
   }
 
-  // Build the right AudioSource for a URL.
-  // Streams use the resolved CDN/HLS URL directly. LockCachingAudioSource is
-  // intentionally avoided here because it must cache bytes before a seek point,
-  // which makes long podcasts and deep seeks painfully slow.
   Future<AudioSource> _buildAudioSource(String filePath) async {
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
-
     if (isStream) {
       final resolvedUrl = await _resolveStreamUrl(filePath);
-      final uri = Uri.parse(resolvedUrl);
-      return AudioSource.uri(uri);
+      return AudioSource.uri(Uri.parse(resolvedUrl));
     } else {
       final playablePath = await _resolvePlayablePath(filePath);
       return AudioSource.uri(Uri.file(playablePath));
@@ -272,11 +245,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   bool get _isWindowsPlaying => _windowsPlayer?.state.playing ?? false;
 
-  Stream<bool> get _playingStream => Platform.isWindows ? _windowsPlayer!.stream.playing : _player.playingStream;
+  Stream<bool> get _playingStream =>
+      Platform.isWindows ? _windowsPlayer!.stream.playing : _player.playingStream;
 
-  Duration get _currentPosition => Platform.isWindows ? _windowsPosition : _player.position;
+  Duration get _currentPosition =>
+      Platform.isWindows ? _windowsPosition : _player.position;
 
-  Duration? get _currentDuration => Platform.isWindows ? _windowsDuration : _player.duration;
+  Duration? get _currentDuration =>
+      Platform.isWindows ? _windowsDuration : _player.duration;
 
   void _updatePlaybackState() {
     if (Platform.isWindows) {
@@ -301,8 +277,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           processingState: _windowsIsCompleted
               ? AudioProcessingState.completed
               : _windowsIsBuffering
-              ? AudioProcessingState.buffering
-              : AudioProcessingState.ready,
+                  ? AudioProcessingState.buffering
+                  : AudioProcessingState.ready,
           playing: playing,
           updatePosition: _windowsPosition,
           bufferedPosition: _windowsBufferedPosition,
@@ -380,7 +356,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     try {
       final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
       if (isStream) {
-        // Don't auto-resolve streams on startup — just show the track in UI.
         mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
         _updatePlaybackState();
         return;
@@ -445,27 +420,40 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> seek(Duration position) async {
-    playbackState.add(
-      playbackState.value.copyWith(
-        processingState: AudioProcessingState.buffering,
-        playing: false,
-        updatePosition: position,
-      ),
-    );
-    final wasPlaying = Platform.isWindows ? _isWindowsPlaying : _player.playing;
-    if (wasPlaying) {
-      await pause();
-    }
     if (Platform.isWindows) {
+      // For local files on Windows: seek directly without pause/play cycle.
+      // media_kit handles buffering internally; forcing pause/play causes
+      // the play button to get stuck in the wrong state.
+      if (!_currentTrackIsStream) {
+        _windowsPosition = position;
+        await _windowsPlayer!.seek(position);
+        _updatePlaybackState();
+        return;
+      }
+
+      // For streams: signal buffering, seek, then restore play state.
+      final wasPlaying = _isWindowsPlaying;
       _windowsIsBuffering = true;
       _windowsPosition = position;
+      _updatePlaybackState();
       await _windowsPlayer!.seek(position);
-    } else {
-      await _player.seek(position);
+      if (wasPlaying) await _windowsPlayer!.play();
+      _updatePlaybackState();
+      return;
     }
-    if (wasPlaying) {
-      await play();
+
+    // Android / other: just_audio handles seek internally for local files.
+    // Only show a buffering state for streamed tracks.
+    if (_currentTrackIsStream) {
+      playbackState.add(
+        playbackState.value.copyWith(
+          processingState: AudioProcessingState.buffering,
+          playing: _player.playing,
+          updatePosition: position,
+        ),
+      );
     }
+    await _player.seek(position);
     _updatePlaybackState();
   }
 
@@ -506,16 +494,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   // ─── loadTrack ────────────────────────────────────────────────────
-  // Optimistic update: mediaItem shifts immediately so the UI reflects
-  // the new track while the audio source is being resolved.
-  // Serial guard (_loadGeneration): if the user taps another track
-  // before this one finishes loading, the stale load aborts cleanly.
   Future<void> loadTrack(String filePath, String title, String artist) async {
     final myGen = ++_loadGeneration;
+    final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
+
+    _currentTrackIsStream = isStream;
 
     // Optimistic UI update
     mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
-    playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.loading, playing: false));
+    playbackState.add(playbackState.value.copyWith(
+      processingState: AudioProcessingState.loading,
+      playing: false,
+    ));
 
     try {
       if (Platform.isWindows) {
@@ -537,19 +527,30 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           if (_loadGeneration != myGen) return;
           debugPrint('[PlayerHandler] Failed to build media_kit URI for "$filePath": $e');
           _streamUrlCache.remove(filePath);
-          playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
+          playbackState.add(playbackState.value.copyWith(
+            processingState: AudioProcessingState.idle,
+            playing: false,
+          ));
           return;
         }
 
         if (_loadGeneration != myGen) return;
-        _windowsIsBuffering = true;
+
+        _windowsIsBuffering = false;
         _windowsIsCompleted = false;
         _windowsPosition = Duration.zero;
         _windowsDuration = Duration.zero;
         _windowsBufferedPosition = Duration.zero;
+
         final player = _windowsPlayer!;
-        await player.open(mk.Media(uri), play: false);
-        if (_loadGeneration != myGen) return;
+        // Open with play: true so it starts immediately.
+        // This avoids the race where play() is called before media_kit
+        // has finished its internal open sequence.
+        await player.open(mk.Media(uri), play: true);
+        if (_loadGeneration != myGen) {
+          await player.stop();
+          return;
+        }
         await player.setRate(savedSpeed);
         await player.setPitch(savedPitch);
         await player.setVolume(volumeNotifier.value * 100.0);
@@ -560,15 +561,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         } catch (e) {
           if (_loadGeneration != myGen) return;
           debugPrint('[PlayerHandler] Failed to build audio source for "$filePath": $e');
-          // Invalidate stream URL cache on resolution failure
           _streamUrlCache.remove(filePath);
-          // Signal error state to UI
-          playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
+          playbackState.add(playbackState.value.copyWith(
+            processingState: AudioProcessingState.idle,
+            playing: false,
+          ));
           return;
         }
 
         if (_loadGeneration != myGen) return;
-
         await _player.setAudioSource(source);
         if (_loadGeneration != myGen) return;
         await _player.setSpeed(savedSpeed);
@@ -577,31 +578,32 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
       if (_loadGeneration != myGen) return;
 
-      // Emit updated mediaItem with duration if already available
       final dur = _currentDuration;
       mediaItem.add(MediaItem(id: filePath, title: title, artist: artist, duration: dur));
 
-      await play();
+      // On non-Windows platforms, explicitly call play() since we didn't
+      // pass play: true to setAudioSource.
+      if (!Platform.isWindows) {
+        await play();
+      }
+
       _updatePlaybackState();
       await _saveTrack(filePath, title, artist);
       await DiscordPresenceService().updatePresence(title, artist);
     } catch (e, st) {
       if (_loadGeneration == myGen) {
         debugPrint('[PlayerHandler] Error loading track "$filePath": $e\n$st');
-        // Invalidate cached stream URL — it may have expired
         _streamUrlCache.remove(filePath);
-        playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
+        playbackState.add(playbackState.value.copyWith(
+          processingState: AudioProcessingState.idle,
+          playing: false,
+        ));
         _updatePlaybackState();
       }
     }
   }
 
   // ─── Volume ───────────────────────────────────────────────────────
-  // volumeNotifier holds the raw UI value [0.0, 2.0].
-  //
-  // For Android, values above 100% are implemented with just_audio's
-  // AndroidLoudnessEnhancer in the player's own audio pipeline.
-  // Windows uses media_kit/mpv, whose volume scale is 0..200+ percent.
   Future<void> changeVolume(double rawVolume) async {
     final clamped = rawVolume.clamp(0.0, 2.0);
     volumeNotifier.value = clamped;
@@ -627,11 +629,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   Future<void> incrementVolume() async => changeVolume(volumeNotifier.value + 0.05);
-
   Future<void> decrementVolume() async => changeVolume(volumeNotifier.value - 0.05);
-
   Future<void> incrementSpeed() async => setSpeed((speedNotifier.value + 0.1).clamp(0.5, 2.0));
-
   Future<void> decrementSpeed() async => setSpeed((speedNotifier.value - 0.1).clamp(0.5, 2.0));
 
   Future<void> toggleMute() async {
@@ -690,18 +689,31 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await loadTrack(playlist[prevIndex], meta.title, meta.artist);
   }
 
-  Future<bool> isPlaying() async => Platform.isWindows ? _isWindowsPlaying : _player.playing;
+  Future<bool> isPlaying() async =>
+      Platform.isWindows ? _isWindowsPlaying : _player.playing;
 
+  /// FIX: Use the correct player for the current platform.
   Future<void> playPause() async {
-    if (_player.playing) {
-      await pause();
+    if (Platform.isWindows) {
+      if (_isWindowsPlaying) {
+        await pause();
+      } else {
+        await play();
+      }
     } else {
-      await play();
+      if (_player.playing) {
+        await pause();
+      } else {
+        await play();
+      }
     }
   }
 
-  Stream<Duration> get positionStream => Platform.isWindows ? _windowsPlayer!.stream.position : _player.positionStream;
-  Stream<Duration?> get durationStream => Platform.isWindows ? _windowsPlayer!.stream.duration : _player.durationStream;
+  Stream<Duration> get positionStream =>
+      Platform.isWindows ? _windowsPlayer!.stream.position : _player.positionStream;
+
+  Stream<Duration?> get durationStream =>
+      Platform.isWindows ? _windowsPlayer!.stream.duration : _player.durationStream;
 
   Future<void> setQueue(List<MediaItem> tracks) async {
     await updateQueue(tracks);
@@ -715,13 +727,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     try {
       if (Platform.isWindows) {
         final uri = await _buildMediaKitUri(mediaItem.id);
-        await _windowsPlayer!.open(mk.Media(uri), play: false);
+        await _windowsPlayer!.open(mk.Media(uri), play: true);
       } else {
         final source = await _buildAudioSource(mediaItem.id);
         await _player.setAudioSource(source);
+        await play();
       }
       this.mediaItem.add(mediaItem);
-      await play();
       await _saveTrack(mediaItem.id, mediaItem.title, mediaItem.artist ?? 'Unknown Artist');
     } catch (e, st) {
       debugPrint('Error playing media item "${mediaItem.id}": $e\n$st');
@@ -811,7 +823,6 @@ class _WindowsStreamProxy {
   Future<HttpServer> _ensureServer() async {
     final existing = _server;
     if (existing != null) return existing;
-
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     _server = server;
     unawaited(server.listen(_handleRequest).asFuture<void>());
@@ -868,24 +879,18 @@ class _WindowsStreamProxy {
 
   String? _pickPlayableUrl(Map<String, dynamic> info) {
     final direct = info['url'] as String?;
-    if (direct != null && direct.startsWith('http')) {
-      return direct;
-    }
+    if (direct != null && direct.startsWith('http')) return direct;
 
     final requestedDownloads = info['requested_downloads'];
     if (requestedDownloads is List && requestedDownloads.isNotEmpty) {
       final first = requestedDownloads.first;
-      if (first is Map && first['url'] is String) {
-        return first['url'] as String;
-      }
+      if (first is Map && first['url'] is String) return first['url'] as String;
     }
 
     final requestedFormats = info['requested_formats'];
     if (requestedFormats is List && requestedFormats.isNotEmpty) {
       for (final format in requestedFormats.reversed) {
-        if (format is Map && format['url'] is String) {
-          return format['url'] as String;
-        }
+        if (format is Map && format['url'] is String) return format['url'] as String;
       }
     }
 
@@ -927,6 +932,5 @@ class _WindowsStreamProxy {
 class _WindowsStreamInfo {
   final String url;
   final Map<String, String> headers;
-
   const _WindowsStreamInfo({required this.url, required this.headers});
 }

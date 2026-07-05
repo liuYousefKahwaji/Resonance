@@ -32,6 +32,8 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
+//TODO: seek buttons
+//TODO: Intro
 //TODO: Taskbar buttons
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
