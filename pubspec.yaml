@@ -35,6 +35,8 @@ dependencies:
   metadata_god: ^1.1.0
   flutter_rust_bridge: 2.11.1
   ffmpeg_kit_audio_flutter: 1.1.0
+  media_kit: ^1.2.6
+  media_kit_libs_windows_audio: ^1.0.9
 
 dev_dependencies:
   flutter_test:

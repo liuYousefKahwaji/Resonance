@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:media_kit/media_kit.dart' as mk;
 import 'package:audio_service/audio_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:resonance/core/storage/file_service.dart';
@@ -17,7 +18,9 @@ import 'package:path/path.dart' as p;
 import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
 
 class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
-  final _player = AudioPlayer();
+  final _loudnessEnhancer = AndroidLoudnessEnhancer();
+  late final AudioPlayer _player = AudioPlayer(audioPipeline: AudioPipeline(androidAudioEffects: [_loudnessEnhancer]));
+  late final mk.Player? _windowsPlayer = Platform.isWindows ? mk.Player() : null;
 
   double savedVolume = 1.0;
 
@@ -39,46 +42,90 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   // Session-scoped cache: YouTube URL → resolved CDN/HLS URL.
   // CDN URLs typically expire after ~6 hours so we invalidate on error.
   final Map<String, String> _streamUrlCache = {};
-
-  // Android loudness enhancer channel for volume > 100%.
-  static const _loudnessChannel = MethodChannel('resonance/loudness_enhancer');
+  final _windowsStreamProxy = _WindowsStreamProxy();
+  bool _windowsIsBuffering = false;
+  bool _windowsIsCompleted = false;
+  Duration _windowsPosition = Duration.zero;
+  Duration _windowsDuration = Duration.zero;
+  Duration _windowsBufferedPosition = Duration.zero;
 
   PlayerHandler() {
-    _player.playbackEventStream.listen((_) => _updatePlaybackState());
-    _player.speedStream.listen((s) => speedNotifier.value = s);
-    _player.playingStream.listen((_) => _updatePlaybackState());
-
-    _player.durationStream.listen((duration) {
-      final currentItem = mediaItem.value;
-      if (currentItem != null && duration != null) {
-        mediaItem.add(currentItem.copyWith(duration: duration));
-      }
-      _updatePlaybackState();
-    });
-
-    _player.positionStream.listen((_) => _updatePlaybackState());
-
-    _player.processingStateStream.listen((state) async {
-      _updatePlaybackState();
-      if (state == ProcessingState.completed) {
-        final genAtCompletion = _loadGeneration;
-        if (currentLoopMode == LoopMode.one) {
-          await _player.seek(Duration.zero);
-          await _player.play();
-        } else if (currentLoopMode == LoopMode.all) {
-          if (_loadGeneration == genAtCompletion) {
+    if (Platform.isWindows) {
+      final player = _windowsPlayer!;
+      player.stream.playing.listen((_) => _updatePlaybackState());
+      player.stream.position.listen((position) {
+        _windowsPosition = position;
+        _updatePlaybackState();
+      });
+      player.stream.duration.listen((duration) {
+        _windowsDuration = duration;
+        final currentItem = mediaItem.value;
+        if (currentItem != null && duration > Duration.zero) {
+          mediaItem.add(currentItem.copyWith(duration: duration));
+        }
+        _updatePlaybackState();
+      });
+      player.stream.buffer.listen((position) {
+        _windowsBufferedPosition = position;
+        _updatePlaybackState();
+      });
+      player.stream.buffering.listen((isBuffering) {
+        _windowsIsBuffering = isBuffering;
+        _updatePlaybackState();
+      });
+      player.stream.completed.listen((completed) async {
+        _windowsIsCompleted = completed;
+        _updatePlaybackState();
+        if (completed) {
+          final genAtCompletion = _loadGeneration;
+          if (currentLoopMode == LoopMode.one) {
+            await player.seek(Duration.zero);
+            await player.play();
+          } else if (currentLoopMode == LoopMode.all && _loadGeneration == genAtCompletion) {
             await next();
+            await player.pause();
+            await player.play();
           }
         }
-      }
-    });
+      });
+      player.stream.rate.listen((s) => speedNotifier.value = s);
+      player.stream.pitch.listen((p) => pitchNotifier.value = p);
+    } else {
+      _player.playbackEventStream.listen((_) => _updatePlaybackState());
+      _player.speedStream.listen((s) => speedNotifier.value = s);
+      _player.playingStream.listen((_) => _updatePlaybackState());
 
-    _player.playingStream.listen((isPlaying) async {
+      _player.durationStream.listen((duration) {
+        final currentItem = mediaItem.value;
+        if (currentItem != null && duration != null) {
+          mediaItem.add(currentItem.copyWith(duration: duration));
+        }
+        _updatePlaybackState();
+      });
+
+      _player.positionStream.listen((_) => _updatePlaybackState());
+
+      _player.processingStateStream.listen((state) async {
+        _updatePlaybackState();
+        if (state == ProcessingState.completed) {
+          final genAtCompletion = _loadGeneration;
+          if (currentLoopMode == LoopMode.one) {
+            await _player.seek(Duration.zero);
+            await _player.play();
+          } else if (currentLoopMode == LoopMode.all) {
+            if (_loadGeneration == genAtCompletion) {
+              await next();
+            }
+          }
+        }
+      });
+    }
+
+    _playingStream.listen((isPlaying) async {
       if (isPlaying) {
         final current = mediaItem.value;
         if (current != null) {
-          await DiscordPresenceService()
-              .updatePresence(current.title, current.artist ?? 'Unknown Artist');
+          await DiscordPresenceService().updatePresence(current.title, current.artist ?? 'Unknown Artist');
         }
       } else {
         await DiscordPresenceService().setIdle();
@@ -96,23 +143,28 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   @override
-  Future<void> fastForward() async { await super.fastForward(); }
+  Future<void> fastForward() async {
+    await super.fastForward();
+  }
 
   @override
-  Future<void> rewind() async { await super.rewind(); }
+  Future<void> rewind() async {
+    await super.rewind();
+  }
 
   @override
-  Future<void> seekForward(bool begin) async { await super.seekForward(begin); }
+  Future<void> seekForward(bool begin) async {
+    await super.seekForward(begin);
+  }
 
   @override
-  Future<void> seekBackward(bool begin) async { await super.seekBackward(begin); }
+  Future<void> seekBackward(bool begin) async {
+    await super.seekBackward(begin);
+  }
 
   @override
-  Future<void> stop() async { await super.stop(); }
-
-  @override
-  Future<dynamic> customAction(String name, [Map<String, dynamic>? extras]) async {
-    return super.customAction(name, extras);
+  Future<void> stop() async {
+    await super.stop();
   }
 
   // ─── Unicode path workaround ──────────────────────────────────────
@@ -126,8 +178,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final tempPath = p.join(tempDir.path, safeName);
       final tempFile = File(tempPath);
       final sourceFile = File(filePath);
-      final needsCopy = !await tempFile.exists() ||
-          (await tempFile.length()) != (await sourceFile.length());
+      final needsCopy = !await tempFile.exists() || (await tempFile.length()) != (await sourceFile.length());
       if (needsCopy) await sourceFile.copy(tempPath);
       return tempPath;
     } catch (e) {
@@ -157,21 +208,25 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       final denoPath = p.join(binDir, 'deno.exe');
 
       final process = await Process.start(ytDlpPath, [
-        '--js-runtimes', 'deno:$denoPath',
-        '-g',
-        '-f', 'bestaudio[ext=m4a]/bestaudio/best',
+        '--js-runtimes',
+        'deno:$denoPath',
+        '--dump-single-json',
+        '--no-warnings',
         '--no-playlist',
+        '--skip-download',
+        '--format',
+        'bestaudio[ext=m4a]/bestaudio/best',
         url,
       ]);
-      process.stderr.drain();
-      final lines = await process.stdout
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .toList();
-      await process.exitCode;
-      if (lines.isEmpty) throw Exception('yt-dlp returned no URL');
-      resolved = lines.first.trim();
-
+      final stderr = StringBuffer();
+      process.stderr.transform(utf8.decoder).listen(stderr.write);
+      final output = await process.stdout.transform(utf8.decoder).join();
+      final exitCode = await process.exitCode;
+      if (exitCode != 0) {
+        throw Exception('yt-dlp failed: ${stderr.toString().trim()}');
+      }
+      final info = jsonDecode(output) as Map<String, dynamic>;
+      resolved = await _windowsStreamProxy.register(info);
     } else if (Platform.isAndroid) {
       const channel = MethodChannel('resonance/android_youtube');
       final result = await channel.invokeMethod<String>('getStreamUrl', {'url': url});
@@ -190,51 +245,99 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   // Build the right AudioSource for a URL.
-  // For streams we resolve to a direct CDN URL first, then use
-  // LockCachingAudioSource so seeking works by buffering to disk.
-  // For local files: plain AudioSource.uri.
+  // Streams use the resolved CDN/HLS URL directly. LockCachingAudioSource is
+  // intentionally avoided here because it must cache bytes before a seek point,
+  // which makes long podcasts and deep seeks painfully slow.
   Future<AudioSource> _buildAudioSource(String filePath) async {
-    final isStream =
-        filePath.startsWith('http://') || filePath.startsWith('https://');
+    final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
 
     if (isStream) {
       final resolvedUrl = await _resolveStreamUrl(filePath);
       final uri = Uri.parse(resolvedUrl);
-      try {
-        return LockCachingAudioSource(uri);
-      } catch (_) {
-        return AudioSource.uri(uri);
-      }
+      return AudioSource.uri(uri);
     } else {
       final playablePath = await _resolvePlayablePath(filePath);
       return AudioSource.uri(Uri.file(playablePath));
     }
   }
 
+  Future<String> _buildMediaKitUri(String filePath) async {
+    final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
+    if (isStream) {
+      return _resolveStreamUrl(filePath);
+    }
+    final playablePath = await _resolvePlayablePath(filePath);
+    return Uri.file(playablePath).toString();
+  }
+
+  bool get _isWindowsPlaying => _windowsPlayer?.state.playing ?? false;
+
+  Stream<bool> get _playingStream => Platform.isWindows ? _windowsPlayer!.stream.playing : _player.playingStream;
+
+  Duration get _currentPosition => Platform.isWindows ? _windowsPosition : _player.position;
+
+  Duration? get _currentDuration => Platform.isWindows ? _windowsDuration : _player.duration;
+
   void _updatePlaybackState() {
-    playbackState.add(playbackState.value.copyWith(
-      controls: [
-        MediaControl.skipToPrevious,
-        _player.playing ? MediaControl.pause : MediaControl.play,
-        MediaControl.skipToNext,
-        MediaControl.stop,
-      ],
-      systemActions: const {
-        MediaAction.seek,
-        MediaAction.seekForward,
-        MediaAction.seekBackward,
-        MediaAction.skipToNext,
-        MediaAction.skipToPrevious,
-        MediaAction.play,
-        MediaAction.pause,
-      },
-      processingState: _getProcessingState(_player.processingState),
-      playing: _player.playing,
-      updatePosition: _player.position,
-      bufferedPosition: _player.bufferedPosition,
-      speed: _player.speed,
-      queueIndex: _player.currentIndex,
-    ));
+    if (Platform.isWindows) {
+      final playing = _isWindowsPlaying;
+      playbackState.add(
+        playbackState.value.copyWith(
+          controls: [
+            MediaControl.skipToPrevious,
+            playing ? MediaControl.pause : MediaControl.play,
+            MediaControl.skipToNext,
+            MediaControl.stop,
+          ],
+          systemActions: const {
+            MediaAction.seek,
+            MediaAction.seekForward,
+            MediaAction.seekBackward,
+            MediaAction.skipToNext,
+            MediaAction.skipToPrevious,
+            MediaAction.play,
+            MediaAction.pause,
+          },
+          processingState: _windowsIsCompleted
+              ? AudioProcessingState.completed
+              : _windowsIsBuffering
+              ? AudioProcessingState.buffering
+              : AudioProcessingState.ready,
+          playing: playing,
+          updatePosition: _windowsPosition,
+          bufferedPosition: _windowsBufferedPosition,
+          speed: speedNotifier.value,
+          queueIndex: 0,
+        ),
+      );
+      return;
+    }
+
+    playbackState.add(
+      playbackState.value.copyWith(
+        controls: [
+          MediaControl.skipToPrevious,
+          _player.playing ? MediaControl.pause : MediaControl.play,
+          MediaControl.skipToNext,
+          MediaControl.stop,
+        ],
+        systemActions: const {
+          MediaAction.seek,
+          MediaAction.seekForward,
+          MediaAction.seekBackward,
+          MediaAction.skipToNext,
+          MediaAction.skipToPrevious,
+          MediaAction.play,
+          MediaAction.pause,
+        },
+        processingState: _getProcessingState(_player.processingState),
+        playing: _player.playing,
+        updatePosition: _player.position,
+        bufferedPosition: _player.bufferedPosition,
+        speed: _player.speed,
+        queueIndex: _player.currentIndex,
+      ),
+    );
   }
 
   // ─── Saved state ──────────────────────────────────────────────────
@@ -246,10 +349,19 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       await changeVolume(vol);
 
       final speed = prefs.getDouble('last_speed') ?? 1.0;
-      await _player.setSpeed(speed);
+      if (Platform.isWindows) {
+        await _windowsPlayer!.setRate(speed);
+      } else {
+        await _player.setSpeed(speed);
+      }
+      speedNotifier.value = speed;
 
       final pitch = prefs.getDouble('last_pitch') ?? 1.0;
-      await _player.setPitch(pitch);
+      if (Platform.isWindows) {
+        await _windowsPlayer!.setPitch(pitch);
+      } else {
+        await _player.setPitch(pitch);
+      }
       pitchNotifier.value = pitch;
 
       final trackPath = prefs.getString('last_track_path');
@@ -266,19 +378,21 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   Future<void> _preloadTrack(String filePath, String title, String artist) async {
     try {
-      final isStream =
-          filePath.startsWith('http://') || filePath.startsWith('https://');
+      final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
       if (isStream) {
         // Don't auto-resolve streams on startup — just show the track in UI.
         mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
         _updatePlaybackState();
         return;
       }
+      if (Platform.isWindows) {
+        mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
+        _updatePlaybackState();
+        return;
+      }
       final source = await _buildAudioSource(filePath);
       await _player.setAudioSource(source);
-      mediaItem.add(MediaItem(
-          id: filePath, title: title, artist: artist,
-          duration: _player.duration));
+      mediaItem.add(MediaItem(id: filePath, title: title, artist: artist, duration: _player.duration));
       _updatePlaybackState();
     } catch (e) {
       debugPrint('Error preloading track: $e');
@@ -305,6 +419,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   // ─── Core playback ────────────────────────────────────────────────
   @override
   Future<void> play() async {
+    if (Platform.isWindows) {
+      if (_isWindowsPlaying) return;
+      await _windowsPlayer!.play();
+      _updatePlaybackState();
+      return;
+    }
     if (_player.playing) return;
     await _player.play();
     _updatePlaybackState();
@@ -312,6 +432,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> pause() async {
+    if (Platform.isWindows) {
+      if (!_isWindowsPlaying) return;
+      await _windowsPlayer!.pause();
+      _updatePlaybackState();
+      return;
+    }
     if (!_player.playing) return;
     await _player.pause();
     _updatePlaybackState();
@@ -319,7 +445,27 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> seek(Duration position) async {
-    await _player.seek(position);
+    playbackState.add(
+      playbackState.value.copyWith(
+        processingState: AudioProcessingState.buffering,
+        playing: false,
+        updatePosition: position,
+      ),
+    );
+    final wasPlaying = Platform.isWindows ? _isWindowsPlaying : _player.playing;
+    if (wasPlaying) {
+      await pause();
+    }
+    if (Platform.isWindows) {
+      _windowsIsBuffering = true;
+      _windowsPosition = position;
+      await _windowsPlayer!.seek(position);
+    } else {
+      await _player.seek(position);
+    }
+    if (wasPlaying) {
+      await play();
+    }
     _updatePlaybackState();
   }
 
@@ -331,7 +477,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   @override
   Future<void> setSpeed(double speed) async {
-    await _player.setSpeed(speed);
+    if (Platform.isWindows) {
+      await _windowsPlayer!.setRate(speed);
+    } else {
+      await _player.setSpeed(speed);
+    }
     speedNotifier.value = speed;
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -342,7 +492,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   Future<void> setPitch(double pitch) async {
     final clamped = pitch.clamp(0.5, 2.0);
-    await _player.setPitch(clamped);
+    if (Platform.isWindows) {
+      await _windowsPlayer!.setPitch(clamped);
+    } else {
+      await _player.setPitch(clamped);
+    }
     pitchNotifier.value = clamped;
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -361,48 +515,73 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
     // Optimistic UI update
     mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
-    playbackState.add(playbackState.value.copyWith(
-      processingState: AudioProcessingState.loading,
-      playing: false,
-    ));
+    playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.loading, playing: false));
 
     try {
-      if (_player.playing) await _player.pause();
+      if (Platform.isWindows) {
+        if (_isWindowsPlaying) await _windowsPlayer!.pause();
+      } else if (_player.playing) {
+        await _player.pause();
+      }
       if (_loadGeneration != myGen) return;
 
-      AudioSource source;
-      try {
-        source = await _buildAudioSource(filePath);
-      } catch (e) {
+      final prefs = await SharedPreferences.getInstance();
+      final savedSpeed = prefs.getDouble('last_speed') ?? 1.0;
+      final savedPitch = prefs.getDouble('last_pitch') ?? 1.0;
+
+      if (Platform.isWindows) {
+        String uri;
+        try {
+          uri = await _buildMediaKitUri(filePath);
+        } catch (e) {
+          if (_loadGeneration != myGen) return;
+          debugPrint('[PlayerHandler] Failed to build media_kit URI for "$filePath": $e');
+          _streamUrlCache.remove(filePath);
+          playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
+          return;
+        }
+
         if (_loadGeneration != myGen) return;
-        debugPrint('[PlayerHandler] Failed to build audio source for "$filePath": $e');
-        // Invalidate stream URL cache on resolution failure
-        _streamUrlCache.remove(filePath);
-        // Signal error state to UI
-        playbackState.add(playbackState.value.copyWith(
-          processingState: AudioProcessingState.idle,
-          playing: false,
-        ));
-        return;
+        _windowsIsBuffering = true;
+        _windowsIsCompleted = false;
+        _windowsPosition = Duration.zero;
+        _windowsDuration = Duration.zero;
+        _windowsBufferedPosition = Duration.zero;
+        final player = _windowsPlayer!;
+        await player.open(mk.Media(uri), play: false);
+        if (_loadGeneration != myGen) return;
+        await player.setRate(savedSpeed);
+        await player.setPitch(savedPitch);
+        await player.setVolume(volumeNotifier.value * 100.0);
+      } else {
+        AudioSource source;
+        try {
+          source = await _buildAudioSource(filePath);
+        } catch (e) {
+          if (_loadGeneration != myGen) return;
+          debugPrint('[PlayerHandler] Failed to build audio source for "$filePath": $e');
+          // Invalidate stream URL cache on resolution failure
+          _streamUrlCache.remove(filePath);
+          // Signal error state to UI
+          playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
+          return;
+        }
+
+        if (_loadGeneration != myGen) return;
+
+        await _player.setAudioSource(source);
+        if (_loadGeneration != myGen) return;
+        await _player.setSpeed(savedSpeed);
+        await _player.setPitch(savedPitch);
       }
 
       if (_loadGeneration != myGen) return;
 
-      await _player.setAudioSource(source);
-      if (_loadGeneration != myGen) return;
-
-      final prefs = await SharedPreferences.getInstance();
-      await _player.setSpeed(prefs.getDouble('last_speed') ?? 1.0);
-      await _player.setPitch(prefs.getDouble('last_pitch') ?? 1.0);
-
-      if (_loadGeneration != myGen) return;
-
       // Emit updated mediaItem with duration if already available
-      final dur = _player.duration;
-      mediaItem.add(MediaItem(
-          id: filePath, title: title, artist: artist, duration: dur));
+      final dur = _currentDuration;
+      mediaItem.add(MediaItem(id: filePath, title: title, artist: artist, duration: dur));
 
-      await _player.play();
+      await play();
       _updatePlaybackState();
       await _saveTrack(filePath, title, artist);
       await DiscordPresenceService().updatePresence(title, artist);
@@ -411,10 +590,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         debugPrint('[PlayerHandler] Error loading track "$filePath": $e\n$st');
         // Invalidate cached stream URL — it may have expired
         _streamUrlCache.remove(filePath);
-        playbackState.add(playbackState.value.copyWith(
-          processingState: AudioProcessingState.idle,
-          playing: false,
-        ));
+        playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
         _updatePlaybackState();
       }
     }
@@ -423,35 +599,25 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   // ─── Volume ───────────────────────────────────────────────────────
   // volumeNotifier holds the raw UI value [0.0, 2.0].
   //
-  // just_audio's setVolume() clamps to [0.0, 1.0] on both Android and
-  // Windows regardless of what the documentation implies — values above
-  // 1.0 are NOT amplified by the engine.
-  //
-  // For true gain above 100% on Android we use the LoudnessEnhancer
-  // AudioEffect via a MethodChannel bridge in MainActivity.kt.
-  // On Windows there is no equivalent; values >1.0 are accepted by the
-  // UI slider but the actual audio stays at 100% (a BOOST badge appears
-  // so users know the slider top is 100%).
+  // For Android, values above 100% are implemented with just_audio's
+  // AndroidLoudnessEnhancer in the player's own audio pipeline.
+  // Windows uses media_kit/mpv, whose volume scale is 0..200+ percent.
   Future<void> changeVolume(double rawVolume) async {
     final clamped = rawVolume.clamp(0.0, 2.0);
     volumeNotifier.value = clamped;
 
-    // just_audio only does [0.0, 1.0] — pass the lower of the two
-    await _player.setVolume(clamped.clamp(0.0, 1.0));
-
-    // Android: apply gain above 100% via LoudnessEnhancer AudioEffect.
-    // targetGain is in millibels: 0 mB = unity, positive = boost.
-    // We map [1.0 → 2.0] linearly to [0 mB → 1000 mB] (+10 dB max).
     if (Platform.isAndroid) {
       try {
-        final gainMB = clamped > 1.0
-            ? ((clamped - 1.0) * 1000).round() // 0..1000 mB
-            : 0;
-        await _loudnessChannel.invokeMethod('setGain', {'gainMB': gainMB});
+        await _player.setVolume(clamped.clamp(0.0, 1.0));
+        await _loudnessEnhancer.setEnabled(clamped > 1.0);
+        await _loudnessEnhancer.setTargetGain(clamped > 1.0 ? (clamped - 1.0) * 10.0 : 0.0);
       } catch (e) {
-        // Non-fatal: LoudnessEnhancer may not be available on all devices.
         debugPrint('[PlayerHandler] LoudnessEnhancer unavailable: $e');
       }
+    } else if (Platform.isWindows) {
+      await _windowsPlayer!.setVolume(clamped * 100.0);
+    } else {
+      await _player.setVolume(clamped);
     }
 
     try {
@@ -460,17 +626,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     } catch (_) {}
   }
 
-  Future<void> incrementVolume() async =>
-      changeVolume(volumeNotifier.value + 0.05);
+  Future<void> incrementVolume() async => changeVolume(volumeNotifier.value + 0.05);
 
-  Future<void> decrementVolume() async =>
-      changeVolume(volumeNotifier.value - 0.05);
+  Future<void> decrementVolume() async => changeVolume(volumeNotifier.value - 0.05);
 
-  Future<void> incrementSpeed() async =>
-      setSpeed((speedNotifier.value + 0.1).clamp(0.5, 2.0));
+  Future<void> incrementSpeed() async => setSpeed((speedNotifier.value + 0.1).clamp(0.5, 2.0));
 
-  Future<void> decrementSpeed() async =>
-      setSpeed((speedNotifier.value - 0.1).clamp(0.5, 2.0));
+  Future<void> decrementSpeed() async => setSpeed((speedNotifier.value - 0.1).clamp(0.5, 2.0));
 
   Future<void> toggleMute() async {
     if (volumeNotifier.value == 0) {
@@ -519,8 +681,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     if (playlist.isEmpty) return;
     int index = playlist.indexOf(currentItem.id);
     if (index == -1) index = 0;
-    if (_player.position > const Duration(seconds: 3)) {
-      await _player.seek(Duration.zero);
+    if (_currentPosition > const Duration(seconds: 3)) {
+      await seek(Duration.zero);
       return;
     }
     final prevIndex = (index - 1 + playlist.length) % playlist.length;
@@ -528,14 +690,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await loadTrack(playlist[prevIndex], meta.title, meta.artist);
   }
 
-  Future<bool> isPlaying() async => _player.playing;
+  Future<bool> isPlaying() async => Platform.isWindows ? _isWindowsPlaying : _player.playing;
 
   Future<void> playPause() async {
-    if (_player.playing) await pause(); else await play();
+    if (_player.playing) {
+      await pause();
+    } else {
+      await play();
+    }
   }
 
-  Stream<Duration> get positionStream => _player.positionStream;
-  Stream<Duration?> get durationStream => _player.durationStream;
+  Stream<Duration> get positionStream => Platform.isWindows ? _windowsPlayer!.stream.position : _player.positionStream;
+  Stream<Duration?> get durationStream => Platform.isWindows ? _windowsPlayer!.stream.duration : _player.durationStream;
 
   Future<void> setQueue(List<MediaItem> tracks) async {
     await updateQueue(tracks);
@@ -545,15 +711,20 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   @override
-  Future<void> playMediaItem(MediaItem item) async {
+  Future<void> playMediaItem(MediaItem mediaItem) async {
     try {
-      final source = await _buildAudioSource(item.id);
-      await _player.setAudioSource(source);
-      mediaItem.add(item);
-      await _player.play();
-      await _saveTrack(item.id, item.title, item.artist ?? 'Unknown Artist');
+      if (Platform.isWindows) {
+        final uri = await _buildMediaKitUri(mediaItem.id);
+        await _windowsPlayer!.open(mk.Media(uri), play: false);
+      } else {
+        final source = await _buildAudioSource(mediaItem.id);
+        await _player.setAudioSource(source);
+      }
+      this.mediaItem.add(mediaItem);
+      await play();
+      await _saveTrack(mediaItem.id, mediaItem.title, mediaItem.artist ?? 'Unknown Artist');
     } catch (e, st) {
-      debugPrint('Error playing media item "${item.id}": $e\n$st');
+      debugPrint('Error playing media item "${mediaItem.id}": $e\n$st');
       _updatePlaybackState();
     }
   }
@@ -580,17 +751,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   Future<List<String>> _getCleanPlaylist() async {
     final content = await FileService().readTextFromFile();
-    return content
-        .split('\n')
-        .map((l) => l.trim())
-        .where((l) => l.isNotEmpty && !l.startsWith('#'))
-        .toList();
+    return content.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty && !l.startsWith('#')).toList();
   }
 
   bool getShuffleMode() => isShuffle;
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    await _windowsStreamProxy.dispose();
+    await _windowsPlayer?.dispose();
     await _player.dispose();
     await DiscordPresenceService().clearPresence();
     await DiscordPresenceService().dispose();
@@ -598,11 +767,166 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   AudioProcessingState _getProcessingState(ProcessingState state) {
     switch (state) {
-      case ProcessingState.loading:    return AudioProcessingState.loading;
-      case ProcessingState.buffering:  return AudioProcessingState.buffering;
-      case ProcessingState.ready:      return AudioProcessingState.ready;
-      case ProcessingState.completed:  return AudioProcessingState.completed;
-      default:                         return AudioProcessingState.idle;
+      case ProcessingState.loading:
+        return AudioProcessingState.loading;
+      case ProcessingState.buffering:
+        return AudioProcessingState.buffering;
+      case ProcessingState.ready:
+        return AudioProcessingState.ready;
+      case ProcessingState.completed:
+        return AudioProcessingState.completed;
+      default:
+        return AudioProcessingState.idle;
     }
   }
+}
+
+class _WindowsStreamProxy {
+  HttpServer? _server;
+  final _streams = <String, _WindowsStreamInfo>{};
+  int _nextId = 0;
+
+  Future<String> register(Map<String, dynamic> info) async {
+    if (!Platform.isWindows) {
+      return info['url'] as String? ?? '';
+    }
+
+    final url = _pickPlayableUrl(info);
+    if (url == null || url.isEmpty) {
+      throw Exception('yt-dlp returned no playable stream URL');
+    }
+
+    final server = await _ensureServer();
+    final id = (++_nextId).toString();
+    _streams[id] = _WindowsStreamInfo(url: url, headers: _readHeaders(info));
+
+    return Uri(
+      scheme: 'http',
+      host: InternetAddress.loopbackIPv4.address,
+      port: server.port,
+      pathSegments: ['stream', id],
+    ).toString();
+  }
+
+  Future<HttpServer> _ensureServer() async {
+    final existing = _server;
+    if (existing != null) return existing;
+
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    _server = server;
+    unawaited(server.listen(_handleRequest).asFuture<void>());
+    return server;
+  }
+
+  Future<void> _handleRequest(HttpRequest request) async {
+    final id = request.uri.pathSegments.length >= 2 ? request.uri.pathSegments[1] : null;
+    final stream = id == null ? null : _streams[id];
+    if (stream == null) {
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+      return;
+    }
+
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 20);
+    try {
+      final upstream = await client.getUrl(Uri.parse(stream.url));
+      for (final entry in stream.headers.entries) {
+        upstream.headers.set(entry.key, entry.value);
+      }
+      final range = request.headers.value(HttpHeaders.rangeHeader);
+      if (range != null) {
+        upstream.headers.set(HttpHeaders.rangeHeader, range);
+      }
+
+      final upstreamResponse = await upstream.close();
+      request.response.statusCode = upstreamResponse.statusCode;
+      for (final header in [
+        HttpHeaders.acceptRangesHeader,
+        HttpHeaders.contentLengthHeader,
+        HttpHeaders.contentRangeHeader,
+        HttpHeaders.contentTypeHeader,
+        HttpHeaders.etagHeader,
+        HttpHeaders.lastModifiedHeader,
+      ]) {
+        final value = upstreamResponse.headers.value(header);
+        if (value != null) {
+          request.response.headers.set(header, value);
+        }
+      }
+      await upstreamResponse.pipe(request.response);
+    } catch (e) {
+      debugPrint('[WindowsStreamProxy] request failed: $e');
+      try {
+        request.response.statusCode = HttpStatus.badGateway;
+        await request.response.close();
+      } catch (_) {}
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  String? _pickPlayableUrl(Map<String, dynamic> info) {
+    final direct = info['url'] as String?;
+    if (direct != null && direct.startsWith('http')) {
+      return direct;
+    }
+
+    final requestedDownloads = info['requested_downloads'];
+    if (requestedDownloads is List && requestedDownloads.isNotEmpty) {
+      final first = requestedDownloads.first;
+      if (first is Map && first['url'] is String) {
+        return first['url'] as String;
+      }
+    }
+
+    final requestedFormats = info['requested_formats'];
+    if (requestedFormats is List && requestedFormats.isNotEmpty) {
+      for (final format in requestedFormats.reversed) {
+        if (format is Map && format['url'] is String) {
+          return format['url'] as String;
+        }
+      }
+    }
+
+    final formats = info['formats'];
+    if (formats is List && formats.isNotEmpty) {
+      for (final format in formats.reversed) {
+        if (format is Map && format['url'] is String && (format['acodec'] as String?) != 'none') {
+          return format['url'] as String;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  Map<String, String> _readHeaders(Map<String, dynamic> info) {
+    final rawHeaders = info['http_headers'];
+    final headers = <String, String>{};
+    if (rawHeaders is Map) {
+      for (final entry in rawHeaders.entries) {
+        final key = entry.key?.toString();
+        final value = entry.value?.toString();
+        if (key != null && key.isNotEmpty && value != null && value.isNotEmpty) {
+          headers[key] = value;
+        }
+      }
+    }
+    headers.putIfAbsent(HttpHeaders.userAgentHeader, () => 'Mozilla/5.0');
+    return headers;
+  }
+
+  Future<void> dispose() async {
+    await _server?.close(force: true);
+    _server = null;
+    _streams.clear();
+  }
+}
+
+class _WindowsStreamInfo {
+  final String url;
+  final Map<String, String> headers;
+
+  const _WindowsStreamInfo({required this.url, required this.headers});
 }

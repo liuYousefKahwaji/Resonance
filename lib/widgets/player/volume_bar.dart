@@ -67,7 +67,9 @@ class _VolumeBarState extends State<VolumeBar> {
               icon: Icon(
                 icon,
                 size: 18,
-                color: isDark
+                color: isBoost
+                    ? boostColor
+                    : isDark
                     ? const Color(0xFF64748B)
                     : const Color(0xFF94A3B8),
               ),
@@ -86,8 +88,7 @@ class _VolumeBarState extends State<VolumeBar> {
                     cursor: SystemMouseCursors.click,
                     onEnter: (_) => setState(() => _isHovering = true),
                     onExit: (_) => setState(() => _isHovering = false),
-                    onHover: (event) =>
-                        _updateHoverPosition(event.localPosition.dx, maxWidth),
+                    onHover: (event) => _updateHoverPosition(event.localPosition.dx, maxWidth),
                     child: Stack(
                       clipBehavior: Clip.none,
                       children: [
@@ -95,9 +96,7 @@ class _VolumeBarState extends State<VolumeBar> {
                           data: SliderTheme.of(context).copyWith(
                             showValueIndicator: ShowValueIndicator.never,
                             activeTrackColor: activeTrackColor,
-                            inactiveTrackColor: isDark
-                                ? const Color(0xFF2D2D42)
-                                : const Color(0xFFDDD9F3),
+                            inactiveTrackColor: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3),
                             thumbColor: activeTrackColor,
                             tickMarkShape: SliderTickMarkShape.noTickMark,
                             trackHeight: _isHovering ? 4.0 : 3.0,
@@ -105,10 +104,8 @@ class _VolumeBarState extends State<VolumeBar> {
                               enabledThumbRadius: _isHovering ? 6.0 : 0.0,
                               elevation: 2,
                             ),
-                            overlayShape: const RoundSliderOverlayShape(
-                                overlayRadius: 12.0),
-                            overlayColor:
-                                activeTrackColor.withValues(alpha: 0.15),
+                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 12.0),
+                            overlayColor: activeTrackColor.withValues(alpha: 0.15),
                           ),
                           child: Slider(
                             value: sliderFraction.clamp(0.0, 1.0),
@@ -118,13 +115,10 @@ class _VolumeBarState extends State<VolumeBar> {
                             onChanged: (value) {
                               setState(() => _isScrubbing = true);
                               // value [0,1] → raw [0,2]
-                              handler.changeVolume(
-                                  (value * 2.0).clamp(0.0, 2.0));
-                              _updateHoverPosition(
-                                  value * maxWidth, maxWidth);
+                              handler.changeVolume((value * 2.0).clamp(0.0, 2.0));
+                              _updateHoverPosition(value * maxWidth, maxWidth);
                             },
-                            onChangeEnd: (_) =>
-                                setState(() => _isScrubbing = false),
+                            onChangeEnd: (_) => setState(() => _isScrubbing = false),
                           ),
                         ),
 
@@ -134,14 +128,11 @@ class _VolumeBarState extends State<VolumeBar> {
                             right: 0,
                             top: -18,
                             child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 5, vertical: 2),
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                               decoration: BoxDecoration(
                                 color: boostColor.withValues(alpha: 0.15),
                                 borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                    color: boostColor.withValues(alpha: 0.4),
-                                    width: 1),
+                                border: Border.all(color: boostColor.withValues(alpha: 0.4), width: 1),
                               ),
                               child: Text(
                                 'BOOST',
@@ -157,33 +148,25 @@ class _VolumeBarState extends State<VolumeBar> {
 
                         // ── Floating percentage preview ────────────
                         AnimatedPositioned(
-                          duration: Duration(
-                              milliseconds: _isScrubbing ? 0 : 50),
+                          duration: Duration(milliseconds: _isScrubbing ? 0 : 50),
                           curve: Curves.easeOutCubic,
                           left: _isHovering || _isScrubbing
-                              ? (_hoverX - 28).clamp(
-                                  0.0,
-                                  (maxWidth - 56).clamp(
-                                      0.0, double.infinity),
-                                )
+                              ? (_hoverX - 28).clamp(0.0, (maxWidth - 56).clamp(0.0, double.infinity))
                               : 0,
                           top: -34,
                           child: AnimatedOpacity(
                             duration: const Duration(milliseconds: 150),
-                            opacity:
-                                (_isHovering || _isScrubbing) ? 1.0 : 0.0,
+                            opacity: (_isHovering || _isScrubbing) ? 1.0 : 0.0,
                             child: IgnorePointer(
                               child: Container(
                                 width: 56,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 4),
+                                padding: const EdgeInsets.symmetric(vertical: 4),
                                 decoration: BoxDecoration(
                                   color: previewBgColor,
                                   borderRadius: BorderRadius.circular(6),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black
-                                          .withValues(alpha: 0.2),
+                                      color: Colors.black.withValues(alpha: 0.2),
                                       blurRadius: 8,
                                       offset: const Offset(0, 3),
                                     ),

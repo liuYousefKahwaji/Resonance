@@ -473,14 +473,17 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Theme.of(context).colorScheme.error),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Theme.of(context).colorScheme.error));
       }
     }
   }
 
   Future<void> _startStream(String url, {String? title, String? artist}) async {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final snackBarBackground = Theme.of(context).colorScheme.surfaceContainerHigh;
     final targetTitle = title ?? 'Streaming Track';
     final targetArtist = artist ?? 'YouTube';
 
@@ -494,7 +497,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
     if (mounted) {
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: const Row(
             children: [
@@ -506,7 +509,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
               ),
             ],
           ),
-          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+          backgroundColor: snackBarBackground,
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 3),
         ),
@@ -544,12 +547,17 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
   }
 
   Future<void> _startStreamUrl(String url) async {
+    Tooltip.dismissAllToolTips();
+    if (_mode == _DialogMode.searching || _mode == _DialogMode.downloading) {
+      return;
+    }
     setState(() {
       _mode = _DialogMode.searching;
       _statusMessage = 'Extracting Video Info...';
     });
 
     final meta = await _fetchMetadata(url);
+    if (!mounted) return;
     await _startStream(url, title: meta.title, artist: meta.artist);
   }
 
@@ -618,7 +626,10 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
                   const SizedBox(width: 12),
 
-                  Text('YouTube · Stream or Download', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                  Text(
+                    'YouTube · Stream or Download',
+                    style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                  ),
                 ],
               ),
 
@@ -727,7 +738,6 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                 label: const Text('Download'),
               ),
             ],
-
           ),
         ] else ...[
           TextField(

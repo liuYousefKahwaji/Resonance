@@ -18,6 +18,7 @@ import 'package:resonance/widgets/youtube/android_youtube.dart';
 import 'package:resonance/widgets/youtube/windows_youtube.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:metadata_god/metadata_god.dart';
+import 'package:media_kit/media_kit.dart';
 
 // Desktop-only imports — guarded at runtime with Platform checks
 import 'package:resonance/platform/desktop/hotkey_service.dart'
@@ -31,13 +32,15 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
-//TODO: Iconize again
+//TODO: Taskbar buttons
 
-bool get _isDesktop =>
-    Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isWindows) {
+    MediaKit.ensureInitialized();
+  }
   await MetadataGod.initialize();
 
   if (_isDesktop) {
@@ -99,10 +102,7 @@ Future<void> main() async {
       MediaKeysService.register(
         onNext: () => handler.next(),
         onPrevious: () => handler.previous(),
-      ).timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => false,
-      ),
+      ).timeout(const Duration(seconds: 5), onTimeout: () => false),
     );
   }
 }
@@ -121,11 +121,7 @@ class _DesktopWindowHandler with WindowListener, TrayListener {
   final VoidCallback onExit;
   final SettingsService settingsService;
 
-  _DesktopWindowHandler({
-    required this.onShow,
-    required this.onExit,
-    required this.settingsService,
-  }) {
+  _DesktopWindowHandler({required this.onShow, required this.onExit, required this.settingsService}) {
     windowManager.addListener(this);
     trayManager.addListener(this);
   }
@@ -195,11 +191,7 @@ class _MainAppState extends State<MainApp> {
   Future<void> _initDesktop() async {
     final mode = await _settingsService.getTrayMode();
     if (!mounted) return;
-    _desktopHandler = _DesktopWindowHandler(
-      onShow: _showWindow,
-      onExit: _exitApp,
-      settingsService: _settingsService,
-    );
+    _desktopHandler = _DesktopWindowHandler(onShow: _showWindow, onExit: _exitApp, settingsService: _settingsService);
     if (mode == TrayMode.noTray) {
       trayManager.removeListener(_desktopHandler!);
     }
@@ -218,11 +210,7 @@ class _MainAppState extends State<MainApp> {
     final fileData = await FileService().readTextFromFile();
     if (mounted) {
       setState(() {
-        playlist = fileData
-            .split('\n')
-            .where((line) => line.isNotEmpty)
-            .skip(1)
-            .toList();
+        playlist = fileData.split('\n').where((line) => line.isNotEmpty).skip(1).toList();
         isLoading = false;
       });
     }
@@ -300,11 +288,7 @@ class _MainAppState extends State<MainApp> {
               shape: BoxShape.circle,
               color: const Color(0xFF7C3AED),
               boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF7C3AED).withValues(alpha: 0.6),
-                  blurRadius: 8,
-                  spreadRadius: 1,
-                ),
+                BoxShadow(color: const Color(0xFF7C3AED).withValues(alpha: 0.6), blurRadius: 8, spreadRadius: 1),
               ],
             ),
           ),
@@ -327,15 +311,11 @@ class _MainAppState extends State<MainApp> {
             context,
             PageRouteBuilder(
               pageBuilder: (_, __, ___) => const SettingsScreen(),
-              transitionsBuilder: (_, anim, __, child) =>
-                  FadeTransition(opacity: anim, child: child),
+              transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
               transitionDuration: const Duration(milliseconds: 200),
             ),
           ),
-          icon: Icon(
-            Icons.tune_rounded,
-            color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-          ),
+          icon: Icon(Icons.tune_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
           tooltip: 'Settings',
         ),
       ],
@@ -351,19 +331,12 @@ class _MainAppState extends State<MainApp> {
                 SizedBox(
                   width: 32,
                   height: 32,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: const Color(0xFF7C3AED),
-                  ),
+                  child: CircularProgressIndicator(strokeWidth: 2, color: const Color(0xFF7C3AED)),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'Loading library...',
-                  style: TextStyle(
-                    color: const Color(0xFF64748B),
-                    fontSize: 13,
-                    letterSpacing: 0.3,
-                  ),
+                  style: TextStyle(color: const Color(0xFF64748B), fontSize: 13, letterSpacing: 0.3),
                 ),
               ],
             ),
@@ -419,9 +392,7 @@ class _MainAppState extends State<MainApp> {
       child: Row(
         children: [
           Text(
-            trackCount == 0
-                ? 'No tracks'
-                : '$trackCount ${trackCount == 1 ? 'track' : 'tracks'}',
+            trackCount == 0 ? 'No tracks' : '$trackCount ${trackCount == 1 ? 'track' : 'tracks'}',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w500,
@@ -489,11 +460,7 @@ ThemeData _buildDarkTheme() {
       surfaceContainerHigh: bgElevated,
       surfaceContainerHighest: Color(0xFF2D2D42),
     ),
-    appBarTheme: const AppBarTheme(
-      backgroundColor: bgBase,
-      elevation: 0,
-      surfaceTintColor: Colors.transparent,
-    ),
+    appBarTheme: const AppBarTheme(backgroundColor: bgBase, elevation: 0, surfaceTintColor: Colors.transparent),
     cardTheme: CardThemeData(
       color: bgSurface,
       elevation: 0,
@@ -502,10 +469,7 @@ ThemeData _buildDarkTheme() {
         side: const BorderSide(color: border, width: 1),
       ),
     ),
-    listTileTheme: const ListTileThemeData(
-      textColor: textPrimary,
-      iconColor: textMuted,
-    ),
+    listTileTheme: const ListTileThemeData(textColor: textPrimary, iconColor: textMuted),
     iconTheme: const IconThemeData(color: textMuted),
     dialogTheme: DialogThemeData(
       backgroundColor: bgSurface,
@@ -541,11 +505,7 @@ ThemeData _buildDarkTheme() {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     ),
-    textButtonTheme: TextButtonThemeData(
-      style: TextButton.styleFrom(
-        foregroundColor: primaryGlow,
-      ),
-    ),
+    textButtonTheme: TextButtonThemeData(style: TextButton.styleFrom(foregroundColor: primaryGlow)),
     sliderTheme: SliderThemeData(
       activeTrackColor: primary,
       inactiveTrackColor: const Color(0xFF2D2D42),
@@ -569,21 +529,26 @@ ThemeData _buildDarkTheme() {
       behavior: SnackBarBehavior.floating,
     ),
     switchTheme: SwitchThemeData(
-      thumbColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected) ? Colors.white : textMuted),
-      trackColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected) ? primary : const Color(0xFF2D2D42)),
+      thumbColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected) ? Colors.white : textMuted,
+      ),
+      trackColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected) ? primary : const Color(0xFF2D2D42),
+      ),
     ),
     radioTheme: RadioThemeData(
-      fillColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected) ? primary : textMuted),
+      fillColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected) ? primary : textMuted,
+      ),
     ),
     segmentedButtonTheme: SegmentedButtonThemeData(
       style: ButtonStyle(
-        backgroundColor: WidgetStateProperty.resolveWith((states) =>
-            states.contains(WidgetState.selected) ? primary.withValues(alpha: 0.2) : Colors.transparent),
-        foregroundColor: WidgetStateProperty.resolveWith((states) =>
-            states.contains(WidgetState.selected) ? primaryGlow : textMuted),
+        backgroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? primary.withValues(alpha: 0.2) : Colors.transparent,
+        ),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? primaryGlow : textMuted,
+        ),
         side: WidgetStateProperty.all(const BorderSide(color: border)),
       ),
     ),
@@ -614,11 +579,7 @@ ThemeData _buildLightTheme() {
       surfaceContainerHigh: bgElevated,
       surfaceContainerHighest: Color(0xFFEEECF8),
     ),
-    appBarTheme: const AppBarTheme(
-      backgroundColor: bgBase,
-      elevation: 0,
-      surfaceTintColor: Colors.transparent,
-    ),
+    appBarTheme: const AppBarTheme(backgroundColor: bgBase, elevation: 0, surfaceTintColor: Colors.transparent),
     cardTheme: CardThemeData(
       color: bgSurface,
       elevation: 0,
@@ -627,10 +588,7 @@ ThemeData _buildLightTheme() {
         side: const BorderSide(color: border, width: 1),
       ),
     ),
-    listTileTheme: const ListTileThemeData(
-      textColor: textPrimary,
-      iconColor: textMuted,
-    ),
+    listTileTheme: const ListTileThemeData(textColor: textPrimary, iconColor: textMuted),
     iconTheme: const IconThemeData(color: textMuted),
     dialogTheme: DialogThemeData(
       backgroundColor: bgSurface,
@@ -666,11 +624,7 @@ ThemeData _buildLightTheme() {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     ),
-    textButtonTheme: TextButtonThemeData(
-      style: TextButton.styleFrom(
-        foregroundColor: primaryGlow,
-      ),
-    ),
+    textButtonTheme: TextButtonThemeData(style: TextButton.styleFrom(foregroundColor: primaryGlow)),
     sliderTheme: SliderThemeData(
       activeTrackColor: primary,
       inactiveTrackColor: border,
@@ -694,21 +648,24 @@ ThemeData _buildLightTheme() {
       behavior: SnackBarBehavior.floating,
     ),
     switchTheme: SwitchThemeData(
-      thumbColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected) ? Colors.white : textMuted),
-      trackColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected) ? primary : border),
+      thumbColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected) ? Colors.white : textMuted,
+      ),
+      trackColor: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.selected) ? primary : border),
     ),
     radioTheme: RadioThemeData(
-      fillColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected) ? primary : textMuted),
+      fillColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected) ? primary : textMuted,
+      ),
     ),
     segmentedButtonTheme: SegmentedButtonThemeData(
       style: ButtonStyle(
-        backgroundColor: WidgetStateProperty.resolveWith((states) =>
-            states.contains(WidgetState.selected) ? primary.withValues(alpha: 0.1) : Colors.transparent),
-        foregroundColor: WidgetStateProperty.resolveWith((states) =>
-            states.contains(WidgetState.selected) ? primary : textMuted),
+        backgroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? primary.withValues(alpha: 0.1) : Colors.transparent,
+        ),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? primary : textMuted,
+        ),
         side: WidgetStateProperty.all(const BorderSide(color: border)),
       ),
     ),

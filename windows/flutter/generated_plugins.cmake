@@ -7,6 +7,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
   hotkey_manager_windows
   just_audio_windows
+  media_kit_libs_windows_audio
   permission_handler_windows
   restart_app
   screen_retriever_windows

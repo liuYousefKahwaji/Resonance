@@ -11,6 +11,8 @@
 //     tracking resumes. This makes stream-seeks feel responsive even
 //     though re-buffering takes a few seconds.
 
+import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -37,6 +39,9 @@ class _SeekBarState extends State<SeekBar> {
 
   double _hoverX = 0.0;
   Duration _hoverDuration = Duration.zero;
+  StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<Duration?>? _durationSub;
+  StreamSubscription<PlaybackState>? _playbackSub;
 
   @override
   void initState() {
@@ -47,7 +52,7 @@ class _SeekBarState extends State<SeekBar> {
   void _listenToPlayer() {
     final handler = Provider.of<PlayerHandler>(context, listen: false);
 
-    handler.positionStream.listen((position) {
+    _positionSub = handler.positionStream.listen((position) {
       if (!mounted) return;
       if (_isScrubbing) return;
 
@@ -71,15 +76,16 @@ class _SeekBarState extends State<SeekBar> {
       });
     });
 
-    handler.durationStream.listen((duration) {
+    _durationSub = handler.durationStream.listen((duration) {
       if (duration != null && mounted) {
         setState(() => _duration = duration);
       }
     });
 
-    handler.playbackState.listen((state) {
+    _playbackSub = handler.playbackState.listen((state) {
       if (!mounted) return;
-      final loading = state.processingState == AudioProcessingState.loading ||
+      final loading =
+          state.processingState == AudioProcessingState.loading ||
           state.processingState == AudioProcessingState.buffering;
 
       // When a new track starts loading, clear any stale pending seek
@@ -95,6 +101,14 @@ class _SeekBarState extends State<SeekBar> {
         }
       });
     });
+  }
+
+  @override
+  void dispose() {
+    _positionSub?.cancel();
+    _durationSub?.cancel();
+    _playbackSub?.cancel();
+    super.dispose();
   }
 
   void _updateHoverPosition(double localX, double maxWidth) {
@@ -126,8 +140,7 @@ class _SeekBarState extends State<SeekBar> {
 
   double get _displaySliderValue {
     if (_pendingSeekPosition != null && _duration.inMilliseconds > 0) {
-      return (_pendingSeekPosition!.inMilliseconds / _duration.inMilliseconds)
-          .clamp(0.0, 1.0);
+      return (_pendingSeekPosition!.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0);
     }
     return _sliderValue.clamp(0.0, 1.0);
   }
@@ -152,15 +165,12 @@ class _SeekBarState extends State<SeekBar> {
 
     // Dim the track while loading OR while waiting for a seek to settle.
     final isWaiting = _isLoading || _pendingSeekPosition != null;
-    final activeTrackColor = isWaiting
-        ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8))
-        : primary;
+    final activeTrackColor = isWaiting ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8)) : primary;
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Text(_formatDuration(_displayPosition, showHours: showHours),
-            style: timestampStyle),
+        Text(_formatDuration(_displayPosition, showHours: showHours), style: timestampStyle),
         const SizedBox(width: 8),
 
         // Spinner shown while loading OR re-buffering after a seek
@@ -172,9 +182,7 @@ class _SeekBarState extends State<SeekBar> {
               height: 12,
               child: CircularProgressIndicator(
                 strokeWidth: 1.5,
-                color: isDark
-                    ? const Color(0xFF64748B)
-                    : const Color(0xFF94A3B8),
+                color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
               ),
             ),
           ),
@@ -189,8 +197,7 @@ class _SeekBarState extends State<SeekBar> {
                 cursor: SystemMouseCursors.click,
                 onEnter: (_) => setState(() => _isHovering = true),
                 onExit: (_) => setState(() => _isHovering = false),
-                onHover: (event) =>
-                    _updateHoverPosition(event.localPosition.dx, maxWidth),
+                onHover: (event) => _updateHoverPosition(event.localPosition.dx, maxWidth),
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
@@ -198,34 +205,22 @@ class _SeekBarState extends State<SeekBar> {
                       data: SliderTheme.of(context).copyWith(
                         showValueIndicator: ShowValueIndicator.never,
                         activeTrackColor: activeTrackColor,
-                        inactiveTrackColor: isDark
-                            ? const Color(0xFF2D2D42)
-                            : const Color(0xFFDDD9F3),
-                        thumbColor: isWaiting
-                            ? (isDark
-                                ? const Color(0xFF3D3D55)
-                                : const Color(0xFFABA8C8))
-                            : primary,
+                        inactiveTrackColor: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3),
+                        thumbColor: isWaiting ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8)) : primary,
                         tickMarkShape: SliderTickMarkShape.noTickMark,
                         trackHeight: _isHovering ? 4.0 : 3.0,
                         thumbShape: RoundSliderThumbShape(
-                          enabledThumbRadius:
-                              _isHovering && !isWaiting ? 6.0 : 0.0,
+                          enabledThumbRadius: _isHovering && !isWaiting ? 6.0 : 0.0,
                           elevation: 2,
                         ),
-                        overlayShape:
-                            const RoundSliderOverlayShape(overlayRadius: 12.0),
+                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 12.0),
                         overlayColor: primary.withValues(alpha: 0.15),
                       ),
                       child: Slider(
-                        value: _isScrubbing
-                            ? _sliderValue.clamp(0.0, 1.0)
-                            : _displaySliderValue,
+                        value: _isScrubbing ? _sliderValue.clamp(0.0, 1.0) : _displaySliderValue,
                         min: 0,
                         max: 1,
-                        divisions: _duration.inSeconds > 0
-                            ? _duration.inSeconds
-                            : null,
+                        divisions: null,
                         // Disable interaction while initially loading a new
                         // track, but ALLOW it during post-seek buffering so
                         // users can re-seek without waiting for re-buffering
@@ -237,50 +232,42 @@ class _SeekBarState extends State<SeekBar> {
                                   _isScrubbing = true;
                                   _sliderValue = value;
                                 });
-                                _updateHoverPosition(
-                                    value * maxWidth, maxWidth);
+                                _updateHoverPosition(value * maxWidth, maxWidth);
                               },
-                        onChangeEnd:
-                            _isLoading && _pendingSeekPosition == null
-                                ? null
-                                : (value) {
-                                    final newPosition = _duration * value;
-                                    // Record as pending immediately so the
-                                    // thumb doesn't snap back.
-                                    setState(() {
-                                      _pendingSeekPosition = newPosition;
-                                      _isScrubbing = false;
-                                    });
-                                    handler.seek(newPosition);
-                                  },
+                        onChangeEnd: _isLoading && _pendingSeekPosition == null
+                            ? null
+                            : (value) {
+                                final newPosition = _duration * value;
+                                // Record as pending immediately so the
+                                // thumb doesn't snap back.
+                                setState(() {
+                                  _pendingSeekPosition = newPosition;
+                                  _isScrubbing = false;
+                                });
+                                handler.seek(newPosition);
+                              },
                       ),
                     ),
 
                     // Floating timestamp preview
                     AnimatedPositioned(
-                      duration: Duration(
-                          milliseconds: _isScrubbing ? 0 : 50),
+                      duration: Duration(milliseconds: _isScrubbing ? 0 : 50),
                       curve: Curves.easeOutCubic,
                       left: (_hoverX - 28).clamp(0.0, maxWidth - 56),
                       top: -34,
                       child: AnimatedOpacity(
                         duration: const Duration(milliseconds: 150),
-                        opacity:
-                            (_isHovering || _isScrubbing) && !_isLoading
-                                ? 1.0
-                                : 0.0,
+                        opacity: (_isHovering || _isScrubbing) && !_isLoading ? 1.0 : 0.0,
                         child: IgnorePointer(
                           child: Container(
                             width: 56,
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 4),
+                            padding: const EdgeInsets.symmetric(vertical: 4),
                             decoration: BoxDecoration(
                               color: previewBgColor,
                               borderRadius: BorderRadius.circular(6),
                               boxShadow: [
                                 BoxShadow(
-                                  color:
-                                      Colors.black.withValues(alpha: 0.2),
+                                  color: Colors.black.withValues(alpha: 0.2),
                                   blurRadius: 8,
                                   offset: const Offset(0, 3),
                                 ),
@@ -288,8 +275,7 @@ class _SeekBarState extends State<SeekBar> {
                             ),
                             child: Center(
                               child: Text(
-                                _formatDuration(_hoverDuration,
-                                    showHours: showHours),
+                                _formatDuration(_hoverDuration, showHours: showHours),
                                 style: TextStyle(
                                   color: previewTextColor,
                                   fontSize: 11,
@@ -309,8 +295,7 @@ class _SeekBarState extends State<SeekBar> {
           ),
         ),
         const SizedBox(width: 8),
-        Text(_formatDuration(_duration, showHours: showHours),
-            style: timestampStyle),
+        Text(_formatDuration(_duration, showHours: showHours), style: timestampStyle),
       ],
     );
   }
