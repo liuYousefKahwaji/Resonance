@@ -27,6 +27,7 @@
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
 #include <windows.h>
+#include <shobjidl.h>
 
 #include <memory>
 #include <optional>
@@ -37,6 +38,9 @@ namespace resonance {
 // per-process; arbitrary small integers are fine.
 constexpr int kHotkeyIdNext = 1001;
 constexpr int kHotkeyIdPrevious = 1002;
+constexpr int kTaskbarButtonPrevious = 2001;
+constexpr int kTaskbarButtonPlayPause = 2002;
+constexpr int kTaskbarButtonNext = 2003;
 
 class MediaKeysPlugin : public flutter::Plugin {
  public:
@@ -82,12 +86,16 @@ class MediaKeysPlugin : public flutter::Plugin {
 
   bool RegisterMediaKeys(HWND hwnd);
   void UnregisterMediaKeys();
+  bool SetupTaskbarButtons(HWND hwnd);
 
   flutter::PluginRegistrarWindows* registrar_;
   int window_proc_id_ = -1;
   bool registered_ = false;
   bool registration_requested_ = false;
+  bool taskbar_requested_ = false;
+  bool taskbar_ready_ = false;
   HWND registered_hwnd_ = nullptr;
+  ITaskbarList3* taskbar_list_ = nullptr;
 
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> event_sink_;
   std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>> event_channel_;

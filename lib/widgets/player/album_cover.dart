@@ -1,9 +1,11 @@
 // lib/widgets/player/album_cover.dart
 
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:metadata_god/metadata_god.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
@@ -15,18 +17,18 @@ class AlbumCover extends StatefulWidget {
   State<AlbumCover> createState() => _AlbumCoverState();
 }
 
-class _AlbumCoverState extends State<AlbumCover>
-    with SingleTickerProviderStateMixin {
+class _AlbumCoverState extends State<AlbumCover> with SingleTickerProviderStateMixin {
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnimation;
 
   @override
   void initState() {
     super.initState();
-    _pulseController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 2400));
-    _pulseAnimation = Tween<double>(begin: 0.3, end: 1.0).animate(
-        CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
+    _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
+    _pulseAnimation = Tween<double>(
+      begin: 0.3,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
     _pulseController.repeat(reverse: true);
   }
 
@@ -59,24 +61,25 @@ class _AlbumCoverState extends State<AlbumCover>
           initialData: handler.playbackState.value,
           builder: (context, playbackSnapshot) {
             final isPlaying = playbackSnapshot.data?.playing ?? false;
-            final processingState =
-                playbackSnapshot.data?.processingState ??
-                    AudioProcessingState.idle;
+            final processingState = playbackSnapshot.data?.processingState ?? AudioProcessingState.idle;
+            final currentId = item?.id ?? '';
+            final isStream = currentId.startsWith('http://') || currentId.startsWith('https://');
             final isLoading =
                 processingState == AudioProcessingState.loading ||
-                    processingState == AudioProcessingState.buffering;
+                (isStream && processingState == AudioProcessingState.buffering);
 
-            if (isLoading) {
-              if (_pulseController.isAnimating) _pulseController.stop();
-            } else if (isPlaying && !_pulseController.isAnimating) {
-              _pulseController.repeat(reverse: true);
-            } else if (!isPlaying && _pulseController.isAnimating) {
-              _pulseController.stop();
-            }
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              if (isLoading) {
+                if (_pulseController.isAnimating) _pulseController.stop();
+              } else if (isPlaying && !_pulseController.isAnimating) {
+                _pulseController.repeat(reverse: true);
+              } else if (!isPlaying && _pulseController.isAnimating) {
+                _pulseController.stop();
+              }
+            });
 
-            final maxW = screenWidth < 500
-                ? (screenWidth - 32.0).clamp(0.0, double.infinity)
-                : 640.0;
+            final maxW = screenWidth < 500 ? (screenWidth - 32.0).clamp(0.0, double.infinity) : 640.0;
 
             return Center(
               child: Container(
@@ -86,17 +89,13 @@ class _AlbumCoverState extends State<AlbumCover>
                 child: AnimatedBuilder(
                   animation: _pulseAnimation,
                   builder: (context, child) {
-                    final glowOpacity =
-                        isPlaying && !isLoading ? _pulseAnimation.value * 0.55 : 0.0;
+                    final glowOpacity = isPlaying && !isLoading ? _pulseAnimation.value * 0.55 : 0.0;
 
                     return Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: [
-                          BoxShadow(
-                              color: primary.withValues(alpha: glowOpacity),
-                              blurRadius: 20,
-                              spreadRadius: 0),
+                          BoxShadow(color: primary.withValues(alpha: glowOpacity), blurRadius: 20, spreadRadius: 0),
                           BoxShadow(
                             color: primary.withValues(alpha: glowOpacity * 0.4),
                             blurRadius: 40,
@@ -110,6 +109,7 @@ class _AlbumCoverState extends State<AlbumCover>
                   child: _NowPlayingCard(
                     title: title,
                     artist: artist,
+                    path: path,
                     isPlaying: isPlaying,
                     isLoading: isLoading,
                     hasTrack: item != null,
@@ -128,6 +128,7 @@ class _AlbumCoverState extends State<AlbumCover>
 class _NowPlayingCard extends StatelessWidget {
   final String title;
   final String artist;
+  final String path;
   final bool isPlaying;
   final bool isLoading;
   final bool hasTrack;
@@ -136,6 +137,7 @@ class _NowPlayingCard extends StatelessWidget {
   const _NowPlayingCard({
     required this.title,
     required this.artist,
+    required this.path,
     required this.isPlaying,
     required this.isLoading,
     required this.hasTrack,
@@ -147,8 +149,7 @@ class _NowPlayingCard extends StatelessWidget {
     final primary = Theme.of(context).colorScheme.primary;
     final surface = isDark ? const Color(0xFF1A1A2A) : Colors.white;
     final border = isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3);
-    final textPrimary =
-        isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A);
+    final textPrimary = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A);
     const textMuted = Color(0xFF64748B);
 
     final isActive = isPlaying || isLoading;
@@ -160,16 +161,13 @@ class _NowPlayingCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: isActive ? primary.withValues(alpha: 0.4) : border,
-            width: isActive ? 1.5 : 1),
+        border: Border.all(color: isActive ? primary.withValues(alpha: 0.4) : border, width: isActive ? 1.5 : 1),
       ),
       child: Row(
         // Prevent the Row from overflowing — each child must be sized.
         mainAxisSize: MainAxisSize.max,
         children: [
-          _AlbumIcon(
-              isPlaying: isPlaying, hasTrack: hasTrack, isLoading: isLoading),
+          _AlbumIcon(isPlaying: isPlaying, hasTrack: hasTrack, isLoading: isLoading, path: path),
           const SizedBox(width: 14),
           // Expanded forces the text column to take remaining space and
           // enables Text overflow / ellipsis to work correctly.
@@ -180,12 +178,7 @@ class _NowPlayingCard extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                    color: textPrimary,
-                    letterSpacing: -0.1,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: textPrimary, letterSpacing: -0.1),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   softWrap: false,
@@ -194,10 +187,7 @@ class _NowPlayingCard extends StatelessWidget {
                   const SizedBox(height: 3),
                   Text(
                     artist,
-                    style: const TextStyle(
-                        color: textMuted,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w400),
+                    style: const TextStyle(color: textMuted, fontSize: 12, fontWeight: FontWeight.w400),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     softWrap: false,
@@ -223,39 +213,52 @@ class _AlbumIcon extends StatefulWidget {
   final bool isPlaying;
   final bool isLoading;
   final bool hasTrack;
+  final String path;
 
-  const _AlbumIcon(
-      {required this.isPlaying,
-      required this.hasTrack,
-      required this.isLoading});
+  const _AlbumIcon({required this.isPlaying, required this.hasTrack, required this.path, required this.isLoading});
 
   @override
   State<_AlbumIcon> createState() => _AlbumIconState();
 }
 
-class _AlbumIconState extends State<_AlbumIcon>
-    with SingleTickerProviderStateMixin {
+class _AlbumIconState extends State<_AlbumIcon> with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+  Uint8List? _albumArt;
+  String? _loadedPath;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    );
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000));
     if (widget.isPlaying && !widget.isLoading) _controller.repeat();
+    _loadAlbumArt();
   }
 
   @override
   void didUpdateWidget(covariant _AlbumIcon old) {
     super.didUpdateWidget(old);
+    if (old.path != widget.path) {
+      _albumArt = null;
+      _loadedPath = null;
+      _loadAlbumArt();
+    }
     if (widget.isPlaying && !widget.isLoading && !_controller.isAnimating) {
       _controller.repeat();
-    } else if ((!widget.isPlaying || widget.isLoading) &&
-        _controller.isAnimating) {
+    } else if ((!widget.isPlaying || widget.isLoading) && _controller.isAnimating) {
       _controller.stop();
     }
+  }
+
+  Future<void> _loadAlbumArt() async {
+    final path = widget.path;
+    if (path.isEmpty || path.startsWith('http://') || path.startsWith('https://')) return;
+    _loadedPath = path;
+    try {
+      final metadata = await MetadataGod.readMetadata(file: path);
+      final data = metadata.picture?.data;
+      if (!mounted || _loadedPath != path || data == null || data.isEmpty) return;
+      setState(() => _albumArt = Uint8List.fromList(data));
+    } catch (_) {}
   }
 
   @override
@@ -268,44 +271,48 @@ class _AlbumIconState extends State<_AlbumIcon>
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark
-        ? primary.withValues(alpha: 0.15)
-        : primary.withValues(alpha: 0.08);
+    final bgColor = isDark ? primary.withValues(alpha: 0.15) : primary.withValues(alpha: 0.08);
 
-    return Container(
-      width: 42,
-      height: 42,
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-            color: (widget.isPlaying || widget.isLoading)
-                ? primary.withValues(alpha: 0.3)
-                : Colors.transparent,
-            width: 1),
-      ),
-      child: Center(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 200),
-          child: widget.isLoading
-              ? Padding(
-                  key: const ValueKey('loading'),
-                  padding: const EdgeInsets.all(10),
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: primary,
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: (widget.isPlaying || widget.isLoading) ? primary.withValues(alpha: 0.3) : Colors.transparent,
+            width: 1,
+          ),
+        ),
+        child: Center(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            child: _albumArt != null
+                ? Image.memory(
+                    _albumArt!,
+                    key: ValueKey('art-${widget.path}'),
+                    width: 42,
+                    height: 42,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  )
+                : widget.isLoading
+                ? Padding(
+                    key: const ValueKey('loading'),
+                    padding: const EdgeInsets.all(10),
+                    child: CircularProgressIndicator(strokeWidth: 2, color: primary),
+                  )
+                : widget.isPlaying
+                ? _WaveformIcon(key: const ValueKey('wave'), color: primary)
+                : Icon(
+                    key: const ValueKey('idle'),
+                    widget.hasTrack ? Icons.music_note_rounded : Icons.music_off_rounded,
+                    size: 20,
+                    color: primary.withValues(alpha: 0.6),
                   ),
-                )
-              : widget.isPlaying
-                  ? _WaveformIcon(key: const ValueKey('wave'), color: primary)
-                  : Icon(
-                      key: const ValueKey('idle'),
-                      widget.hasTrack
-                          ? Icons.music_note_rounded
-                          : Icons.music_off_rounded,
-                      size: 20,
-                      color: primary.withValues(alpha: 0.6),
-                    ),
+          ),
         ),
       ),
     );
@@ -363,9 +370,7 @@ class _WaveformIconState extends State<_WaveformIcon> {
               curve: Curves.easeInOutCubic,
               width: 2.8,
               height: _heights[i],
-              decoration: BoxDecoration(
-                  color: widget.color,
-                  borderRadius: BorderRadius.circular(2)),
+              decoration: BoxDecoration(color: widget.color, borderRadius: BorderRadius.circular(2)),
             ),
           );
         }),
@@ -389,19 +394,11 @@ class _LoadingBadge extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
-            width: 8,
-            height: 8,
-            child: CircularProgressIndicator(strokeWidth: 1.5, color: color),
-          ),
+          SizedBox(width: 8, height: 8, child: CircularProgressIndicator(strokeWidth: 1.5, color: color)),
           const SizedBox(width: 5),
           Text(
             'LOADING',
-            style: TextStyle(
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.8,
-                color: color),
+            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.8, color: color),
           ),
         ],
       ),
@@ -423,11 +420,7 @@ class _PlayingBadge extends StatelessWidget {
       ),
       child: Text(
         'NOW PLAYING',
-        style: TextStyle(
-            fontSize: 9,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.8,
-            color: primary),
+        style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.8, color: primary),
       ),
     );
   }

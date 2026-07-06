@@ -38,6 +38,7 @@ class MediaKeysService {
   static Future<bool> register({
     required VoidCallback onNext,
     required VoidCallback onPrevious,
+    VoidCallback? onPlayPause,
   }) async {
     if (_registered) return true;
 
@@ -52,6 +53,8 @@ class MediaKeysService {
             onNext();
           } else if (event == 'previous') {
             onPrevious();
+          } else if (event == 'play_pause') {
+            onPlayPause?.call();
           }
         },
         onError: (Object error) {
@@ -65,6 +68,14 @@ class MediaKeysService {
       // PlatformException, MissingPluginException (e.g. running on a
       // platform without this native plugin compiled in), etc.
       // Treat as "not available" rather than crashing the app.
+      return false;
+    }
+  }
+
+  static Future<bool> setupTaskbarButtons() async {
+    try {
+      return await _methodChannel.invokeMethod<bool>('setupTaskbarButtons') ?? false;
+    } catch (_) {
       return false;
     }
   }

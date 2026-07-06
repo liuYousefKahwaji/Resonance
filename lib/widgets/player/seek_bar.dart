@@ -12,12 +12,12 @@
 //     position catches up (within 1 s for local files, 3 s for streams).
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class SeekBar extends StatefulWidget {
   const SeekBar({super.key});
@@ -45,6 +45,7 @@ class _SeekBarState extends State<SeekBar> {
 
   // After a seek, hold the target position until the player catches up.
   Duration? _pendingSeekPosition;
+  int _seekStepSeconds = 5;
 
   double _hoverX = 0.0;
   Duration _hoverDuration = Duration.zero;
@@ -55,7 +56,14 @@ class _SeekBarState extends State<SeekBar> {
   @override
   void initState() {
     super.initState();
+    _loadSeekStep();
     _listenToPlayer();
+  }
+
+  Future<void> _loadSeekStep() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() => _seekStepSeconds = (prefs.getInt('seek_step_seconds') ?? 5).clamp(1, 15));
   }
 
   void _listenToPlayer() {
@@ -66,9 +74,7 @@ class _SeekBarState extends State<SeekBar> {
 
       if (_pendingSeekPosition != null) {
         // Catchup window: 1 s for local files, 3 s for streams.
-        final window = _currentTrackIsStream
-            ? const Duration(seconds: 3)
-            : const Duration(seconds: 1);
+        final window = _currentTrackIsStream ? const Duration(seconds: 3) : const Duration(seconds: 1);
         final diff = (position - _pendingSeekPosition!).abs();
         if (diff > window) {
           // Not caught up yet — keep showing pending position.
@@ -97,8 +103,7 @@ class _SeekBarState extends State<SeekBar> {
       // Determine if the current item is a stream.
       final handler2 = Provider.of<PlayerHandler>(context, listen: false);
       final currentId = handler2.mediaItem.value?.id ?? '';
-      _currentTrackIsStream =
-          currentId.startsWith('http://') || currentId.startsWith('https://');
+      _currentTrackIsStream = currentId.startsWith('http://') || currentId.startsWith('https://');
 
       final isLoading = state.processingState == AudioProcessingState.loading;
       final isBuffering = state.processingState == AudioProcessingState.buffering;
@@ -182,9 +187,7 @@ class _SeekBarState extends State<SeekBar> {
     // Dim the track while loading a new track OR while a stream is buffering
     // after a seek. Local-file seeks never dim the bar.
     final isDimmed = _isLoadingNewTrack || _isBuffering;
-    final activeTrackColor = isDimmed
-        ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8))
-        : primary;
+    final activeTrackColor = isDimmed ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8)) : primary;
 
     // Slider is disabled only while a NEW track is loading (not during seeks).
     final sliderDisabled = _isLoadingNewTrack;
@@ -194,6 +197,12 @@ class _SeekBarState extends State<SeekBar> {
       children: [
         Text(_formatDuration(_displayPosition, showHours: showHours), style: timestampStyle),
         const SizedBox(width: 8),
+        _SeekStepButton(
+          label: '-$_seekStepSeconds',
+          icon: Icons.replay_5_rounded,
+          onPressed: sliderDisabled ? null : () => handler.seekBySeconds(-_seekStepSeconds),
+        ),
+        const SizedBox(width: 6),
 
         // Spinner: only shown while a genuinely new track is loading.
         if (_isLoadingNewTrack)
@@ -228,9 +237,7 @@ class _SeekBarState extends State<SeekBar> {
                         showValueIndicator: ShowValueIndicator.never,
                         activeTrackColor: activeTrackColor,
                         inactiveTrackColor: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3),
-                        thumbColor: isDimmed
-                            ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8))
-                            : primary,
+                        thumbColor: isDimmed ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8)) : primary,
                         tickMarkShape: SliderTickMarkShape.noTickMark,
                         trackHeight: _isHovering ? 4.0 : 3.0,
                         thumbShape: RoundSliderThumbShape(
@@ -241,9 +248,7 @@ class _SeekBarState extends State<SeekBar> {
                         overlayColor: primary.withValues(alpha: 0.15),
                       ),
                       child: Slider(
-                        value: _isScrubbing
-                            ? _sliderValue.clamp(0.0, 1.0)
-                            : _displaySliderValue,
+                        value: _isScrubbing ? _sliderValue.clamp(0.0, 1.0) : _displaySliderValue,
                         min: 0,
                         max: 1,
                         divisions: null,
@@ -315,8 +320,56 @@ class _SeekBarState extends State<SeekBar> {
           ),
         ),
         const SizedBox(width: 8),
+        _SeekStepButton(
+          label: '+$_seekStepSeconds',
+          icon: Icons.forward_5_rounded,
+          onPressed: sliderDisabled ? null : () => handler.seekBySeconds(_seekStepSeconds),
+        ),
+        const SizedBox(width: 6),
         Text(_formatDuration(_duration, showHours: showHours), style: timestampStyle),
       ],
+    );
+  }
+}
+
+class _SeekStepButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback? onPressed;
+
+  const _SeekStepButton({required this.label, required this.icon, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Tooltip(
+      message: '$label seconds',
+      child: SizedBox(
+        width: 36,
+        height: 30,
+        child: IconButton(
+          onPressed: onPressed,
+          padding: EdgeInsets.zero,
+          icon: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(icon, size: 23, color: onPressed == null ? const Color(0xFF64748B) : primary),
+              Positioned(
+                bottom: 1,
+                child: Text(
+                  label.replaceAll('+', ''),
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

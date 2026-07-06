@@ -135,21 +135,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await super.click(button);
   }
 
-  @override
-  Future<void> fastForward() async => super.fastForward();
-
-  @override
-  Future<void> rewind() async => super.rewind();
-
-  @override
-  Future<void> seekForward(bool begin) async => super.seekForward(begin);
-
-  @override
-  Future<void> seekBackward(bool begin) async => super.seekBackward(begin);
-
-  @override
-  Future<void> stop() async => super.stop();
-
   // ─── Unicode path workaround ──────────────────────────────────────
   Future<String> _resolvePlayablePath(String filePath) async {
     final hasNonAscii = filePath.runes.any((r) => r > 127);
@@ -245,14 +230,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   bool get _isWindowsPlaying => _windowsPlayer?.state.playing ?? false;
 
-  Stream<bool> get _playingStream =>
-      Platform.isWindows ? _windowsPlayer!.stream.playing : _player.playingStream;
+  Stream<bool> get _playingStream => Platform.isWindows ? _windowsPlayer!.stream.playing : _player.playingStream;
 
-  Duration get _currentPosition =>
-      Platform.isWindows ? _windowsPosition : _player.position;
+  Duration get _currentPosition => Platform.isWindows ? _windowsPosition : _player.position;
 
-  Duration? get _currentDuration =>
-      Platform.isWindows ? _windowsDuration : _player.duration;
+  Duration? get _currentDuration => Platform.isWindows ? _windowsDuration : _player.duration;
 
   void _updatePlaybackState() {
     if (Platform.isWindows) {
@@ -277,8 +259,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           processingState: _windowsIsCompleted
               ? AudioProcessingState.completed
               : _windowsIsBuffering
-                  ? AudioProcessingState.buffering
-                  : AudioProcessingState.ready,
+              ? AudioProcessingState.buffering
+              : AudioProcessingState.ready,
           playing: playing,
           updatePosition: _windowsPosition,
           bufferedPosition: _windowsBufferedPosition,
@@ -433,11 +415,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
       // For streams: signal buffering, seek, then restore play state.
       final wasPlaying = _isWindowsPlaying;
+      final player = _windowsPlayer!;
       _windowsIsBuffering = true;
       _windowsPosition = position;
       _updatePlaybackState();
-      await _windowsPlayer!.seek(position);
-      if (wasPlaying) await _windowsPlayer!.play();
+      await player.seek(position);
+      if (wasPlaying) await player.play();
       _updatePlaybackState();
       return;
     }
@@ -502,10 +485,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
     // Optimistic UI update
     mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
-    playbackState.add(playbackState.value.copyWith(
-      processingState: AudioProcessingState.loading,
-      playing: false,
-    ));
+    playbackState.add(
+      playbackState.value.copyWith(
+        processingState: isStream ? AudioProcessingState.loading : AudioProcessingState.ready,
+        playing: false,
+      ),
+    );
 
     try {
       if (Platform.isWindows) {
@@ -527,10 +512,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           if (_loadGeneration != myGen) return;
           debugPrint('[PlayerHandler] Failed to build media_kit URI for "$filePath": $e');
           _streamUrlCache.remove(filePath);
-          playbackState.add(playbackState.value.copyWith(
-            processingState: AudioProcessingState.idle,
-            playing: false,
-          ));
+          playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
           return;
         }
 
@@ -562,10 +544,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           if (_loadGeneration != myGen) return;
           debugPrint('[PlayerHandler] Failed to build audio source for "$filePath": $e');
           _streamUrlCache.remove(filePath);
-          playbackState.add(playbackState.value.copyWith(
-            processingState: AudioProcessingState.idle,
-            playing: false,
-          ));
+          playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
           return;
         }
 
@@ -594,10 +573,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (_loadGeneration == myGen) {
         debugPrint('[PlayerHandler] Error loading track "$filePath": $e\n$st');
         _streamUrlCache.remove(filePath);
-        playbackState.add(playbackState.value.copyWith(
-          processingState: AudioProcessingState.idle,
-          playing: false,
-        ));
+        playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
         _updatePlaybackState();
       }
     }
@@ -632,6 +608,27 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> decrementVolume() async => changeVolume(volumeNotifier.value - 0.05);
   Future<void> incrementSpeed() async => setSpeed((speedNotifier.value + 0.1).clamp(0.5, 2.0));
   Future<void> decrementSpeed() async => setSpeed((speedNotifier.value - 0.1).clamp(0.5, 2.0));
+
+  Future<int> getSeekStepSeconds() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getInt('seek_step_seconds') ?? 5).clamp(1, 15);
+  }
+
+  Future<void> setSeekStepSeconds(int seconds) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('seek_step_seconds', seconds.clamp(1, 15));
+  }
+
+  Future<void> seekBySeconds(int seconds) async {
+    final duration = _currentDuration ?? Duration.zero;
+    final target = _currentPosition + Duration(seconds: seconds);
+    final clamped = target < Duration.zero
+        ? Duration.zero
+        : duration > Duration.zero && target > duration
+        ? duration
+        : target;
+    await seek(clamped);
+  }
 
   Future<void> toggleMute() async {
     if (volumeNotifier.value == 0) {
@@ -689,8 +686,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await loadTrack(playlist[prevIndex], meta.title, meta.artist);
   }
 
-  Future<bool> isPlaying() async =>
-      Platform.isWindows ? _isWindowsPlaying : _player.playing;
+  Future<bool> isPlaying() async => Platform.isWindows ? _isWindowsPlaying : _player.playing;
 
   /// FIX: Use the correct player for the current platform.
   Future<void> playPause() async {
@@ -709,11 +705,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
   }
 
-  Stream<Duration> get positionStream =>
-      Platform.isWindows ? _windowsPlayer!.stream.position : _player.positionStream;
+  Stream<Duration> get positionStream => Platform.isWindows ? _windowsPlayer!.stream.position : _player.positionStream;
 
-  Stream<Duration?> get durationStream =>
-      Platform.isWindows ? _windowsPlayer!.stream.duration : _player.durationStream;
+  Stream<Duration?> get durationStream => Platform.isWindows ? _windowsPlayer!.stream.duration : _player.durationStream;
 
   Future<void> setQueue(List<MediaItem> tracks) async {
     await updateQueue(tracks);

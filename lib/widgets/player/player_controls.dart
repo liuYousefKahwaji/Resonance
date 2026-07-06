@@ -54,11 +54,7 @@ class _MobileControls extends StatelessWidget {
   final bool isPlaying;
   final bool isMobile;
 
-  const _MobileControls({
-    required this.handler,
-    required this.isPlaying,
-    required this.isMobile,
-  });
+  const _MobileControls({required this.handler, required this.isPlaying, required this.isMobile});
 
   @override
   Widget build(BuildContext context) {
@@ -78,23 +74,11 @@ class _MobileControls extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _SkipButton(
-                  icon: Icons.skip_previous_rounded,
-                  onTap: handler.previous,
-                  size: 26,
-                ),
+                _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: 26),
                 const SizedBox(width: 16),
-                _PlayPauseButton(
-                  isPlaying: isPlaying,
-                  onTap: handler.playPause,
-                  size: 48,
-                ),
+                _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: 48),
                 const SizedBox(width: 16),
-                _SkipButton(
-                  icon: Icons.skip_next_rounded,
-                  onTap: handler.next,
-                  size: 26,
-                ),
+                _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: 26),
               ],
             ),
 
@@ -105,9 +89,7 @@ class _MobileControls extends StatelessWidget {
               children: [
                 // Left cluster — loop, shuffle, speed/pitch
                 const PlayerModes(),
-                isMobile
-                    ? const PlaybackSettings()
-                    : const SpeedControl(),
+                isMobile ? const PlaybackSettings() : const SpeedControl(),
 
                 const SizedBox(width: 8),
 
@@ -157,7 +139,7 @@ class _DesktopControls extends StatelessWidget {
                     children: [
                       const PlayerModes(),
                       const SizedBox(width: 4),
-                      isMobile ? const PlaybackSettings() : const SpeedControl(),
+                      Platform.isWindows || isMobile ? const PlaybackSettings() : const SpeedControl(),
                     ],
                   ),
                 ),

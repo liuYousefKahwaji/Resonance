@@ -32,12 +32,10 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
-//TODO: windows; red error while switching. android; overflow and flicker seek
-//TODO: seek buttons
-//TODO: Taskbar buttons
-//TODO: album cover
-//TODO: playlists...?
-//TODO: Intro
+//TODO: android; overflow and red flicker
+//TODO: seek buttons (dont update)
+//TODO: Taskbar buttons (dont work)
+//TODO: album cover (downloads dont come with album cover)
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -71,6 +69,8 @@ Future<void> main() async {
       'play_pause': handler.playPause,
       'next': handler.next,
       'previous': handler.previous,
+      'seek_backward': () async => handler.seekBySeconds(-(await handler.getSeekStepSeconds())),
+      'seek_forward': () async => handler.seekBySeconds(await handler.getSeekStepSeconds()),
       'volume_up': handler.incrementVolume,
       'volume_down': handler.decrementVolume,
       'speed_up': handler.incrementSpeed,
@@ -107,8 +107,10 @@ Future<void> main() async {
       MediaKeysService.register(
         onNext: () => handler.next(),
         onPrevious: () => handler.previous(),
+        onPlayPause: () => handler.playPause(),
       ).timeout(const Duration(seconds: 5), onTimeout: () => false),
     );
+    unawaited(MediaKeysService.setupTaskbarButtons());
   }
 }
 
@@ -178,8 +180,11 @@ class _DesktopWindowHandler with WindowListener, TrayListener {
 
 class _MainAppState extends State<MainApp> {
   List<String> playlist = [];
+  List<int> playlistNumbers = [FileService.defaultPlaylistNumber];
+  int activePlaylistNumber = FileService.defaultPlaylistNumber;
   bool isLoading = true;
   bool _isDragging = false;
+  bool _showIntro = false;
 
   final SettingsService _settingsService = SettingsService();
   _DesktopWindowHandler? _desktopHandler;
@@ -187,10 +192,21 @@ class _MainAppState extends State<MainApp> {
   @override
   void initState() {
     super.initState();
+    _initIntro();
     _loadPlaylistFromDisk();
     if (_isDesktop) {
       _initDesktop();
     }
+  }
+
+  Future<void> _initIntro() async {
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool('intro_enabled') ?? true;
+    if (!enabled || !mounted) return;
+    setState(() => _showIntro = true);
+    Future.delayed(const Duration(milliseconds: 2800), () {
+      if (mounted) setState(() => _showIntro = false);
+    });
   }
 
   Future<void> _initDesktop() async {
@@ -212,13 +228,30 @@ class _MainAppState extends State<MainApp> {
   }
 
   Future<void> _loadPlaylistFromDisk() async {
-    final fileData = await FileService().readTextFromFile();
+    final service = FileService();
+    final numbers = await service.listPlaylistNumbers();
+    final active = await service.getActivePlaylistNumber();
+    final fileData = await service.readTextFromFile();
     if (mounted) {
       setState(() {
+        playlistNumbers = numbers;
+        activePlaylistNumber = active;
         playlist = fileData.split('\n').where((line) => line.isNotEmpty).skip(1).toList();
         isLoading = false;
       });
     }
+  }
+
+  Future<void> _switchPlaylist(int number) async {
+    setState(() => isLoading = true);
+    await FileService().setActivePlaylistNumber(number);
+    await _loadPlaylistFromDisk();
+  }
+
+  Future<void> _createPlaylist() async {
+    setState(() => isLoading = true);
+    await FileService().createNextPlaylist();
+    await _loadPlaylistFromDisk();
   }
 
   void _handleReorder(int oldIndex, int newIndex) async {
@@ -263,10 +296,15 @@ class _MainAppState extends State<MainApp> {
           darkTheme: _buildDarkTheme(),
           home: Builder(
             builder: (nestedContext) {
-              return Scaffold(
-                backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
-                appBar: _buildAppBar(nestedContext),
-                body: _buildBody(nestedContext),
+              return Stack(
+                children: [
+                  Scaffold(
+                    backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
+                    appBar: _buildAppBar(nestedContext),
+                    body: _buildBody(nestedContext),
+                  ),
+                  if (_showIntro) const _IntroOverlay(),
+                ],
               );
             },
           ),
@@ -397,7 +435,7 @@ class _MainAppState extends State<MainApp> {
       child: Row(
         children: [
           Text(
-            trackCount == 0 ? 'No tracks' : '$trackCount ${trackCount == 1 ? 'track' : 'tracks'}',
+            'Playlist $activePlaylistNumber - ${trackCount == 0 ? 'No tracks' : '$trackCount ${trackCount == 1 ? 'track' : 'tracks'}'}',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w500,
@@ -406,6 +444,40 @@ class _MainAppState extends State<MainApp> {
             ),
           ),
           const Spacer(),
+          PopupMenuButton<int>(
+            tooltip: 'Switch playlist',
+            icon: const Icon(Icons.queue_music_rounded),
+            onSelected: (value) {
+              if (value == -1) {
+                _createPlaylist();
+              } else {
+                _switchPlaylist(value);
+              }
+            },
+            itemBuilder: (context) => [
+              for (final number in playlistNumbers)
+                PopupMenuItem<int>(
+                  value: number,
+                  child: Row(
+                    children: [
+                      Icon(
+                        number == activePlaylistNumber
+                            ? Icons.radio_button_checked_rounded
+                            : Icons.radio_button_unchecked_rounded,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Text('Playlist $number'),
+                    ],
+                  ),
+                ),
+              const PopupMenuDivider(),
+              const PopupMenuItem<int>(
+                value: -1,
+                child: Row(children: [Icon(Icons.add_rounded, size: 18), SizedBox(width: 8), Text('New playlist')]),
+              ),
+            ],
+          ),
           // Import button — renders its own IconButton; theme handles styling
           ImportTrackButton(
             onFileAdded: (String newPath) {
@@ -434,6 +506,77 @@ class _MainAppState extends State<MainApp> {
             },
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _IntroOverlay extends StatefulWidget {
+  const _IntroOverlay();
+
+  @override
+  State<_IntroOverlay> createState() => _IntroOverlayState();
+}
+
+class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _scale;
+  late final Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600))..forward();
+    _scale = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.92, end: 1.04).chain(CurveTween(curve: Curves.easeOutCubic)), weight: 45),
+      TweenSequenceItem(tween: Tween(begin: 1.04, end: 1.0).chain(CurveTween(curve: Curves.easeInOut)), weight: 25),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.98).chain(CurveTween(curve: Curves.easeIn)), weight: 30),
+    ]).animate(_controller);
+    _opacity = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 20),
+      TweenSequenceItem(tween: ConstantTween(1.0), weight: 55),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 25),
+    ]).animate(_controller);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).colorScheme.primary;
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          return Opacity(
+            opacity: _opacity.value,
+            child: Container(
+              color: isDark ? const Color(0xFF0D0D14) : const Color(0xFFFAFAFF),
+              child: Center(
+                child: Transform.scale(
+                  scale: _scale.value,
+                  child: Container(
+                    width: 132,
+                    height: 132,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(color: primary.withValues(alpha: 0.35), blurRadius: 38, spreadRadius: 6),
+                        BoxShadow(color: primary.withValues(alpha: 0.18), blurRadius: 90, spreadRadius: 18),
+                      ],
+                    ),
+                    child: ClipOval(child: Image.asset('assets/icon/icon.png', fit: BoxFit.cover)),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }

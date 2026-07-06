@@ -47,6 +47,7 @@ dev_dependencies:
 flutter:
   assets:
     - assets/images/tray_icon.ico
+    - assets/icon/icon.png
     - assets/bin/yt-dlp.exe
     - assets/bin/ffmpeg.exe
     - assets/bin/ffprobe.exe

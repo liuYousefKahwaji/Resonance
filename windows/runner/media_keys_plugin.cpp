@@ -96,9 +96,53 @@ MediaKeysPlugin::MediaKeysPlugin(flutter::PluginRegistrarWindows* registrar) : r
 
 MediaKeysPlugin::~MediaKeysPlugin() {
   UnregisterMediaKeys();
+  if (taskbar_list_ != nullptr) {
+    taskbar_list_->Release();
+    taskbar_list_ = nullptr;
+  }
   if (window_proc_id_ != -1) {
     registrar_->UnregisterTopLevelWindowProcDelegate(window_proc_id_);
   }
+}
+
+bool MediaKeysPlugin::SetupTaskbarButtons(HWND hwnd) {
+  if (taskbar_ready_) return true;
+  if (hwnd == nullptr) return false;
+
+  if (taskbar_list_ == nullptr) {
+    HRESULT create_hr = CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
+                                         IID_PPV_ARGS(&taskbar_list_));
+    if (FAILED(create_hr) || taskbar_list_ == nullptr) {
+      return false;
+    }
+    HRESULT init_hr = taskbar_list_->HrInit();
+    if (FAILED(init_hr)) {
+      return false;
+    }
+  }
+
+  THUMBBUTTON buttons[3] = {};
+  buttons[0].dwMask = THB_FLAGS | THB_TOOLTIP;
+  buttons[0].iId = kTaskbarButtonPrevious;
+  buttons[0].dwFlags = THBF_ENABLED;
+  wcscpy_s(buttons[0].szTip, L"Previous");
+
+  buttons[1].dwMask = THB_FLAGS | THB_TOOLTIP;
+  buttons[1].iId = kTaskbarButtonPlayPause;
+  buttons[1].dwFlags = THBF_ENABLED;
+  wcscpy_s(buttons[1].szTip, L"Play / Pause");
+
+  buttons[2].dwMask = THB_FLAGS | THB_TOOLTIP;
+  buttons[2].iId = kTaskbarButtonNext;
+  buttons[2].dwFlags = THBF_ENABLED;
+  wcscpy_s(buttons[2].szTip, L"Next");
+
+  HRESULT hr = taskbar_list_->ThumbBarAddButtons(hwnd, 3, buttons);
+  if (FAILED(hr)) {
+    hr = taskbar_list_->ThumbBarUpdateButtons(hwnd, 3, buttons);
+  }
+  taskbar_ready_ = SUCCEEDED(hr);
+  return taskbar_ready_;
 }
 
 bool MediaKeysPlugin::RegisterMediaKeys(HWND hwnd) {
@@ -180,6 +224,26 @@ std::optional<LRESULT> MediaKeysPlugin::HandleWindowProc(HWND hwnd, UINT message
     }
   }
 
+  if (taskbar_requested_ && !taskbar_ready_) {
+    SetupTaskbarButtons(hwnd);
+  }
+
+  if (message == WM_COMMAND) {
+    const int id = LOWORD(wparam);
+    if (event_sink_) {
+      if (id == kTaskbarButtonPrevious) {
+        event_sink_->Success(flutter::EncodableValue(std::string("previous")));
+        return 0;
+      } else if (id == kTaskbarButtonPlayPause) {
+        event_sink_->Success(flutter::EncodableValue(std::string("play_pause")));
+        return 0;
+      } else if (id == kTaskbarButtonNext) {
+        event_sink_->Success(flutter::EncodableValue(std::string("next")));
+        return 0;
+      }
+    }
+  }
+
   if (message == WM_HOTKEY) {
     int id = static_cast<int>(wparam);
 
@@ -238,6 +302,9 @@ void MediaKeysPlugin::HandleMethodCall(
   } else if (call.method_name() == "unregister") {
     registration_requested_ = false;
     UnregisterMediaKeys();
+    result->Success(flutter::EncodableValue(true));
+  } else if (call.method_name() == "setupTaskbarButtons") {
+    taskbar_requested_ = true;
     result->Success(flutter::EncodableValue(true));
   } else {
     result->NotImplemented();

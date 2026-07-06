@@ -402,40 +402,40 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             },
           ),
           const SizedBox(height: 16),
-          // FIX: Wrap prevents overflow on narrow screens.
-          // Buttons flow to the next line if they don't all fit on one row.
-          Wrap(
-            alignment: WrapAlignment.end,
-            spacing: 8,
-            runSpacing: 8,
+          Row(
             children: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  side: BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6)),
-                  foregroundColor: Theme.of(context).colorScheme.primary,
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              const SizedBox(width: 6),
+              Expanded(
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    side: BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6)),
+                    foregroundColor: Theme.of(context).colorScheme.primary,
+                  ),
+                  onPressed: () {
+                    final url = _urlController.text.trim();
+                    if (url.isNotEmpty) _startStreamUrl(url);
+                  },
+                  icon: const Icon(Icons.sensors_rounded, size: 18),
+                  label: const FittedBox(child: Text('Stream')),
                 ),
-                onPressed: () {
-                  final url = _urlController.text.trim();
-                  if (url.isNotEmpty) _startStreamUrl(url);
-                },
-                icon: const Icon(Icons.sensors_rounded, size: 18),
-                label: const Text('Stream'),
               ),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () {
+                    final url = _urlController.text.trim();
+                    if (url.isNotEmpty) _startDownload(url);
+                  },
+                  icon: const Icon(Icons.download_rounded, size: 18),
+                  label: const FittedBox(child: Text('Download')),
                 ),
-                onPressed: () {
-                  final url = _urlController.text.trim();
-                  if (url.isNotEmpty) _startDownload(url);
-                },
-                icon: const Icon(Icons.download_rounded, size: 18),
-                label: const Text('Download'),
               ),
             ],
           ),
@@ -458,14 +458,9 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
+                style: ElevatedButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                 onPressed: _runSearch,
                 icon: const Icon(Icons.search_rounded, size: 18),
                 label: const Text('Search'),
@@ -504,10 +499,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
       children: [
         Row(
           children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => setState(() => _mode = _DialogMode.input),
-            ),
+            IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => setState(() => _mode = _DialogMode.input)),
             Expanded(
               child: Text(
                 'Results for "${_searchController.text}"',
@@ -538,10 +530,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                   backgroundColor: theme.colorScheme.primaryContainer,
                   child: Text(
                     '${i + 1}',
-                    style: TextStyle(
-                      color: theme.colorScheme.onPrimaryContainer,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(color: theme.colorScheme.onPrimaryContainer, fontWeight: FontWeight.bold),
                   ),
                 ),
                 title: Text(
@@ -589,10 +578,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
         const SizedBox(height: 8),
         Align(
           alignment: Alignment.centerRight,
-          child: TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
+          child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         ),
       ],
     );

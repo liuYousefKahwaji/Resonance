@@ -15,8 +15,7 @@ import 'package:restart_app/restart_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/providers/theme_provider.dart';
 
-bool get _isDesktop =>
-    Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -28,33 +27,58 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   TrayMode _selectedMode = TrayMode.closeToTray;
   bool _discordEnabled = true;
+  bool _introEnabled = true;
   String _downloadDirectory = 'Default App Folder';
+  int _seekStepSeconds = 5;
   final SettingsService _settingsService = SettingsService();
 
   @override
   void initState() {
     super.initState();
     _loadDownloadDirectory();
+    _loadSeekStep();
+    _loadIntroPreference();
     if (_isDesktop) {
       _loadTrayMode();
       _loadDiscordPreference();
     }
   }
 
+  Future<void> _loadIntroPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) setState(() => _introEnabled = prefs.getBool('intro_enabled') ?? true);
+  }
+
+  Future<void> _toggleIntro(bool value) async {
+    setState(() => _introEnabled = value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('intro_enabled', value);
+  }
+
+  Future<void> _loadSeekStep() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() => _seekStepSeconds = (prefs.getInt('seek_step_seconds') ?? 5).clamp(1, 15));
+    }
+  }
+
+  Future<void> _saveSeekStep(int value, PlayerHandler handler) async {
+    final clamped = value.clamp(1, 15);
+    setState(() => _seekStepSeconds = clamped);
+    await handler.setSeekStepSeconds(clamped);
+  }
+
   Future<void> _loadDownloadDirectory() async {
     final prefs = await SharedPreferences.getInstance();
     if (mounted) {
       setState(() {
-        _downloadDirectory =
-            prefs.getString('download_directory') ?? 'Default App Folder';
+        _downloadDirectory = prefs.getString('download_directory') ?? 'Default App Folder';
       });
     }
   }
 
   Future<void> _pickDownloadDirectory() async {
-    final selectedDirectory = await FilePicker.getDirectoryPath(
-      dialogTitle: 'Select Music Download Location',
-    );
+    final selectedDirectory = await FilePicker.getDirectoryPath(dialogTitle: 'Select Music Download Location');
     if (selectedDirectory != null) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('download_directory', selectedDirectory);
@@ -96,17 +120,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         barrierDismissible: false,
         builder: (context) => AlertDialog(
           title: const Text('Restart Required'),
-          content: const Text(
-              'Tray mode changes need a restart to take effect.'),
+          content: const Text('Tray mode changes need a restart to take effect.'),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Later'),
-            ),
-            ElevatedButton(
-              onPressed: () => Restart.restartApp(),
-              child: const Text('Restart Now'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Later')),
+            ElevatedButton(onPressed: () => Restart.restartApp(), child: const Text('Restart Now')),
           ],
         ),
       );
@@ -127,10 +144,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           letterSpacing: 0.1,
           color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A),
         ),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () => Navigator.pop(context),
-        ),
+        leading: IconButton(icon: const Icon(Icons.arrow_back_rounded), onPressed: () => Navigator.pop(context)),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -146,12 +160,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     return _SettingsTile(
                       icon: Icons.dark_mode_rounded,
                       title: 'Dark Mode',
-                      trailing: Switch(
-                        value: themeProvider.isDarkMode,
-                        onChanged: themeProvider.toggleTheme,
-                      ),
+                      trailing: Switch(value: themeProvider.isDarkMode, onChanged: themeProvider.toggleTheme),
                     );
                   },
+                ),
+                _Divider(),
+                _SettingsTile(
+                  icon: Icons.auto_awesome_rounded,
+                  title: 'Startup Intro',
+                  subtitle: 'Show the Resonance pulse when the app opens',
+                  trailing: Switch(value: _introEnabled, onChanged: _toggleIntro),
+                ),
+              ],
+            ),
+
+            // ── Playback ────────────────────────────────────────────
+            _SectionHeader(label: 'Playback'),
+            _SettingsCard(
+              children: [
+                _SettingsTile(
+                  icon: Icons.forward_5_rounded,
+                  title: 'Seek Step',
+                  subtitle: 'Used by seek buttons and seek hotkeys',
+                  trailing: SizedBox(
+                    width: 180,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Expanded(
+                          child: Slider(
+                            value: _seekStepSeconds.toDouble(),
+                            min: 1,
+                            max: 15,
+                            divisions: 14,
+                            label: '${_seekStepSeconds}s',
+                            onChanged: (value) => _saveSeekStep(value.round(), handler),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 34,
+                          child: Text(
+                            '${_seekStepSeconds}s',
+                            textAlign: TextAlign.right,
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -166,9 +222,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: _downloadDirectory,
                   trailing: Icon(
                     Icons.chevron_right_rounded,
-                    color: isDark
-                        ? const Color(0xFF475569)
-                        : const Color(0xFFABA8C8),
+                    color: isDark ? const Color(0xFF475569) : const Color(0xFFABA8C8),
                   ),
                   onTap: _pickDownloadDirectory,
                 ),
@@ -180,22 +234,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _SectionHeader(label: 'Hotkeys'),
               _SettingsCard(
                 children: [
+                  HotkeySettingsTile(actionId: 'play_pause', actionName: 'Play / Pause', callback: handler.playPause),
+                  _Divider(),
+                  HotkeySettingsTile(actionId: 'next', actionName: 'Next Track', callback: handler.next),
+                  _Divider(),
+                  HotkeySettingsTile(actionId: 'previous', actionName: 'Previous Track', callback: handler.previous),
+                  _Divider(),
                   HotkeySettingsTile(
-                    actionId: 'play_pause',
-                    actionName: 'Play / Pause',
-                    callback: handler.playPause,
+                    actionId: 'seek_backward',
+                    actionName: 'Seek Backward',
+                    callback: () async => handler.seekBySeconds(-(await handler.getSeekStepSeconds())),
                   ),
                   _Divider(),
                   HotkeySettingsTile(
-                    actionId: 'next',
-                    actionName: 'Next Track',
-                    callback: handler.next,
-                  ),
-                  _Divider(),
-                  HotkeySettingsTile(
-                    actionId: 'previous',
-                    actionName: 'Previous Track',
-                    callback: handler.previous,
+                    actionId: 'seek_forward',
+                    actionName: 'Seek Forward',
+                    callback: () async => handler.seekBySeconds(await handler.getSeekStepSeconds()),
                   ),
                   _Divider(),
                   HotkeySettingsTile(
@@ -231,12 +285,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _SettingsCard(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 4, vertical: 8),
-                    child: TraySettings(
-                      selectedMode: _selectedMode,
-                      onChanged: _saveTrayMode,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                    child: TraySettings(selectedMode: _selectedMode, onChanged: _saveTrayMode),
                   ),
                 ],
               ),
@@ -251,10 +301,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.discord,
                     title: 'Discord Rich Presence',
                     subtitle: 'Show what you\'re listening to on Discord',
-                    trailing: Switch(
-                      value: _discordEnabled,
-                      onChanged: _toggleDiscord,
-                    ),
+                    trailing: Switch(value: _discordEnabled, onChanged: _toggleDiscord),
                   ),
                 ],
               ),
@@ -271,19 +318,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     subtitle: 'Required to import music files',
                     trailing: const Icon(Icons.open_in_new_rounded, size: 16),
                     onTap: () async {
-                      final granted =
-                          await StoragePermissionService.hasPermission();
+                      final granted = await StoragePermissionService.hasPermission();
                       if (granted) {
                         if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Audio permission already granted ✓'),
-                            ),
-                          );
+                          ScaffoldMessenger.of(
+                            context,
+                          ).showSnackBar(const SnackBar(content: Text('Audio permission already granted ✓')));
                         }
                       } else {
-                        await StoragePermissionService.requestWithRationale(
-                            context);
+                        await StoragePermissionService.requestWithRationale(context);
                       }
                     },
                   ),
@@ -336,14 +379,9 @@ class _SettingsCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1A1A2A) : Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3),
-          width: 1,
-        ),
+        border: Border.all(color: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3), width: 1),
       ),
-      child: Column(
-        children: children,
-      ),
+      child: Column(children: children),
     );
   }
 }
@@ -355,13 +393,7 @@ class _SettingsTile extends StatelessWidget {
   final Widget? trailing;
   final VoidCallback? onTap;
 
-  const _SettingsTile({
-    required this.icon,
-    required this.title,
-    this.subtitle,
-    this.trailing,
-    this.onTap,
-  });
+  const _SettingsTile({required this.icon, required this.title, this.subtitle, this.trailing, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -374,9 +406,7 @@ class _SettingsTile extends StatelessWidget {
         width: 36,
         height: 36,
         decoration: BoxDecoration(
-          color: isDark
-              ? primary.withValues(alpha: 0.12)
-              : primary.withValues(alpha: 0.08),
+          color: isDark ? primary.withValues(alpha: 0.12) : primary.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(9),
         ),
         child: Icon(icon, size: 18, color: primary),
@@ -392,10 +422,7 @@ class _SettingsTile extends StatelessWidget {
       subtitle: subtitle != null
           ? Text(
               subtitle!,
-              style: const TextStyle(
-                fontSize: 12,
-                color: Color(0xFF64748B),
-              ),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             )
@@ -413,12 +440,7 @@ class _Divider extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.only(left: 68),
-      child: Divider(
-        height: 1,
-        thickness: 1,
-        color:
-            isDark ? const Color(0xFF1F1F30) : const Color(0xFFF0EFF5),
-      ),
+      child: Divider(height: 1, thickness: 1, color: isDark ? const Color(0xFF1F1F30) : const Color(0xFFF0EFF5)),
     );
   }
 }

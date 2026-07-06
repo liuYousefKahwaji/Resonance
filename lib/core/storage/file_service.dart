@@ -1,24 +1,91 @@
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FileService {
-  
+  static const String _activePlaylistKey = 'active_resonance_playlist';
+  static const int defaultPlaylistNumber = 1;
+
   // 1. Get the directory path safely
   Future<String> get _localPath async {
     final directory = await getApplicationDocumentsDirectory();
     return directory.path;
   }
 
-  // 2. ONLY returns the file reference (No reading/writing allowed here!)
-  Future<File> get _localFile async {
+  Future<File> _playlistFile(int number) async {
+    final path = await _localPath;
+    return File('$path/r_playlist_$number.m3u8');
+  }
+
+  Future<File> get _legacyFile async {
     final path = await _localPath;
     return File('$path/playlist.m3u8');
+  }
+
+  Future<int> getActivePlaylistNumber() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_activePlaylistKey) ?? defaultPlaylistNumber;
+  }
+
+  Future<void> setActivePlaylistNumber(int number) async {
+    final safeNumber = number < 1 ? defaultPlaylistNumber : number;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_activePlaylistKey, safeNumber);
+    final file = await _playlistFile(safeNumber);
+    if (!await file.exists()) {
+      await file.writeAsString("#\n");
+    }
+  }
+
+  Future<List<int>> listPlaylistNumbers() async {
+    await _ensureDefaultPlaylist();
+    final path = await _localPath;
+    final dir = Directory(path);
+    final numbers = <int>{};
+    if (await dir.exists()) {
+      await for (final entity in dir.list()) {
+        if (entity is! File) continue;
+        final match = RegExp(r'r_playlist_(\d+)\.m3u8$').firstMatch(entity.path);
+        if (match == null) continue;
+        final number = int.tryParse(match.group(1)!);
+        if (number != null) numbers.add(number);
+      }
+    }
+    if (numbers.isEmpty) numbers.add(defaultPlaylistNumber);
+    final sorted = numbers.toList()..sort();
+    return sorted;
+  }
+
+  Future<int> createNextPlaylist() async {
+    final numbers = await listPlaylistNumbers();
+    final next = numbers.isEmpty ? defaultPlaylistNumber : numbers.last + 1;
+    final file = await _playlistFile(next);
+    await file.writeAsString("#\n");
+    await setActivePlaylistNumber(next);
+    return next;
+  }
+
+  Future<File> get _localFile async {
+    await _ensureDefaultPlaylist();
+    return _playlistFile(await getActivePlaylistNumber());
+  }
+
+  Future<void> _ensureDefaultPlaylist() async {
+    final defaultFile = await _playlistFile(defaultPlaylistNumber);
+    if (await defaultFile.exists()) return;
+
+    final legacy = await _legacyFile;
+    if (await legacy.exists()) {
+      await legacy.rename(defaultFile.path);
+    } else {
+      await defaultFile.writeAsString("#\n");
+    }
   }
 
   // 3. Write data to the file (with optional append flag)
   Future<File> writeTextToFile(String text, {bool append = false}) async {
     final file = await _localFile;
-    
+
     if (append) {
       // Use append mode so you don't overwrite existing songs!
       return file.writeAsString(text, mode: FileMode.append);
@@ -34,7 +101,7 @@ class FileService {
 
       if (await file.exists()) {
         String contents = await file.readAsString();
-        
+
         // If the file is empty or missing the M3U header, initialize it properly
         if (!contents.startsWith("#")) {
           contents = "#\n$contents";
@@ -42,26 +109,25 @@ class FileService {
         }
         return contents;
       }
-      
+
       // If file doesn't exist, create it with a header and return empty contents
       await file.writeAsString("#\n");
       return "#\n";
-      
     } catch (e) {
       return "Error reading file: $e";
     }
   }
 
-  Future<void> removeFromPlaylist(String filePath) async{
+  Future<void> removeFromPlaylist(String filePath) async {
     try {
       final file = await _localFile;
-      if(await file.exists()){
+      if (await file.exists()) {
         final contents = await file.readAsString();
         final lines = contents.split("\n");
         final updatedLines = lines.where((line) => line != filePath).toList();
         await file.writeAsString(updatedLines.join("\n"));
       }
-    } catch (_){}
+    } catch (_) {}
   }
 
   /// Overwrites the playlist file with [newOrder] as the new track sequence.
