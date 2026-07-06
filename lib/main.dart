@@ -32,9 +32,12 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
+//TODO: windows; red error while switching. android; overflow and flicker seek
 //TODO: seek buttons
-//TODO: Intro
 //TODO: Taskbar buttons
+//TODO: album cover
+//TODO: playlists...?
+//TODO: Intro
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
