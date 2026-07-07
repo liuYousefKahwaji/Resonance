@@ -48,10 +48,7 @@ flutter:
   assets:
     - assets/images/tray_icon.ico
     - assets/icon/icon.png
-    - assets/bin/yt-dlp.exe
-    - assets/bin/ffmpeg.exe
-    - assets/bin/ffprobe.exe
-    - assets/bin/deno.exe
+    - assets/audio/intro.mp3
   uses-material-design: true
 
 flutter_launcher_icons:

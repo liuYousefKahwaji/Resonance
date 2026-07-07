@@ -102,6 +102,17 @@ install(CODE "
 install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
 
+# Windows-only downloader tools must not be Flutter assets: Flutter assets are
+# platform-agnostic and were inflating the Android APK by more than 320 MB.
+install(CODE "
+  file(REMOVE_RECURSE \"${CMAKE_INSTALL_PREFIX}/bin\")
+  " COMPONENT Runtime)
+install(FILES
+  "${CMAKE_SOURCE_DIR}/../assets/bin/yt-dlp.exe"
+  "${CMAKE_SOURCE_DIR}/../assets/bin/ffmpeg.exe"
+  "${CMAKE_SOURCE_DIR}/../assets/bin/deno.exe"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/bin" COMPONENT Runtime)
+
 # Install the AOT library on non-Debug builds only.
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release

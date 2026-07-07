@@ -150,6 +150,7 @@ def download(url: str, output_dir: str, event_sink) -> None:
       "error:<message>"
     """
     import os
+    from urllib.request import Request, urlopen
     from urllib.parse import quote
 
     output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
@@ -179,6 +180,28 @@ def download(url: str, output_dir: str, event_sink) -> None:
                 else ""
             )
             event_sink.success(f"progress:99.0:{prefix}Processing audio...")
+            filepath = os.fsdecode(
+                d.get("filename") or d.get("info_dict", {}).get("filepath", "")
+            )
+            info = d.get("info_dict", {})
+            if filepath:
+                title = info.get("title") or ""
+                artist = info.get("uploader") or info.get("channel") or info.get("artist") or ""
+                cover_path = ""
+                thumbnail_url = info.get("thumbnail")
+                if thumbnail_url:
+                    try:
+                        cover_path = filepath + ".cover"
+                        request = Request(thumbnail_url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urlopen(request, timeout=20) as response, open(cover_path, "wb") as cover:
+                            cover.write(response.read())
+                    except Exception:
+                        cover_path = ""
+                event_sink.success(
+                    f"track:{filepath}|{quote(title, safe='')}|{quote(artist, safe='')}"
+                    f"|{quote(cover_path, safe='')}"
+                )
+                current_item[0] += 1
 
     def postprocessor_hook(d):
         if d.get("status") == "finished":
@@ -203,20 +226,14 @@ def download(url: str, output_dir: str, event_sink) -> None:
 
     opts = {
         **_BASE_OPTS,
-        "format": "bestaudio/best",
+        # Prefer a directly downloadable audio file. HLS/DASH merging would
+        # make yt-dlp look for an external ffmpeg binary, which does not exist
+        # in the Android Python runtime; Flutter converts the result afterward.
+        "format": "bestaudio[protocol^=http][vcodec=none]/bestaudio[protocol^=http]/best[protocol^=http]",
         "outtmpl": output_template,
         "progress_hooks": [progress_hook],
-        "postprocessor_hooks": [postprocessor_hook],
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            },
-            {"key": "EmbedThumbnail"},
-            {"key": "FFmpegMetadata"},
-        ],
-        "writethumbnail": False,
+        # Conversion is handled by the app's bundled FFmpegKit library.
+        # Never ask yt-dlp to locate desktop ffmpeg/ffprobe executables on Android.
         "yes_playlist": True,
     }
 

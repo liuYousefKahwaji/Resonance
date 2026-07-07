@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
@@ -19,6 +20,7 @@ import 'package:resonance/widgets/youtube/windows_youtube.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:metadata_god/metadata_god.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:just_audio/just_audio.dart' as ja;
 
 // Desktop-only imports — guarded at runtime with Platform checks
 import 'package:resonance/platform/desktop/hotkey_service.dart'
@@ -111,6 +113,9 @@ Future<void> main() async {
       ).timeout(const Duration(seconds: 5), onTimeout: () => false),
     );
     unawaited(MediaKeysService.setupTaskbarButtons());
+    handler.playbackState.listen((state) {
+      unawaited(MediaKeysService.updateTaskbarPlaying(state.playing));
+    });
   }
 }
 
@@ -126,9 +131,9 @@ class MainApp extends StatefulWidget {
 class _DesktopWindowHandler with WindowListener, TrayListener {
   final VoidCallback onShow;
   final VoidCallback onExit;
-  final SettingsService settingsService;
+  final TrayMode trayMode;
 
-  _DesktopWindowHandler({required this.onShow, required this.onExit, required this.settingsService}) {
+  _DesktopWindowHandler({required this.onShow, required this.onExit, required this.trayMode}) {
     windowManager.addListener(this);
     trayManager.addListener(this);
   }
@@ -139,11 +144,10 @@ class _DesktopWindowHandler with WindowListener, TrayListener {
   }
 
   @override
-  void onWindowClose() async {
-    final mode = await settingsService.getTrayMode();
-    switch (mode) {
+  void onWindowClose() {
+    switch (trayMode) {
       case TrayMode.closeToTray:
-        await windowManager.hide();
+        unawaited(windowManager.hide());
         break;
       case TrayMode.minimizeToTray:
       case TrayMode.noTray:
@@ -153,12 +157,11 @@ class _DesktopWindowHandler with WindowListener, TrayListener {
   }
 
   @override
-  void onWindowMinimize() async {
-    final mode = await settingsService.getTrayMode();
-    if (mode == TrayMode.minimizeToTray) {
-      await windowManager.hide();
+  void onWindowMinimize() {
+    if (trayMode == TrayMode.minimizeToTray) {
+      unawaited(windowManager.hide());
     } else {
-      await windowManager.minimize();
+      unawaited(windowManager.minimize());
     }
   }
 
@@ -181,10 +184,19 @@ class _DesktopWindowHandler with WindowListener, TrayListener {
 class _MainAppState extends State<MainApp> {
   List<String> playlist = [];
   List<int> playlistNumbers = [FileService.defaultPlaylistNumber];
+  Map<int, String> playlistNames = {FileService.defaultPlaylistNumber: 'Playlist 1'};
   int activePlaylistNumber = FileService.defaultPlaylistNumber;
   bool isLoading = true;
   bool _isDragging = false;
-  bool _showIntro = false;
+  // Start behind an opaque launch gate. Preferences decide whether the gate
+  // animates or is removed; the library is never painted for a stray frame.
+  bool _showIntro = true;
+  ja.AudioPlayer? _introPlayer;
+  final ScrollController _playlistScrollController = ScrollController();
+  int _trackPulse = 0;
+  String? _pulsingTrackPath;
+  bool _exitInProgress = false;
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
 
   final SettingsService _settingsService = SettingsService();
   _DesktopWindowHandler? _desktopHandler;
@@ -202,9 +214,17 @@ class _MainAppState extends State<MainApp> {
   Future<void> _initIntro() async {
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool('intro_enabled') ?? true;
-    if (!enabled || !mounted) return;
-    setState(() => _showIntro = true);
-    Future.delayed(const Duration(milliseconds: 2800), () {
+    if (!mounted) return;
+    if (!enabled) {
+      setState(() => _showIntro = false);
+      return;
+    }
+    _introPlayer = ja.AudioPlayer();
+    try {
+      await _introPlayer!.setAsset('assets/audio/intro.mp3');
+      unawaited(_introPlayer!.play());
+    } catch (_) {}
+    Future.delayed(const Duration(milliseconds: 3100), () {
       if (mounted) setState(() => _showIntro = false);
     });
   }
@@ -212,7 +232,7 @@ class _MainAppState extends State<MainApp> {
   Future<void> _initDesktop() async {
     final mode = await _settingsService.getTrayMode();
     if (!mounted) return;
-    _desktopHandler = _DesktopWindowHandler(onShow: _showWindow, onExit: _exitApp, settingsService: _settingsService);
+    _desktopHandler = _DesktopWindowHandler(onShow: _showWindow, onExit: _exitApp, trayMode: mode);
     if (mode == TrayMode.noTray) {
       trayManager.removeListener(_desktopHandler!);
     }
@@ -220,6 +240,8 @@ class _MainAppState extends State<MainApp> {
 
   @override
   void dispose() {
+    unawaited(_introPlayer?.dispose());
+    _playlistScrollController.dispose();
     _desktopHandler?.dispose();
     if (_isDesktop && Platform.isWindows) {
       unawaited(MediaKeysService.unregister());
@@ -232,10 +254,12 @@ class _MainAppState extends State<MainApp> {
     final numbers = await service.listPlaylistNumbers();
     final active = await service.getActivePlaylistNumber();
     final fileData = await service.readTextFromFile();
+    final names = await service.getPlaylistNames();
     if (mounted) {
       setState(() {
         playlistNumbers = numbers;
         activePlaylistNumber = active;
+        playlistNames = names;
         playlist = fileData.split('\n').where((line) => line.isNotEmpty).skip(1).toList();
         isLoading = false;
       });
@@ -249,9 +273,109 @@ class _MainAppState extends State<MainApp> {
   }
 
   Future<void> _createPlaylist() async {
+    final name = await _askForPlaylistName('New playlist', 'Playlist ${playlistNumbers.last + 1}');
+    if (name == null) return;
     setState(() => isLoading = true);
-    await FileService().createNextPlaylist();
+    final number = await FileService().createNextPlaylist();
+    await FileService().renamePlaylist(number, name);
     await _loadPlaylistFromDisk();
+  }
+
+  Future<String?> _askForPlaylistName(String title, String initialValue) async {
+    final navigatorContext = _navigatorKey.currentState?.overlay?.context;
+    if (navigatorContext == null) return null;
+    final controller = TextEditingController(text: initialValue);
+    final result = await showDialog<String>(
+      context: navigatorContext,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 60,
+          decoration: const InputDecoration(labelText: 'Playlist name'),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) Navigator.pop(dialogContext, value.trim());
+          },
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isNotEmpty) Navigator.pop(dialogContext, value);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return result;
+  }
+
+  Future<void> _renameActivePlaylist() async {
+    final currentName = playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber';
+    final name = await _askForPlaylistName('Rename playlist', currentName);
+    if (name == null || name == currentName) return;
+    await FileService().renamePlaylist(activePlaylistNumber, name);
+    await _loadPlaylistFromDisk();
+  }
+
+  Future<void> _deleteActivePlaylist() async {
+    if (playlistNumbers.length <= 1) return;
+    final navigatorContext = _navigatorKey.currentState?.overlay?.context;
+    if (navigatorContext == null) return;
+    final name = playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber';
+    final confirmed = await showDialog<bool>(
+      context: navigatorContext,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete playlist?'),
+        content: Text('Delete "$name"? Your audio files will not be deleted.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(dialogContext).colorScheme.error),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() => isLoading = true);
+    await FileService().deletePlaylist(activePlaylistNumber);
+    await _loadPlaylistFromDisk();
+  }
+
+  Future<void> _revealCurrentTrack(String trackPath) async {
+    if (trackPath.isEmpty) return;
+    final service = FileService();
+    final containingPlaylist = await service.findPlaylistContaining(trackPath);
+    if (!mounted) return;
+    if (containingPlaylist == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This track is not in any playlist.')));
+      return;
+    }
+    if (containingPlaylist != activePlaylistNumber) {
+      await _switchPlaylist(containingPlaylist);
+    }
+    final index = playlist.indexOf(trackPath);
+    if (index < 0 || !mounted) return;
+    setState(() {
+      _pulsingTrackPath = trackPath;
+      _trackPulse++;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_playlistScrollController.hasClients) return;
+      final position = _playlistScrollController.position;
+      final target = (index * 72.0).clamp(position.minScrollExtent, position.maxScrollExtent);
+      _playlistScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 520),
+        curve: Curves.easeInOutCubic,
+      );
+    });
   }
 
   void _handleReorder(int oldIndex, int newIndex) async {
@@ -268,13 +392,16 @@ class _MainAppState extends State<MainApp> {
     await windowManager.focus();
   }
 
-  void _exitApp() async {
+  void _exitApp() {
+    if (_exitInProgress) return;
+    _exitInProgress = true;
     final handler = Provider.of<PlayerHandler>(context, listen: false);
-    await handler.pause();
-    await handler.dispose();
+    unawaited(handler.saveState().timeout(const Duration(milliseconds: 500)).catchError((_) {}));
+    unawaited(handler.pause().timeout(const Duration(milliseconds: 500)).catchError((_) {}));
+    unawaited(handler.dispose().timeout(const Duration(seconds: 1)).catchError((_) {}));
 
     if (Platform.isWindows) {
-      await MediaKeysService.unregister();
+      unawaited(MediaKeysService.unregister().timeout(const Duration(milliseconds: 500)).catchError((_) {}));
     }
 
     if (_isDesktop) {
@@ -282,7 +409,10 @@ class _MainAppState extends State<MainApp> {
       unawaited(windowManager.destroy());
     }
 
-    Future.delayed(const Duration(milliseconds: 200), () => exit(0));
+    // Native audio/Discord workers can keep the Windows runner alive after
+    // the window is gone. Give fire-and-forget preference writes one event
+    // turn, then terminate deterministically.
+    Future.delayed(const Duration(milliseconds: 80), () => exit(0));
   }
 
   @override
@@ -290,22 +420,20 @@ class _MainAppState extends State<MainApp> {
     return Consumer<ThemeProvider>(
       builder: (context, themeProvider, child) {
         return MaterialApp(
+          navigatorKey: _navigatorKey,
           debugShowCheckedModeBanner: false,
           themeMode: themeProvider.themeMode,
           theme: _buildLightTheme(),
           darkTheme: _buildDarkTheme(),
           home: Builder(
             builder: (nestedContext) {
-              return Stack(
-                children: [
-                  Scaffold(
-                    backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
-                    appBar: _buildAppBar(nestedContext),
-                    body: _buildBody(nestedContext),
-                  ),
-                  if (_showIntro) const _IntroOverlay(),
-                ],
-              );
+              return _showIntro
+                  ? const _IntroOverlay()
+                  : Scaffold(
+                      backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
+                      appBar: _buildAppBar(nestedContext),
+                      body: _buildBody(nestedContext),
+                    );
             },
           ),
         );
@@ -386,6 +514,9 @@ class _MainAppState extends State<MainApp> {
           )
         : TrackList(
             tracks: playlist,
+            controller: _playlistScrollController,
+            pulsingTrackPath: _pulsingTrackPath,
+            pulse: _trackPulse,
             onTrackDeleted: (index, trackPath) async {
               setState(() => playlist.removeAt(index));
               await FileService().removeFromPlaylist(trackPath);
@@ -421,7 +552,7 @@ class _MainAppState extends State<MainApp> {
         ),
 
         // ── Player panel ──
-        AlbumCover(),
+        AlbumCover(onTap: _revealCurrentTrack),
         PlayerControls(),
       ],
     );
@@ -435,7 +566,7 @@ class _MainAppState extends State<MainApp> {
       child: Row(
         children: [
           Text(
-            'Playlist $activePlaylistNumber - ${trackCount == 0 ? 'No tracks' : '$trackCount ${trackCount == 1 ? 'track' : 'tracks'}'}',
+            '${playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber'} - ${trackCount == 0 ? 'No tracks' : '$trackCount ${trackCount == 1 ? 'track' : 'tracks'}'}',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w500,
@@ -444,20 +575,29 @@ class _MainAppState extends State<MainApp> {
             ),
           ),
           const Spacer(),
-          PopupMenuButton<int>(
+          PopupMenuButton<_PlaylistMenuAction>(
             tooltip: 'Switch playlist',
             icon: const Icon(Icons.queue_music_rounded),
-            onSelected: (value) {
-              if (value == -1) {
-                _createPlaylist();
-              } else {
-                _switchPlaylist(value);
+            onSelected: (action) {
+              switch (action.type) {
+                case _PlaylistActionType.select:
+                  _switchPlaylist(action.playlistNumber!);
+                  return;
+                case _PlaylistActionType.create:
+                  _createPlaylist();
+                  return;
+                case _PlaylistActionType.rename:
+                  _renameActivePlaylist();
+                  return;
+                case _PlaylistActionType.delete:
+                  _deleteActivePlaylist();
+                  return;
               }
             },
             itemBuilder: (context) => [
               for (final number in playlistNumbers)
-                PopupMenuItem<int>(
-                  value: number,
+                PopupMenuItem<_PlaylistMenuAction>(
+                  value: _PlaylistMenuAction.select(number),
                   child: Row(
                     children: [
                       Icon(
@@ -467,14 +607,27 @@ class _MainAppState extends State<MainApp> {
                         size: 18,
                       ),
                       const SizedBox(width: 8),
-                      Text('Playlist $number'),
+                      Flexible(
+                        child: Text(playlistNames[number] ?? 'Playlist $number', overflow: TextOverflow.ellipsis),
+                      ),
                     ],
                   ),
                 ),
               const PopupMenuDivider(),
-              const PopupMenuItem<int>(
-                value: -1,
+              const PopupMenuItem<_PlaylistMenuAction>(
+                value: _PlaylistMenuAction(_PlaylistActionType.create),
                 child: Row(children: [Icon(Icons.add_rounded, size: 18), SizedBox(width: 8), Text('New playlist')]),
+              ),
+              const PopupMenuItem<_PlaylistMenuAction>(
+                value: _PlaylistMenuAction(_PlaylistActionType.rename),
+                child: Row(children: [Icon(Icons.edit_rounded, size: 18), SizedBox(width: 8), Text('Rename current')]),
+              ),
+              PopupMenuItem<_PlaylistMenuAction>(
+                value: const _PlaylistMenuAction(_PlaylistActionType.delete),
+                enabled: playlistNumbers.length > 1,
+                child: const Row(
+                  children: [Icon(Icons.delete_outline_rounded, size: 18), SizedBox(width: 8), Text('Delete current')],
+                ),
               ),
             ],
           ),
@@ -511,6 +664,15 @@ class _MainAppState extends State<MainApp> {
   }
 }
 
+enum _PlaylistActionType { select, create, rename, delete }
+
+class _PlaylistMenuAction {
+  final _PlaylistActionType type;
+  final int? playlistNumber;
+  const _PlaylistMenuAction(this.type) : playlistNumber = null;
+  const _PlaylistMenuAction.select(this.playlistNumber) : type = _PlaylistActionType.select;
+}
+
 class _IntroOverlay extends StatefulWidget {
   const _IntroOverlay();
 
@@ -526,16 +688,16 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600))..forward();
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 3030))..forward();
     _scale = TweenSequence<double>([
-      TweenSequenceItem(tween: Tween(begin: 0.92, end: 1.04).chain(CurveTween(curve: Curves.easeOutCubic)), weight: 45),
-      TweenSequenceItem(tween: Tween(begin: 1.04, end: 1.0).chain(CurveTween(curve: Curves.easeInOut)), weight: 25),
-      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.98).chain(CurveTween(curve: Curves.easeIn)), weight: 30),
+      TweenSequenceItem(tween: Tween(begin: 0.72, end: 1.0).chain(CurveTween(curve: Curves.easeOutBack)), weight: 34),
+      TweenSequenceItem(tween: ConstantTween(1.0), weight: 48),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.08).chain(CurveTween(curve: Curves.easeIn)), weight: 18),
     ]).animate(_controller);
     _opacity = TweenSequence<double>([
-      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 20),
-      TweenSequenceItem(tween: ConstantTween(1.0), weight: 55),
-      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 25),
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0).chain(CurveTween(curve: Curves.easeOut)), weight: 12),
+      TweenSequenceItem(tween: ConstantTween(1.0), weight: 72),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 16),
     ]).animate(_controller);
   }
 
@@ -547,7 +709,6 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = Theme.of(context).colorScheme.primary;
     return IgnorePointer(
       child: AnimatedBuilder(
@@ -556,23 +717,54 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
           return Opacity(
             opacity: _opacity.value,
             child: Container(
-              color: isDark ? const Color(0xFF0D0D14) : const Color(0xFFFAFAFF),
-              child: Center(
-                child: Transform.scale(
-                  scale: _scale.value,
-                  child: Container(
-                    width: 132,
-                    height: 132,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(color: primary.withValues(alpha: 0.35), blurRadius: 38, spreadRadius: 6),
-                        BoxShadow(color: primary.withValues(alpha: 0.18), blurRadius: 90, spreadRadius: 18),
+              decoration: const BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment(0, -0.05),
+                  radius: 0.9,
+                  colors: [Color(0xFF17131F), Color(0xFF08080C), Color(0xFF030305)],
+                ),
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Positioned.fill(child: CustomPaint(painter: _ResonancePainter(_controller.value, primary))),
+                  Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Transform.scale(
+                          scale: _scale.value,
+                          child: Container(
+                            width: 92,
+                            height: 92,
+                            padding: const EdgeInsets.all(7),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(24),
+                              color: const Color(0xFF111118),
+                              border: Border.all(color: primary.withValues(alpha: 0.38)),
+                              boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.22), blurRadius: 42)],
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(18),
+                              child: Image.asset('assets/icon/icon.png', fit: BoxFit.cover),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 22),
+                        Text(
+                          'R E S O N A N C E',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.88),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            letterSpacing: 3.2,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
                       ],
                     ),
-                    child: ClipOval(child: Image.asset('assets/icon/icon.png', fit: BoxFit.cover)),
                   ),
-                ),
+                ],
               ),
             ),
           );
@@ -580,6 +772,42 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
       ),
     );
   }
+}
+
+class _ResonancePainter extends CustomPainter {
+  final double progress;
+  final Color color;
+  const _ResonancePainter(this.progress, this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final maxRadius = math.sqrt(size.width * size.width + size.height * size.height) * 0.55;
+    for (final onset in const [0.08, 0.31, 0.52]) {
+      final raw = ((progress - onset) / 0.46).clamp(0.0, 1.0);
+      if (raw <= 0 || raw >= 1) continue;
+      final wave = Curves.easeOutCubic.transform(raw);
+      final paint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2 + (1 - raw) * 1.8
+        ..color = color.withValues(alpha: (1 - raw) * 0.24)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+      canvas.drawCircle(center, 54 + maxRadius * wave, paint);
+    }
+
+    final breathe = 0.5 + 0.5 * math.sin(progress * math.pi * 6);
+    canvas.drawCircle(
+      center,
+      118 + breathe * 8,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = color.withValues(alpha: 0.07 + breathe * 0.04),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ResonancePainter oldDelegate) => oldDelegate.progress != progress;
 }
 
 // ── Theme builders ─────────────────────────────────────────────────────────────

@@ -64,6 +64,15 @@ class _SeekBarState extends State<SeekBar> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() => _seekStepSeconds = (prefs.getInt('seek_step_seconds') ?? 5).clamp(1, 15));
+    final handler = Provider.of<PlayerHandler>(context, listen: false);
+    handler.seekStepNotifier.value = _seekStepSeconds;
+    handler.seekStepNotifier.addListener(_onSeekStepChanged);
+  }
+
+  void _onSeekStepChanged() {
+    if (mounted) {
+      setState(() => _seekStepSeconds = Provider.of<PlayerHandler>(context, listen: false).seekStepNotifier.value);
+    }
   }
 
   void _listenToPlayer() {
@@ -129,6 +138,7 @@ class _SeekBarState extends State<SeekBar> {
 
   @override
   void dispose() {
+    Provider.of<PlayerHandler>(context, listen: false).seekStepNotifier.removeListener(_onSeekStepChanged);
     _positionSub?.cancel();
     _durationSub?.cancel();
     _playbackSub?.cancel();
@@ -199,7 +209,7 @@ class _SeekBarState extends State<SeekBar> {
         const SizedBox(width: 8),
         _SeekStepButton(
           label: '-$_seekStepSeconds',
-          icon: Icons.replay_5_rounded,
+          icon: Icons.replay_rounded,
           onPressed: sliderDisabled ? null : () => handler.seekBySeconds(-_seekStepSeconds),
         ),
         const SizedBox(width: 6),
@@ -322,7 +332,7 @@ class _SeekBarState extends State<SeekBar> {
         const SizedBox(width: 8),
         _SeekStepButton(
           label: '+$_seekStepSeconds',
-          icon: Icons.forward_5_rounded,
+          icon: Icons.redo_rounded,
           onPressed: sliderDisabled ? null : () => handler.seekBySeconds(_seekStepSeconds),
         ),
         const SizedBox(width: 6),
@@ -342,7 +352,6 @@ class _SeekStepButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Tooltip(
       message: '$label seconds',
       child: SizedBox(
@@ -351,23 +360,7 @@ class _SeekStepButton extends StatelessWidget {
         child: IconButton(
           onPressed: onPressed,
           padding: EdgeInsets.zero,
-          icon: Stack(
-            alignment: Alignment.center,
-            children: [
-              Icon(icon, size: 23, color: onPressed == null ? const Color(0xFF64748B) : primary),
-              Positioned(
-                bottom: 1,
-                child: Text(
-                  label.replaceAll('+', ''),
-                  style: TextStyle(
-                    fontSize: 8,
-                    fontWeight: FontWeight.w800,
-                    color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          icon: Icon(icon, size: 23, color: onPressed == null ? const Color(0xFF64748B) : primary),
         ),
       ),
     );

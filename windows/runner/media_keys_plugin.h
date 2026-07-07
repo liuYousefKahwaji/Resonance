@@ -87,6 +87,7 @@ class MediaKeysPlugin : public flutter::Plugin {
   bool RegisterMediaKeys(HWND hwnd);
   void UnregisterMediaKeys();
   bool SetupTaskbarButtons(HWND hwnd);
+  bool UpdateTaskbarPlayState(bool playing);
 
   flutter::PluginRegistrarWindows* registrar_;
   int window_proc_id_ = -1;
@@ -94,6 +95,9 @@ class MediaKeysPlugin : public flutter::Plugin {
   bool registration_requested_ = false;
   bool taskbar_requested_ = false;
   bool taskbar_ready_ = false;
+  bool taskbar_playing_ = false;
+  UINT taskbar_button_created_message_ = 0;
+  HWND last_top_level_hwnd_ = nullptr;
   HWND registered_hwnd_ = nullptr;
   ITaskbarList3* taskbar_list_ = nullptr;
 

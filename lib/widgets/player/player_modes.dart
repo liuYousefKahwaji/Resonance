@@ -17,6 +17,13 @@ class _PlayerModesState extends State<PlayerModes> {
   @override
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
+    return ValueListenableBuilder<int>(
+      valueListenable: handler.playbackModeRevision,
+      builder: (context, _, __) => _buildModes(context, handler),
+    );
+  }
+
+  Widget _buildModes(BuildContext context, PlayerHandler handler) {
     final primary = Theme.of(context).colorScheme.primary;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final inactiveColor = isDark ? const Color(0xFF475569) : const Color(0xFFABA8C8);
@@ -32,35 +39,32 @@ class _PlayerModesState extends State<PlayerModes> {
           icon: AnimatedSwitcher(
             duration: const Duration(milliseconds: 150),
             child: loopMode == LoopMode.one
-                ? Icon(Icons.repeat_one_rounded,
-                    key: const ValueKey('one'), color: primary, size: 20)
-                : Icon(Icons.repeat_rounded,
+                ? Icon(Icons.repeat_one_rounded, key: const ValueKey('one'), color: primary, size: 20)
+                : Icon(
+                    Icons.repeat_rounded,
                     key: ValueKey(loopMode),
                     color: loopMode == LoopMode.all ? primary : inactiveColor,
-                    size: 20),
+                    size: 20,
+                  ),
           ),
-          onPressed: ()async{
+          onPressed: () async {
             await handler.toggleLoopMode();
-            setState((){});
+            setState(() {});
           },
           tooltip: loopMode == LoopMode.off
               ? 'Loop off'
               : loopMode == LoopMode.one
-                  ? 'Loop one'
-                  : 'Loop all',
+              ? 'Loop one'
+              : 'Loop all',
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
         ),
         // Shuffle
         IconButton(
-          icon: Icon(
-            Icons.shuffle_rounded,
-            size: 20,
-            color: shuffleOn ? primary : inactiveColor,
-          ),
-          onPressed: ()async{
+          icon: Icon(Icons.shuffle_rounded, size: 20, color: shuffleOn ? primary : inactiveColor),
+          onPressed: () async {
             await handler.toggleShuffle();
-            setState((){});
+            setState(() {});
           },
           tooltip: shuffleOn ? 'Shuffle on' : 'Shuffle off',
           padding: EdgeInsets.zero,

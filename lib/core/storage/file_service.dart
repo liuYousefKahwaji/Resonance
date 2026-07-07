@@ -1,13 +1,19 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class FileService {
   static const String _activePlaylistKey = 'active_resonance_playlist';
+  static const String _playlistNamesKey = 'resonance_playlist_names';
   static const int defaultPlaylistNumber = 1;
+  final String? _documentsPathOverride;
+
+  FileService({String? documentsPathOverride}) : _documentsPathOverride = documentsPathOverride;
 
   // 1. Get the directory path safely
   Future<String> get _localPath async {
+    if (_documentsPathOverride != null) return _documentsPathOverride;
     final directory = await getApplicationDocumentsDirectory();
     return directory.path;
   }
@@ -63,6 +69,75 @@ class FileService {
     await file.writeAsString("#\n");
     await setActivePlaylistNumber(next);
     return next;
+  }
+
+  Future<Map<int, String>> getPlaylistNames() async {
+    final numbers = await listPlaylistNumbers();
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_playlistNamesKey);
+    final names = <int, String>{};
+    if (saved != null) {
+      try {
+        final decoded = jsonDecode(saved) as Map<String, dynamic>;
+        for (final entry in decoded.entries) {
+          final number = int.tryParse(entry.key);
+          final name = entry.value?.toString().trim() ?? '';
+          if (number != null && numbers.contains(number) && name.isNotEmpty) {
+            names[number] = name;
+          }
+        }
+      } catch (_) {}
+    }
+    for (final number in numbers) {
+      names.putIfAbsent(number, () => 'Playlist $number');
+    }
+    return names;
+  }
+
+  Future<void> renamePlaylist(int number, String name) async {
+    final cleanName = name.trim();
+    if (cleanName.isEmpty) return;
+    final names = await getPlaylistNames();
+    names[number] = cleanName;
+    await _savePlaylistNames(names);
+  }
+
+  /// Deletes the numbered storage file while keeping filenames stable for all
+  /// other playlists. Returns the playlist which should become active.
+  Future<int> deletePlaylist(int number) async {
+    final numbers = await listPlaylistNumbers();
+    if (numbers.length <= 1 || !numbers.contains(number)) {
+      return getActivePlaylistNumber();
+    }
+    final file = await _playlistFile(number);
+    if (await file.exists()) await file.delete();
+    final names = await getPlaylistNames();
+    names.remove(number);
+    await _savePlaylistNames(names);
+
+    final remaining = numbers.where((value) => value != number).toList()..sort();
+    final active = await getActivePlaylistNumber();
+    final nextActive = active == number ? remaining.first : active;
+    await setActivePlaylistNumber(nextActive);
+    return nextActive;
+  }
+
+  Future<int?> findPlaylistContaining(String trackPath) async {
+    for (final number in await listPlaylistNumbers()) {
+      final file = await _playlistFile(number);
+      if (!await file.exists()) continue;
+      final tracks = (await file.readAsLines()).map((line) => line.trim());
+      if (tracks.contains(trackPath)) return number;
+    }
+    return null;
+  }
+
+  Future<void> _savePlaylistNames(Map<int, String> names) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _playlistNamesKey,
+      jsonEncode(names.map((number, name) => MapEntry(number.toString(), name))),
+    );
   }
 
   Future<File> get _localFile async {

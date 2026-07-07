@@ -15,6 +15,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
 import 'package:audio_service/audio_service.dart';
@@ -29,26 +30,24 @@ class TrackTile extends StatefulWidget {
   final String trackPath;
   final int index;
   final VoidCallback onDelete;
+  final int pulse;
 
-  const TrackTile({
-    super.key,
-    required this.trackPath,
-    required this.index,
-    required this.onDelete,
-  });
+  const TrackTile({super.key, required this.trackPath, required this.index, required this.onDelete, this.pulse = 0});
 
   @override
   State<TrackTile> createState() => _TrackTileState();
 }
 
-class _TrackTileState extends State<TrackTile> {
+class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMixin {
   bool _loading = true;
   String? _title;
   String? _artist;
+  late final AnimationController _pulseController;
 
   @override
   void initState() {
     super.initState();
+    _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 850));
     _loadMetadata();
   }
 
@@ -65,14 +64,20 @@ class _TrackTileState extends State<TrackTile> {
       }
       _loadMetadata();
     }
+    if (widget.pulse != 0 && oldWidget.pulse != widget.pulse) {
+      _pulseController.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadMetadata() async {
-    final isStream = widget.trackPath.startsWith('http://') ||
-        widget.trackPath.startsWith('https://');
-    final fileName = isStream
-        ? widget.trackPath
-        : p.basenameWithoutExtension(widget.trackPath);
+    final isStream = widget.trackPath.startsWith('http://') || widget.trackPath.startsWith('https://');
+    final fileName = isStream ? widget.trackPath : p.basenameWithoutExtension(widget.trackPath);
 
     final cached = await MetadataCacheService.get(widget.trackPath);
     if (!mounted) return;
@@ -99,12 +104,8 @@ class _TrackTileState extends State<TrackTile> {
     try {
       final metadata = await AudioMetadata.extract(File(widget.trackPath));
       if (!mounted) return;
-      final title = (metadata?.trackName?.trim().isNotEmpty ?? false)
-          ? metadata!.trackName!
-          : fileName;
-      final artist = (metadata?.firstArtists?.trim().isNotEmpty ?? false)
-          ? metadata!.firstArtists!
-          : 'Unknown Artist';
+      final title = (metadata?.trackName?.trim().isNotEmpty ?? false) ? metadata!.trackName! : fileName;
+      final artist = (metadata?.firstArtists?.trim().isNotEmpty ?? false) ? metadata!.firstArtists! : 'Unknown Artist';
 
       unawaited(MetadataCacheService.set(widget.trackPath, title, artist));
 
@@ -126,11 +127,7 @@ class _TrackTileState extends State<TrackTile> {
     }
   }
 
-  void _showMetadataEditor(
-    BuildContext context,
-    String currentTitle,
-    String currentArtist,
-  ) {
+  void _showMetadataEditor(BuildContext context, String currentTitle, String currentArtist) {
     final titleController = TextEditingController(text: currentTitle);
     final artistController = TextEditingController(text: currentArtist);
 
@@ -140,11 +137,7 @@ class _TrackTileState extends State<TrackTile> {
         return AlertDialog(
           title: Row(
             children: [
-              Icon(
-                Icons.edit_rounded,
-                size: 18,
-                color: Theme.of(context).colorScheme.primary,
-              ),
+              Icon(Icons.edit_rounded, size: 18, color: Theme.of(context).colorScheme.primary),
               const SizedBox(width: 10),
               const Text('Edit Metadata'),
             ],
@@ -170,26 +163,16 @@ class _TrackTileState extends State<TrackTile> {
             ],
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
             ElevatedButton(
               onPressed: () async {
                 Navigator.pop(context);
                 try {
                   await MetadataGod.writeMetadata(
                     file: widget.trackPath,
-                    metadata: Metadata(
-                      title: titleController.text,
-                      artist: artistController.text,
-                    ),
+                    metadata: Metadata(title: titleController.text, artist: artistController.text),
                   );
-                  await MetadataCacheService.set(
-                    widget.trackPath,
-                    titleController.text,
-                    artistController.text,
-                  );
+                  await MetadataCacheService.set(widget.trackPath, titleController.text, artistController.text);
                   if (mounted) {
                     setState(() {
                       _title = titleController.text;
@@ -198,11 +181,9 @@ class _TrackTileState extends State<TrackTile> {
                   }
                 } catch (e) {
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Failed to update metadata: $e'),
-                      ),
-                    );
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('Failed to update metadata: $e')));
                   }
                 }
               },
@@ -219,14 +200,37 @@ class _TrackTileState extends State<TrackTile> {
     // RepaintBoundary: this tile can redraw (e.g. playing state) without
     // triggering repaints of neighbouring tiles in the list.
     return RepaintBoundary(
-      child: _TrackTileContent(
-        trackPath: widget.trackPath,
-        index: widget.index,
-        onDelete: widget.onDelete,
-        loading: _loading,
-        title: _title,
-        artist: _artist,
-        onEditMetadata: _showMetadataEditor,
+      child: AnimatedBuilder(
+        animation: _pulseController,
+        builder: (context, child) {
+          final wave = math.sin(_pulseController.value * math.pi);
+          return Transform.scale(
+            scale: 1 + wave * 0.012,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  if (wave > 0)
+                    BoxShadow(
+                      color: Theme.of(context).colorScheme.primary.withValues(alpha: wave * 0.42),
+                      blurRadius: 24 * wave,
+                      spreadRadius: 2 * wave,
+                    ),
+                ],
+              ),
+              child: child,
+            ),
+          );
+        },
+        child: _TrackTileContent(
+          trackPath: widget.trackPath,
+          index: widget.index,
+          onDelete: widget.onDelete,
+          loading: _loading,
+          title: _title,
+          artist: _artist,
+          onEditMetadata: _showMetadataEditor,
+        ),
       ),
     );
   }
@@ -259,8 +263,7 @@ class _TrackTileContent extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = Theme.of(context).colorScheme.primary;
     final fileName = p.basenameWithoutExtension(trackPath);
-    final isStream =
-        trackPath.startsWith('http://') || trackPath.startsWith('https://');
+    final isStream = trackPath.startsWith('http://') || trackPath.startsWith('https://');
 
     if (loading) {
       return Padding(
@@ -281,11 +284,10 @@ class _TrackTileContent extends StatelessWidget {
         return StreamBuilder<PlaybackState>(
           stream: handler.playbackState,
           builder: (context, playbackSnapshot) {
-            final isLoading = isCurrentTrack &&
-                (playbackSnapshot.data?.processingState ==
-                        AudioProcessingState.loading ||
-                    playbackSnapshot.data?.processingState ==
-                        AudioProcessingState.buffering);
+            final isLoading =
+                isCurrentTrack &&
+                (playbackSnapshot.data?.processingState == AudioProcessingState.loading ||
+                    playbackSnapshot.data?.processingState == AudioProcessingState.buffering);
             // "playing" = is current track AND actually playing (not loading)
             final isPlaying = isCurrentTrack && !isLoading;
 
@@ -296,24 +298,19 @@ class _TrackTileContent extends StatelessWidget {
                 curve: Curves.easeOut,
                 decoration: BoxDecoration(
                   color: isCurrentTrack
-                      ? (isDark
-                          ? primary.withValues(alpha: 0.12)
-                          : primary.withValues(alpha: 0.06))
+                      ? (isDark ? primary.withValues(alpha: 0.12) : primary.withValues(alpha: 0.06))
                       : (isDark ? const Color(0xFF1A1A2A) : Colors.white),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: isCurrentTrack
                         ? primary.withValues(alpha: 0.45)
-                        : (isDark
-                            ? const Color(0xFF2D2D42)
-                            : const Color(0xFFDDD9F3)),
+                        : (isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3)),
                     width: isCurrentTrack ? 1.5 : 1,
                   ),
                   boxShadow: isCurrentTrack
                       ? [
                           BoxShadow(
-                            color: primary.withValues(
-                                alpha: isDark ? 0.12 : 0.08),
+                            color: primary.withValues(alpha: isDark ? 0.12 : 0.08),
                             blurRadius: 12,
                             offset: const Offset(0, 2),
                           ),
@@ -323,18 +320,11 @@ class _TrackTileContent extends StatelessWidget {
                 child: Material(
                   type: MaterialType.transparency,
                   child: InkWell(
-                    onTap: () =>
-                        handler.loadTrack(trackPath, resolvedTitle, resolvedArtist),
-                    onLongPress: isStream
-                        ? null
-                        : () => onEditMetadata(
-                            context, resolvedTitle, resolvedArtist),
+                    onTap: () => handler.loadTrack(trackPath, resolvedTitle, resolvedArtist),
+                    onLongPress: isStream ? null : () => onEditMetadata(context, resolvedTitle, resolvedArtist),
                     borderRadius: BorderRadius.circular(12),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       child: Row(
                         children: [
                           // ── Drag handle ───────────────────────────
@@ -347,19 +337,13 @@ class _TrackTileContent extends StatelessWidget {
                                 size: 18,
                                 color: isCurrentTrack
                                     ? primary.withValues(alpha: 0.5)
-                                    : (isDark
-                                        ? const Color(0xFF3D3D55)
-                                        : const Color(0xFFBDB8E0)),
+                                    : (isDark ? const Color(0xFF3D3D55) : const Color(0xFFBDB8E0)),
                               ),
                             ),
                           ),
 
                           // ── Icon ─────────────────────────────────
-                          _TrackIcon(
-                            isPlaying: isPlaying,
-                            isStream: isStream,
-                            isLoading: isLoading,
-                          ),
+                          _TrackIcon(isPlaying: isPlaying, isStream: isStream, isLoading: isLoading),
                           const SizedBox(width: 12),
 
                           // ── Title + artist ────────────────────────
@@ -373,15 +357,11 @@ class _TrackTileContent extends StatelessWidget {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                    fontWeight: isCurrentTrack
-                                        ? FontWeight.w700
-                                        : FontWeight.w500,
+                                    fontWeight: isCurrentTrack ? FontWeight.w700 : FontWeight.w500,
                                     fontSize: 13,
                                     color: isCurrentTrack
                                         ? primary
-                                        : (isDark
-                                            ? const Color(0xFFE2E8F0)
-                                            : const Color(0xFF0F172A)),
+                                        : (isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A)),
                                     letterSpacing: -0.1,
                                   ),
                                 ),
@@ -405,13 +385,8 @@ class _TrackTileContent extends StatelessWidget {
                             icon: const Icon(Icons.close_rounded, size: 16),
                             tooltip: 'Remove',
                             padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(
-                              minWidth: 32,
-                              minHeight: 32,
-                            ),
-                            color: isDark
-                                ? const Color(0xFF475569)
-                                : const Color(0xFF94A3B8),
+                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
                             onPressed: () {
                               MetadataCacheService.remove(trackPath);
                               onDelete();
@@ -444,10 +419,7 @@ class _SkeletonTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1A1A2A) : Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3),
-          width: 1,
-        ),
+        border: Border.all(color: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3), width: 1),
       ),
       child: Row(
         children: [
@@ -469,9 +441,7 @@ class _SkeletonTile extends StatelessWidget {
                   height: 12,
                   width: 140,
                   decoration: BoxDecoration(
-                    color: isDark
-                        ? const Color(0xFF242436)
-                        : const Color(0xFFEEECF8),
+                    color: isDark ? const Color(0xFF242436) : const Color(0xFFEEECF8),
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
@@ -480,9 +450,7 @@ class _SkeletonTile extends StatelessWidget {
                   height: 10,
                   width: 80,
                   decoration: BoxDecoration(
-                    color: isDark
-                        ? const Color(0xFF1E1E30)
-                        : const Color(0xFFF5F3FF),
+                    color: isDark ? const Color(0xFF1E1E30) : const Color(0xFFF5F3FF),
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
@@ -502,11 +470,7 @@ class _TrackIcon extends StatelessWidget {
   final bool isStream;
   final bool isLoading;
 
-  const _TrackIcon({
-    required this.isPlaying,
-    this.isStream = false,
-    this.isLoading = false,
-  });
+  const _TrackIcon({required this.isPlaying, this.isStream = false, this.isLoading = false});
 
   @override
   Widget build(BuildContext context) {
@@ -530,24 +494,19 @@ class _TrackIcon extends StatelessWidget {
             ? Padding(
                 key: const ValueKey('loading'),
                 padding: const EdgeInsets.all(8),
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: primary,
-                ),
+                child: CircularProgressIndicator(strokeWidth: 2, color: primary),
               )
             : Icon(
-                isPlaying
-                    ? Icons.graphic_eq_rounded
-                    : (isStream
-                        ? Icons.sensors_rounded
-                        : Icons.music_note_rounded),
-                key: ValueKey(isPlaying ? 'playing' : isStream ? 'stream' : 'local'),
+                isPlaying ? Icons.graphic_eq_rounded : (isStream ? Icons.sensors_rounded : Icons.music_note_rounded),
+                key: ValueKey(
+                  isPlaying
+                      ? 'playing'
+                      : isStream
+                      ? 'stream'
+                      : 'local',
+                ),
                 size: 17,
-                color: isPlaying
-                    ? primary
-                    : (isDark
-                        ? const Color(0xFF64748B)
-                        : const Color(0xFF94A3B8)),
+                color: isPlaying ? primary : (isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
               ),
       ),
     );

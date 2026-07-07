@@ -6,8 +6,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
-import 'package:flutter/services.dart' show rootBundle;
-
 import 'package:path_provider/path_provider.dart';
 
 import 'package:path/path.dart' as p;
@@ -62,23 +60,16 @@ class MediaDownloader {
   static const _audioExtensions = {'mp3', 'wav', 'm4a', 'ogg', 'opus', 'webm', 'aac', 'flac'};
 
   Future<String> get binDirPath async {
-    final supportDir = await getApplicationSupportDirectory();
-
-    return p.join(supportDir.path, 'bin');
+    return p.join(p.dirname(Platform.resolvedExecutable), 'bin');
   }
 
   Future<void> initBinaries() async {
     final binDir = Directory(await binDirPath);
 
-    if (!await binDir.exists()) await binDir.create(recursive: true);
-
-    for (final exe in ['yt-dlp.exe', 'ffmpeg.exe', 'ffprobe.exe', 'deno.exe']) {
+    for (final exe in ['yt-dlp.exe', 'ffmpeg.exe', 'deno.exe']) {
       final exeFile = File(p.join(binDir.path, exe));
-
       if (!await exeFile.exists()) {
-        final data = await rootBundle.load('assets/bin/$exe');
-
-        await exeFile.writeAsBytes(data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes));
+        throw StateError('Missing Windows downloader tool: ${exeFile.path}');
       }
     }
   }
@@ -186,6 +177,14 @@ class MediaDownloader {
     }
 
     final outputTemplate = p.join(targetDir, '%(title)s.%(ext)s');
+    final targetDirectory = Directory(targetDir);
+    await targetDirectory.create(recursive: true);
+    final pathsBeforeDownload = <String>{};
+    await for (final entity in targetDirectory.list()) {
+      if (entity is File && _looksLikeAudioPath(entity.path)) {
+        pathsBeforeDownload.add(p.normalize(entity.path));
+      }
+    }
 
     const int maxAttempts = 3;
 
@@ -205,6 +204,8 @@ class MediaDownloader {
           '--ffmpeg-location',
           ffmpegPath,
 
+          '--windows-filenames',
+
           // NOTE: --js-runtimes deno is intentionally NOT passed here.
           // Deno's subprocess model swallows yt-dlp's piped stderr progress
           // lines (leaving the bar stuck at 0%) and adds cold-start latency.
@@ -215,6 +216,11 @@ class MediaDownloader {
           'mp3',
 
           '--embed-metadata',
+
+          '--embed-thumbnail',
+
+          '--convert-thumbnails',
+          'jpg',
 
           // --progress forces progress output even when stderr is not a TTY
           // (i.e. when piped). Without this yt-dlp silently suppresses all
@@ -242,6 +248,7 @@ class MediaDownloader {
         int currentItem = 1;
         int totalItems = 1;
         final outputLines = <String>[];
+        final printedPaths = <String>[];
 
         void handleLine(String line) {
           final trimmed = line.trim();
@@ -283,11 +290,10 @@ class MediaDownloader {
           }
         }
 
-        final stdoutDone = process.stdout
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .listen(handleLine)
-            .asFuture<void>();
+        final stdoutDone = process.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+          final trimmed = line.trim();
+          if (trimmed.isNotEmpty) printedPaths.add(trimmed);
+        }).asFuture<void>();
         final stderrDone = process.stderr
             .transform(utf8.decoder)
             .transform(const LineSplitter())
@@ -310,8 +316,17 @@ class MediaDownloader {
         // ── Process filepath lines sequentially, fully awaited ──
 
         final processedPaths = <String>{};
+        var importedCount = 0;
 
-        for (final line in outputLines) {
+        Future<void> importPath(String path) async {
+          final normalized = p.normalize(path);
+          if (processedPaths.add(normalized) && await File(normalized).exists()) {
+            await onTrackDownloaded(normalized);
+            importedCount++;
+          }
+        }
+
+        for (final line in [...printedPaths, ...outputLines]) {
           final trimmed = line.trim();
 
           if (trimmed.isEmpty) continue;
@@ -322,26 +337,16 @@ class MediaDownloader {
             if (match != null) {
               final path = p.normalize(match.group(1)!);
 
-              if (!processedPaths.contains(path) && await File(path).exists()) {
-                processedPaths.add(path);
-
-                await onTrackDownloaded(path);
-              }
+              await importPath(path);
+              await importPath(p.setExtension(path, '.mp3'));
             }
           } else if (_looksLikeAudioPath(trimmed) && !trimmed.contains('[')) {
             // --print after_move:%(filepath)s line
 
             final cleanPath = p.normalize(trimmed);
 
-            if (!processedPaths.contains(cleanPath)) {
-              processedPaths.add(cleanPath);
-
-              await Future.delayed(const Duration(milliseconds: 300));
-
-              if (await File(cleanPath).exists()) {
-                await onTrackDownloaded(cleanPath);
-              }
-            }
+            await Future.delayed(const Duration(milliseconds: 150));
+            await importPath(cleanPath);
           }
         }
 
@@ -349,6 +354,18 @@ class MediaDownloader {
 
         if (exitCode != 0) {
           throw Exception('yt-dlp exited with code $exitCode');
+        }
+
+        // yt-dlp can render Unicode punctuation differently in its console
+        // output than in the actual Windows filename. Import any newly-created
+        // audio files as the authoritative fallback.
+        await for (final entity in targetDirectory.list()) {
+          if (entity is! File || !_looksLikeAudioPath(entity.path)) continue;
+          final normalized = p.normalize(entity.path);
+          if (!pathsBeforeDownload.contains(normalized)) await importPath(normalized);
+        }
+        if (importedCount == 0) {
+          throw Exception('Download finished, but no audio file could be imported');
         }
 
         return;

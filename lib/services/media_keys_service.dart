@@ -80,6 +80,12 @@ class MediaKeysService {
     }
   }
 
+  static Future<void> updateTaskbarPlaying(bool playing) async {
+    try {
+      await _methodChannel.invokeMethod('updateTaskbarPlaying', playing);
+    } catch (_) {}
+  }
+
   /// Unregisters the hotkeys and stops listening. Call this on app
   /// shutdown if you want to be tidy, though the OS will clean up the
   /// hotkey registration automatically when the process exits anyway.

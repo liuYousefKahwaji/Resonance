@@ -11,7 +11,8 @@ import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 
 class AlbumCover extends StatefulWidget {
-  const AlbumCover({super.key});
+  final ValueChanged<String>? onTap;
+  const AlbumCover({super.key, this.onTap});
 
   @override
   State<AlbumCover> createState() => _AlbumCoverState();
@@ -114,6 +115,7 @@ class _AlbumCoverState extends State<AlbumCover> with SingleTickerProviderStateM
                     isLoading: isLoading,
                     hasTrack: item != null,
                     isDark: isDark,
+                    onTap: item == null ? null : () => widget.onTap?.call(path),
                   ),
                 ),
               ),
@@ -133,6 +135,7 @@ class _NowPlayingCard extends StatelessWidget {
   final bool isLoading;
   final bool hasTrack;
   final bool isDark;
+  final VoidCallback? onTap;
 
   const _NowPlayingCard({
     required this.title,
@@ -142,6 +145,7 @@ class _NowPlayingCard extends StatelessWidget {
     required this.isLoading,
     required this.hasTrack,
     required this.isDark,
+    required this.onTap,
   });
 
   @override
@@ -154,56 +158,68 @@ class _NowPlayingCard extends StatelessWidget {
 
     final isActive = isPlaying || isLoading;
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeOut,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: surface,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: isActive ? primary.withValues(alpha: 0.4) : border, width: isActive ? 1.5 : 1),
-      ),
-      child: Row(
-        // Prevent the Row from overflowing — each child must be sized.
-        mainAxisSize: MainAxisSize.max,
-        children: [
-          _AlbumIcon(isPlaying: isPlaying, hasTrack: hasTrack, isLoading: isLoading, path: path),
-          const SizedBox(width: 14),
-          // Expanded forces the text column to take remaining space and
-          // enables Text overflow / ellipsis to work correctly.
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: textPrimary, letterSpacing: -0.1),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  softWrap: false,
-                ),
-                if (artist.isNotEmpty) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    artist,
-                    style: const TextStyle(color: textMuted, fontSize: 12, fontWeight: FontWeight.w400),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    softWrap: false,
-                  ),
-                ],
-              ],
-            ),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: isActive ? primary.withValues(alpha: 0.4) : border, width: isActive ? 1.5 : 1),
           ),
-          if (isLoading) ...[
-            const SizedBox(width: 12),
-            _LoadingBadge(),
-          ] else if (isPlaying) ...[
-            const SizedBox(width: 12),
-            _PlayingBadge(),
-          ],
-        ],
+          child: Row(
+            // Prevent the Row from overflowing — each child must be sized.
+            mainAxisSize: MainAxisSize.max,
+            children: [
+              _AlbumIcon(isPlaying: isPlaying, hasTrack: hasTrack, isLoading: isLoading, path: path),
+              const SizedBox(width: 14),
+              // Expanded forces the text column to take remaining space and
+              // enables Text overflow / ellipsis to work correctly.
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        color: textPrimary,
+                        letterSpacing: -0.1,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      softWrap: false,
+                    ),
+                    if (artist.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        artist,
+                        style: const TextStyle(color: textMuted, fontSize: 12, fontWeight: FontWeight.w400),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (isLoading) ...[
+                const SizedBox(width: 12),
+                _LoadingBadge(),
+              ] else if (isPlaying) ...[
+                const SizedBox(width: 12),
+                _PlayingBadge(),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }

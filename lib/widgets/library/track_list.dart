@@ -15,12 +15,18 @@ class TrackList extends StatelessWidget {
   final List<String> tracks;
   final Function(int index, String path) onTrackDeleted;
   final Function(int oldIndex, int newIndex) onReorder;
+  final ScrollController controller;
+  final String? pulsingTrackPath;
+  final int pulse;
 
   const TrackList({
     super.key,
     required this.tracks,
     required this.onTrackDeleted,
     required this.onReorder,
+    required this.controller,
+    required this.pulsingTrackPath,
+    required this.pulse,
   });
 
   @override
@@ -30,6 +36,7 @@ class TrackList extends StatelessWidget {
     }
 
     return ReorderableListView.builder(
+      scrollController: controller,
       buildDefaultDragHandles: false,
       padding: const EdgeInsets.only(top: 4, bottom: 8),
       cacheExtent: 400,
@@ -40,6 +47,7 @@ class TrackList extends StatelessWidget {
           trackPath: tracks[index],
           index: index,
           onDelete: () => onTrackDeleted(index, tracks[index]),
+          pulse: pulsingTrackPath == tracks[index] ? pulse : 0,
         );
       },
       onReorder: onReorder,
@@ -80,16 +88,10 @@ class _EmptyState extends StatelessWidget {
             width: 72,
             height: 72,
             decoration: BoxDecoration(
-              color: isDark
-                  ? primary.withValues(alpha: 0.08)
-                  : primary.withValues(alpha: 0.06),
+              color: isDark ? primary.withValues(alpha: 0.08) : primary.withValues(alpha: 0.06),
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              Icons.library_music_rounded,
-              size: 32,
-              color: primary.withValues(alpha: 0.5),
-            ),
+            child: Icon(Icons.library_music_rounded, size: 32, color: primary.withValues(alpha: 0.5)),
           ),
           const SizedBox(height: 16),
           Text(
@@ -97,20 +99,13 @@ class _EmptyState extends StatelessWidget {
             style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w600,
-              color: isDark
-                  ? const Color(0xFF94A3B8)
-                  : const Color(0xFF64748B),
+              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
             ),
           ),
           const SizedBox(height: 6),
           Text(
             'Import tracks or download from YouTube',
-            style: TextStyle(
-              fontSize: 12,
-              color: isDark
-                  ? const Color(0xFF475569)
-                  : const Color(0xFF94A3B8),
-            ),
+            style: TextStyle(fontSize: 12, color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8)),
           ),
         ],
       ),

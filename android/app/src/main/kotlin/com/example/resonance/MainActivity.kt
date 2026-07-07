@@ -5,6 +5,7 @@ import android.media.audiofx.LoudnessEnhancer
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import androidx.annotation.Keep
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.ryanheise.audioservice.AudioServicePlugin
@@ -209,6 +210,10 @@ class MainActivity : FlutterFragmentActivity() {
  * calls on Kotlin objects from Python, so `event_sink.success(msg)` in
  * Python calls this Kotlin method directly.
  */
+// Called reflectively from Python. Without @Keep, R8 renames this class and
+// its success method in release builds, leaving Python with an obfuscated
+// object (for example "b") which has no attribute named "success".
+@Keep
 class KotlinEventSink(
     private val sinkProvider: () -> EventChannel.EventSink?,
     private val pendingEvents: MutableList<String>,

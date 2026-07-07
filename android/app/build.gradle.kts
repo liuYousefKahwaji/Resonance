@@ -29,15 +29,25 @@ android {
         versionName = flutter.versionName
 
         ndk {
-            // arm64-v8a covers all modern Android devices.
-            // armeabi-v7a dropped for Python 3.12+ — omit to keep APK smaller.
+            // Resonance's release helper targets arm64, which covers modern
+            // Android devices and keeps Flutter, FFmpeg and Python single-ABI.
             abiFilters += listOf("arm64-v8a")
         }
+
     }
 
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Some prebuilt plugins publish every ABI and bypass abiFilters.
+            // Resonance's release target is arm64, so discard unreachable
+            // FFmpeg/Python binaries from the final package explicitly.
+            excludes += setOf("**/armeabi-v7a/*.so", "**/x86_64/*.so")
         }
     }
 }

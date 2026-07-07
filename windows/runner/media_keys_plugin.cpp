@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <variant>
+#include <shellapi.h>
 
 namespace resonance {
 
@@ -28,6 +29,73 @@ void LogError(const wchar_t* label, DWORD err) {
   std::wstringstream s;
   s << L"[MediaKeysPlugin] " << label << L" FAILED, GetLastError=" << err << L"\n";
   OutputDebugStringW(s.str().c_str());
+}
+
+HICON CreateMediaGlyphIcon(int kind) {
+  constexpr int size = 32;
+  BITMAPV5HEADER header = {};
+  header.bV5Size = sizeof(header);
+  header.bV5Width = size;
+  header.bV5Height = -size;
+  header.bV5Planes = 1;
+  header.bV5BitCount = 32;
+  header.bV5Compression = BI_BITFIELDS;
+  header.bV5RedMask = 0x00FF0000;
+  header.bV5GreenMask = 0x0000FF00;
+  header.bV5BlueMask = 0x000000FF;
+  header.bV5AlphaMask = 0xFF000000;
+  void* bits = nullptr;
+  HDC screen = GetDC(nullptr);
+  HBITMAP color_bitmap = CreateDIBSection(screen, reinterpret_cast<BITMAPINFO*>(&header),
+                                           DIB_RGB_COLORS, &bits, nullptr, 0);
+  HBITMAP mask_bitmap = CreateBitmap(size, size, 1, 1, nullptr);
+  HDC dc = CreateCompatibleDC(screen);
+  HGDIOBJ old_bitmap = SelectObject(dc, color_bitmap);
+  SetBkMode(dc, TRANSPARENT);
+  HBRUSH brush = CreateSolidBrush(RGB(255, 255, 255));
+  HPEN pen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+  HGDIOBJ old_brush = SelectObject(dc, brush);
+  HGDIOBJ old_pen = SelectObject(dc, pen);
+
+  if (kind == 0 || kind == 2) {
+    const bool previous = kind == 0;
+    RECT bar = {previous ? 8L : 22L, 9, previous ? 11L : 25L, 23};
+    FillRect(dc, &bar, brush);
+    POINT triangle[3] = {
+        {previous ? 23L : 9L, 8}, {previous ? 11L : 21L, 16}, {previous ? 23L : 9L, 24}};
+    Polygon(dc, triangle, 3);
+  } else if (kind == 1) {
+    POINT triangle[3] = {{11, 7}, {11, 25}, {24, 16}};
+    Polygon(dc, triangle, 3);
+  } else {
+    RECT left = {9, 7, 14, 25};
+    RECT right = {19, 7, 24, 25};
+    FillRect(dc, &left, brush);
+    FillRect(dc, &right, brush);
+  }
+
+  // GDI writes RGB but leaves the alpha byte at zero in a 32-bit DIB.
+  // Promote drawn pixels to opaque so the shell does not render an empty icon.
+  auto* pixels = static_cast<DWORD*>(bits);
+  for (int i = 0; i < size * size; ++i) {
+    if ((pixels[i] & 0x00FFFFFF) != 0) pixels[i] |= 0xFF000000;
+  }
+
+  SelectObject(dc, old_pen);
+  SelectObject(dc, old_brush);
+  SelectObject(dc, old_bitmap);
+  DeleteObject(pen);
+  DeleteObject(brush);
+  DeleteDC(dc);
+  ReleaseDC(nullptr, screen);
+  ICONINFO info = {};
+  info.fIcon = TRUE;
+  info.hbmMask = mask_bitmap;
+  info.hbmColor = color_bitmap;
+  HICON icon = CreateIconIndirect(&info);
+  DeleteObject(mask_bitmap);
+  DeleteObject(color_bitmap);
+  return icon;
 }
 
 // Minimal StreamHandler implementation. We avoid relying on the
@@ -66,6 +134,7 @@ void MediaKeysPlugin::RegisterWithRegistrar(flutter::PluginRegistrarWindows* reg
 }
 
 MediaKeysPlugin::MediaKeysPlugin(flutter::PluginRegistrarWindows* registrar) : registrar_(registrar) {
+  taskbar_button_created_message_ = RegisterWindowMessageW(L"TaskbarButtonCreated");
   method_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       registrar->messenger(), kMethodChannelName, &flutter::StandardMethodCodec::GetInstance());
 
@@ -122,27 +191,50 @@ bool MediaKeysPlugin::SetupTaskbarButtons(HWND hwnd) {
   }
 
   THUMBBUTTON buttons[3] = {};
-  buttons[0].dwMask = THB_FLAGS | THB_TOOLTIP;
+  HICON previous_icon = CreateMediaGlyphIcon(0);
+  HICON play_icon = CreateMediaGlyphIcon(taskbar_playing_ ? 3 : 1);
+  HICON next_icon = CreateMediaGlyphIcon(2);
+  buttons[0].dwMask = THB_FLAGS | THB_TOOLTIP | THB_ICON;
   buttons[0].iId = kTaskbarButtonPrevious;
   buttons[0].dwFlags = THBF_ENABLED;
   wcscpy_s(buttons[0].szTip, L"Previous");
+  buttons[0].hIcon = previous_icon;
 
-  buttons[1].dwMask = THB_FLAGS | THB_TOOLTIP;
+  buttons[1].dwMask = THB_FLAGS | THB_TOOLTIP | THB_ICON;
   buttons[1].iId = kTaskbarButtonPlayPause;
   buttons[1].dwFlags = THBF_ENABLED;
   wcscpy_s(buttons[1].szTip, L"Play / Pause");
+  buttons[1].hIcon = play_icon;
 
-  buttons[2].dwMask = THB_FLAGS | THB_TOOLTIP;
+  buttons[2].dwMask = THB_FLAGS | THB_TOOLTIP | THB_ICON;
   buttons[2].iId = kTaskbarButtonNext;
   buttons[2].dwFlags = THBF_ENABLED;
   wcscpy_s(buttons[2].szTip, L"Next");
+  buttons[2].hIcon = next_icon;
 
   HRESULT hr = taskbar_list_->ThumbBarAddButtons(hwnd, 3, buttons);
   if (FAILED(hr)) {
     hr = taskbar_list_->ThumbBarUpdateButtons(hwnd, 3, buttons);
   }
   taskbar_ready_ = SUCCEEDED(hr);
+  DestroyIcon(previous_icon);
+  DestroyIcon(play_icon);
+  DestroyIcon(next_icon);
   return taskbar_ready_;
+}
+
+bool MediaKeysPlugin::UpdateTaskbarPlayState(bool playing) {
+  taskbar_playing_ = playing;
+  if (!taskbar_ready_ || taskbar_list_ == nullptr || last_top_level_hwnd_ == nullptr) return false;
+  THUMBBUTTON button = {};
+  button.dwMask = THB_ICON | THB_TOOLTIP | THB_FLAGS;
+  button.iId = kTaskbarButtonPlayPause;
+  button.dwFlags = THBF_ENABLED;
+  wcscpy_s(button.szTip, playing ? L"Pause" : L"Play");
+  button.hIcon = CreateMediaGlyphIcon(playing ? 3 : 1);
+  const HRESULT hr = taskbar_list_->ThumbBarUpdateButtons(last_top_level_hwnd_, 1, &button);
+  DestroyIcon(button.hIcon);
+  return SUCCEEDED(hr);
 }
 
 bool MediaKeysPlugin::RegisterMediaKeys(HWND hwnd) {
@@ -194,6 +286,11 @@ void MediaKeysPlugin::UnregisterMediaKeys() {
 }
 
 std::optional<LRESULT> MediaKeysPlugin::HandleWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+  last_top_level_hwnd_ = hwnd;
+  if (message == taskbar_button_created_message_) {
+    taskbar_ready_ = false;
+    if (taskbar_requested_) SetupTaskbarButtons(hwnd);
+  }
   // Lazily register the hotkeys the first time we see a real top-level
   // hwnd, if Dart already asked us to (registration_requested_) before
   // this delegate had fired even once (e.g. if "register" arrives
@@ -305,7 +402,11 @@ void MediaKeysPlugin::HandleMethodCall(
     result->Success(flutter::EncodableValue(true));
   } else if (call.method_name() == "setupTaskbarButtons") {
     taskbar_requested_ = true;
-    result->Success(flutter::EncodableValue(true));
+    const bool ok = last_top_level_hwnd_ != nullptr && SetupTaskbarButtons(last_top_level_hwnd_);
+    result->Success(flutter::EncodableValue(ok));
+  } else if (call.method_name() == "updateTaskbarPlaying") {
+    const auto* value = std::get_if<bool>(call.arguments());
+    result->Success(flutter::EncodableValue(value != nullptr && UpdateTaskbarPlayState(*value)));
   } else {
     result->NotImplemented();
   }

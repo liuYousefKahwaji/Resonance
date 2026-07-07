@@ -16,20 +16,27 @@ import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
+import 'package:metadata_god/metadata_god.dart';
 
 class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final _loudnessEnhancer = AndroidLoudnessEnhancer();
   late final AudioPlayer _player = AudioPlayer(audioPipeline: AudioPipeline(androidAudioEffects: [_loudnessEnhancer]));
-  late final mk.Player? _windowsPlayer = Platform.isWindows ? mk.Player() : null;
+  late final mk.Player? _windowsPlayer = Platform.isWindows
+      ? mk.Player(configuration: const mk.PlayerConfiguration(pitch: true))
+      : null;
 
   double savedVolume = 1.0;
 
   final ValueNotifier<double> volumeNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<double> speedNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<double> pitchNotifier = ValueNotifier<double>(1.0);
+  final ValueNotifier<int> seekStepNotifier = ValueNotifier<int>(5);
   LoopMode currentLoopMode = LoopMode.all;
   bool isShuffle = false;
   List<String> shuffledList = [];
+  final ValueNotifier<int> playbackModeRevision = ValueNotifier<int>(0);
+  MediaItem? _pendingRestoredTrack;
+  final Map<String, Uri?> _artUriCache = {};
 
   int _loadGeneration = 0;
 
@@ -322,6 +329,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       }
       pitchNotifier.value = pitch;
 
+      final savedLoopMode = prefs.getString('last_loop_mode');
+      currentLoopMode = LoopMode.values.firstWhere((mode) => mode.name == savedLoopMode, orElse: () => LoopMode.all);
+      isShuffle = prefs.getBool('last_shuffle') ?? false;
+      if (isShuffle) await shuffleQueue();
+      playbackModeRevision.value++;
+
       final trackPath = prefs.getString('last_track_path');
       final trackTitle = prefs.getString('last_track_title');
       final trackArtist = prefs.getString('last_track_artist');
@@ -337,19 +350,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> _preloadTrack(String filePath, String title, String artist) async {
     try {
       final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
-      if (isStream) {
-        mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
-        _updatePlaybackState();
-        return;
+      if (!isStream && !await File(filePath).exists()) {
+        throw StateError('Saved track no longer exists');
       }
-      if (Platform.isWindows) {
-        mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
-        _updatePlaybackState();
-        return;
-      }
-      final source = await _buildAudioSource(filePath);
-      await _player.setAudioSource(source);
-      mediaItem.add(MediaItem(id: filePath, title: title, artist: artist, duration: _player.duration));
+      final restored = MediaItem(id: filePath, title: title, artist: artist, artUri: await _albumArtUri(filePath));
+      _pendingRestoredTrack = restored;
+      mediaItem.add(restored);
       _updatePlaybackState();
     } catch (e) {
       debugPrint('Error preloading track: $e');
@@ -376,6 +382,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   // ─── Core playback ────────────────────────────────────────────────
   @override
   Future<void> play() async {
+    final restored = _pendingRestoredTrack;
+    if (restored != null) {
+      _pendingRestoredTrack = null;
+      await loadTrack(restored.id, restored.title, restored.artist ?? 'Unknown Artist');
+      return;
+    }
     if (Platform.isWindows) {
       if (_isWindowsPlaying) return;
       await _windowsPlayer!.play();
@@ -478,10 +490,16 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   // ─── loadTrack ────────────────────────────────────────────────────
   Future<void> loadTrack(String filePath, String title, String artist) async {
+    _pendingRestoredTrack = null;
     final myGen = ++_loadGeneration;
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
 
     _currentTrackIsStream = isStream;
+
+    // Start artwork extraction alongside player preparation. The final
+    // MediaItem update below supplies Android's notification/lockscreen with
+    // a real file URI while keeping playback startup responsive.
+    final artUriFuture = _albumArtUri(filePath);
 
     // Optimistic UI update
     mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
@@ -558,7 +576,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (_loadGeneration != myGen) return;
 
       final dur = _currentDuration;
-      mediaItem.add(MediaItem(id: filePath, title: title, artist: artist, duration: dur));
+      mediaItem.add(MediaItem(id: filePath, title: title, artist: artist, duration: dur, artUri: await artUriFuture));
 
       // On non-Windows platforms, explicitly call play() since we didn't
       // pass play: true to setAudioSource.
@@ -616,7 +634,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   Future<void> setSeekStepSeconds(int seconds) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('seek_step_seconds', seconds.clamp(1, 15));
+    final value = seconds.clamp(1, 15);
+    await prefs.setInt('seek_step_seconds', value);
+    seekStepNotifier.value = value;
   }
 
   Future<void> seekBySeconds(int seconds) async {
@@ -656,6 +676,58 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     } catch (_) {
       return (title: p.basenameWithoutExtension(path), artist: 'Unknown Artist');
     }
+  }
+
+  Future<Uri?> _albumArtUri(String path) async {
+    if (!Platform.isAndroid || path.startsWith('http://') || path.startsWith('https://')) {
+      return null;
+    }
+    if (_artUriCache.containsKey(path)) return _artUriCache[path];
+
+    try {
+      final source = File(path);
+      if (!await source.exists()) return _artUriCache[path] = null;
+      final modified = await source.lastModified();
+      final cacheDir = Directory(p.join((await getTemporaryDirectory()).path, 'notification_art'));
+      await cacheDir.create(recursive: true);
+      final cacheKey = '${path.hashCode}_${modified.millisecondsSinceEpoch}';
+
+      for (final extension in const ['jpg', 'png', 'webp']) {
+        final cached = File(p.join(cacheDir.path, '$cacheKey.$extension'));
+        if (await cached.exists() && await cached.length() > 0) {
+          return _artUriCache[path] = Uri.file(cached.path);
+        }
+      }
+
+      final metadata = await MetadataGod.readMetadata(file: path);
+      final bytes = metadata.picture?.data;
+      if (bytes == null || bytes.isEmpty) return _artUriCache[path] = null;
+      final extension = _imageExtension(bytes);
+      final artwork = File(p.join(cacheDir.path, '$cacheKey.$extension'));
+      await artwork.writeAsBytes(bytes, flush: true);
+      return _artUriCache[path] = Uri.file(artwork.path);
+    } catch (e) {
+      debugPrint('[PlayerHandler] Could not extract notification artwork: $e');
+      return _artUriCache[path] = null;
+    }
+  }
+
+  String _imageExtension(List<int> bytes) {
+    if (bytes.length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4e && bytes[3] == 0x47) {
+      return 'png';
+    }
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return 'webp';
+    }
+    return 'jpg';
   }
 
   Future<void> next() async {
@@ -727,7 +799,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         await _player.setAudioSource(source);
         await play();
       }
-      this.mediaItem.add(mediaItem);
+      this.mediaItem.add(
+        mediaItem.artUri == null ? mediaItem.copyWith(artUri: await _albumArtUri(mediaItem.id)) : mediaItem,
+      );
       await _saveTrack(mediaItem.id, mediaItem.title, mediaItem.artist ?? 'Unknown Artist');
     } catch (e, st) {
       debugPrint('Error playing media item "${mediaItem.id}": $e\n$st');
@@ -743,11 +817,32 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     } else {
       currentLoopMode = LoopMode.off;
     }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('last_loop_mode', currentLoopMode.name);
+    playbackModeRevision.value++;
   }
 
   Future<void> toggleShuffle() async {
     isShuffle = !isShuffle;
     if (isShuffle) await shuffleQueue();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('last_shuffle', isShuffle);
+    playbackModeRevision.value++;
+  }
+
+  Future<void> saveState() async {
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      prefs.setDouble('last_volume', volumeNotifier.value),
+      prefs.setDouble('last_speed', speedNotifier.value),
+      prefs.setDouble('last_pitch', pitchNotifier.value),
+      prefs.setString('last_loop_mode', currentLoopMode.name),
+      prefs.setBool('last_shuffle', isShuffle),
+    ]);
+    final current = mediaItem.value;
+    if (current != null) {
+      await _saveTrack(current.id, current.title, current.artist ?? 'Unknown Artist');
+    }
   }
 
   Future<void> shuffleQueue() async {
@@ -764,6 +859,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    await saveState();
     await _windowsStreamProxy.dispose();
     await _windowsPlayer?.dispose();
     await _player.dispose();

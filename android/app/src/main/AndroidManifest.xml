@@ -1,5 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Downloads must work in release builds too. The debug manifest's
+         INTERNET permission is only merged for debug/profile variants. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- ── Storage / Audio permissions ─────────────────────────────────── -->
     <!-- Android 13+ (API 33+): granular audio permission -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />

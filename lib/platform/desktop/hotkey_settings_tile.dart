@@ -4,6 +4,35 @@ import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:resonance/platform/desktop/hotkey_service.dart';
 
+String _hotkeyLabel(KeyboardKey key) {
+  final numpadLabels = <LogicalKeyboardKey, String>{
+    LogicalKeyboardKey.numpad0: 'Num 0',
+    LogicalKeyboardKey.numpad1: 'Num 1',
+    LogicalKeyboardKey.numpad2: 'Num 2',
+    LogicalKeyboardKey.numpad3: 'Num 3',
+    LogicalKeyboardKey.numpad4: 'Num 4',
+    LogicalKeyboardKey.numpad5: 'Num 5',
+    LogicalKeyboardKey.numpad6: 'Num 6',
+    LogicalKeyboardKey.numpad7: 'Num 7',
+    LogicalKeyboardKey.numpad8: 'Num 8',
+    LogicalKeyboardKey.numpad9: 'Num 9',
+    LogicalKeyboardKey.numpadDecimal: 'Num .',
+    LogicalKeyboardKey.numpadAdd: 'Num +',
+    LogicalKeyboardKey.numpadSubtract: 'Num -',
+    LogicalKeyboardKey.numpadMultiply: 'Num *',
+    LogicalKeyboardKey.numpadDivide: 'Num /',
+    LogicalKeyboardKey.numpadEnter: 'Num Enter',
+    LogicalKeyboardKey.numpadEqual: 'Num =',
+  };
+  if (key is! LogicalKeyboardKey) return key.toString();
+  final known = numpadLabels[key];
+  if (known != null) return known;
+  final label = key.keyLabel.trim();
+  return label.isEmpty || label.toLowerCase() == 'unknown'
+      ? 'Key 0x${key.keyId.toRadixString(16).toUpperCase()}'
+      : label;
+}
+
 class HotkeySettingsTile extends StatefulWidget {
   final String actionId;
   final String actionName;
@@ -49,7 +78,7 @@ class _HotkeySettingsTileState extends State<HotkeySettingsTile> {
       if (hk.modifiers!.contains(HotKeyModifier.shift)) mods.add('Shift');
       if (hk.modifiers!.contains(HotKeyModifier.meta)) mods.add('Win');
     }
-    final key = hk.key.keyLabel;
+    final key = _hotkeyLabel(hk.key);
     return mods.isEmpty ? key : '${mods.join('+')}+$key';
   }
 
@@ -149,7 +178,7 @@ class _HotkeyRecorderDialogState extends State<_HotkeyRecorderDialog> {
       if (hk.modifiers!.contains(HotKeyModifier.shift)) mods.add('Shift');
       if (hk.modifiers!.contains(HotKeyModifier.meta)) mods.add('Win');
     }
-    final key = hk.key.keyLabel;
+    final key = _hotkeyLabel(hk.key);
     return mods.isEmpty ? key : '${mods.join('+')}+$key';
   }
 

@@ -95,27 +95,55 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
   String _statusMessage = '';
   StreamSubscription<String>? _downloadSub;
 
-  Future<String> _convertToMp3(String inputPath, {String? title, String? artist}) async {
-    final outputPath = p.join(p.dirname(inputPath), '${p.basenameWithoutExtension(inputPath)}.mp3');
-    if (p.equals(inputPath, outputPath)) return inputPath;
-    final command =
-        '-y -i ${_q(inputPath)} -vn -map_metadata 0 '
-        '${title == null ? '' : '-metadata title=${_q(title)} '}'
-        '${artist == null ? '' : '-metadata artist=${_q(artist)} '}'
-        '-codec:a libmp3lame -b:a 192k ${_q(outputPath)}';
-    final session = await FFmpegKit.execute(command);
+  Future<String> _convertToMp3(String inputPath, {String? title, String? artist, String? coverPath}) async {
+    final finalPath = p.join(p.dirname(inputPath), '${p.basenameWithoutExtension(inputPath)}.mp3');
+    final outputPath = p.equals(inputPath, finalPath) ? '$finalPath.resonance.mp3' : finalPath;
+    final hasCover = coverPath != null && coverPath.isNotEmpty && await File(coverPath).exists();
+    final args = <String>['-y', '-i', inputPath];
+    if (hasCover) {
+      args.addAll(['-i', coverPath, '-map', '0:a:0', '-map', '1:v:0']);
+    } else {
+      args.add('-vn');
+    }
+    args.addAll(['-map_metadata', '0']);
+    if (title != null && title.isNotEmpty) args.addAll(['-metadata', 'title=$title']);
+    if (artist != null && artist.isNotEmpty) args.addAll(['-metadata', 'artist=$artist']);
+    if (hasCover) {
+      args.addAll([
+        '-metadata:s:v',
+        'title=Album cover',
+        '-metadata:s:v',
+        'comment=Cover (front)',
+        '-codec:v',
+        'mjpeg',
+        '-id3v2_version',
+        '3',
+      ]);
+    }
+    args.addAll(['-codec:a', 'libmp3lame', '-b:a', '192k', outputPath]);
+    final session = await FFmpegKit.executeWithArguments(args);
     final rc = await session.getReturnCode();
     if (!ReturnCode.isSuccess(rc)) {
       final logs = await session.getAllLogsAsString();
       throw Exception('Audio conversion failed: ${(logs ?? '').trim()}');
     }
+    final output = File(outputPath);
+    if (!await output.exists() || await output.length() == 0) {
+      throw Exception('Audio conversion produced no output file');
+    }
     try {
       await File(inputPath).delete();
     } catch (_) {}
-    return outputPath;
+    if (hasCover) {
+      try {
+        await File(coverPath).delete();
+      } catch (_) {}
+    }
+    if (outputPath != finalPath) {
+      await File(outputPath).rename(finalPath);
+    }
+    return finalPath;
   }
-
-  String _q(String v) => '"${v.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"';
 
   @override
   void dispose() {
@@ -133,44 +161,61 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     });
     final outputDir = await _downloader.outputDir;
     _downloadSub?.cancel();
-    final pendingTracks = <({String path, String? title, String? artist})>[];
+    final pendingTracks = <({String path, String? title, String? artist, String? coverPath})>[];
     var completed = false;
 
     Future<void> finishDownload() async {
       if (completed) return;
       completed = true;
-      await _downloadSub?.cancel();
-      for (final track in pendingTracks) {
-        if (mounted) {
-          setState(() {
-            _downloadPercentage = 99.0;
-            _statusMessage = 'Converting audio...';
+      try {
+        await _downloadSub?.cancel();
+        if (pendingTracks.isEmpty) {
+          throw Exception('The download completed without an audio file');
+        }
+        for (final track in pendingTracks) {
+          if (mounted) {
+            setState(() {
+              _downloadPercentage = 99.0;
+              _statusMessage = 'Converting audio...';
+            });
+          }
+          final converted = await _convertToMp3(
+            track.path,
+            title: track.title,
+            artist: track.artist,
+            coverPath: track.coverPath,
+          );
+          await ImportService.importFiles([converted], (newPath) {
+            widget.onFileAdded?.call(newPath);
           });
         }
-        final converted = await _convertToMp3(track.path, title: track.title, artist: track.artist);
-        await ImportService.importFiles([converted], (newPath) {
-          widget.onFileAdded?.call(newPath);
-        });
-      }
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.greenAccent),
-                SizedBox(width: 8),
-                Text(
-                  'Download & Import Complete!',
-                  style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
-                ),
-              ],
+        if (mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.greenAccent),
+                  SizedBox(width: 8),
+                  Text(
+                    'Download & Import Complete!',
+                    style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
+                  ),
+                ],
+              ),
+              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 3),
             ),
-            backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _mode = _DialogMode.input);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Download failed: $e'), backgroundColor: Theme.of(context).colorScheme.error),
+          );
+        }
       }
     }
 
@@ -194,10 +239,12 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                 path: parts[0],
                 title: parts.length > 1 ? Uri.decodeComponent(parts[1]) : null,
                 artist: parts.length > 2 ? Uri.decodeComponent(parts[2]) : null,
+                coverPath: parts.length > 3 ? Uri.decodeComponent(parts[3]) : null,
               ));
             } else if (event == 'done') {
               unawaited(finishDownload());
             } else if (event.startsWith('error:')) {
+              completed = true;
               final msg = event.substring('error:'.length);
               _downloadSub?.cancel();
               if (mounted) {
@@ -330,36 +377,39 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
       child: AnimatedSize(
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
-        child: SizedBox(
-          width: maxW,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.video_library_rounded, color: theme.colorScheme.primary, size: 24),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'YouTube · Stream or Download',
-                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height - 48),
+          child: SizedBox(
+            width: maxW,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.video_library_rounded, color: theme.colorScheme.primary, size: 24),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'YouTube · Stream or Download',
+                          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                switch (_mode) {
-                  _DialogMode.input => _buildInputBody(theme),
-                  _DialogMode.searching => _buildSearchingBody(theme),
-                  _DialogMode.results => _buildResultsBody(theme),
-                  _DialogMode.downloading => _buildDownloadingBody(theme),
-                },
-              ],
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  switch (_mode) {
+                    _DialogMode.input => _buildInputBody(theme),
+                    _DialogMode.searching => _buildSearchingBody(theme),
+                    _DialogMode.results => _buildResultsBody(theme),
+                    _DialogMode.downloading => _buildDownloadingBody(theme),
+                  },
+                ],
+              ),
             ),
           ),
         ),
@@ -517,63 +567,64 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             child: Center(child: Text('No results found.')),
           )
         else
-          ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: _searchResults.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
-            itemBuilder: (context, i) {
-              final result = _searchResults[i];
-              return ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                leading: CircleAvatar(
-                  backgroundColor: theme.colorScheme.primaryContainer,
-                  child: Text(
-                    '${i + 1}',
-                    style: TextStyle(color: theme.colorScheme.onPrimaryContainer, fontWeight: FontWeight.bold),
+          Flexible(
+            child: ListView.separated(
+              shrinkWrap: true,
+              physics: const ClampingScrollPhysics(),
+              itemCount: _searchResults.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, i) {
+                final result = _searchResults[i];
+                return ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                  leading: CircleAvatar(
+                    backgroundColor: theme.colorScheme.primaryContainer,
+                    child: Text(
+                      '${i + 1}',
+                      style: TextStyle(color: theme.colorScheme.onPrimaryContainer, fontWeight: FontWeight.bold),
+                    ),
                   ),
-                ),
-                title: Text(
-                  result.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                ),
-                subtitle: Text(
-                  [result.uploader, if (result.formattedDuration.isNotEmpty) result.formattedDuration].join(' · '),
-                  style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant),
-                ),
-                // FIX: Use a Column of small icon buttons instead of a Row
-                // so they never overflow on narrow screens.
-                trailing: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: 36,
-                      height: 36,
-                      child: IconButton(
-                        padding: EdgeInsets.zero,
-                        icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary, size: 20),
-                        tooltip: 'Stream',
-                        onPressed: () => _startStream(result.url, title: result.title, artist: result.uploader),
+                  title: Text(
+                    result.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                  ),
+                  subtitle: Text(
+                    [result.uploader, if (result.formattedDuration.isNotEmpty) result.formattedDuration].join(' · '),
+                    style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                  trailing: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: IconButton(
+                          padding: EdgeInsets.zero,
+                          icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary, size: 20),
+                          tooltip: 'Stream',
+                          onPressed: () => _startStream(result.url, title: result.title, artist: result.uploader),
+                        ),
                       ),
-                    ),
-                    SizedBox(
-                      width: 36,
-                      height: 36,
-                      child: IconButton(
-                        padding: EdgeInsets.zero,
-                        icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary, size: 20),
-                        tooltip: 'Download',
-                        onPressed: () => _startDownload(result.url),
+                      const SizedBox(width: 2),
+                      SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: IconButton(
+                          padding: EdgeInsets.zero,
+                          icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary, size: 20),
+                          tooltip: 'Download',
+                          onPressed: () => _startDownload(result.url),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-                onTap: () => _startStream(result.url, title: result.title, artist: result.uploader),
-              );
-            },
+                    ],
+                  ),
+                  onTap: () => _startStream(result.url, title: result.title, artist: result.uploader),
+                );
+              },
+            ),
           ),
         const SizedBox(height: 8),
         Align(
