@@ -1,3 +1,3 @@
-# resonance
+# Resonance
 
-A new Flutter project.
+THE flutter project.
