@@ -89,6 +89,34 @@ def get_metadata(url: str) -> str:
     return json.dumps({"title": title, "artist": artist}, ensure_ascii=False)
 
 
+def get_first_thumbnail(query: str) -> str:
+    """Search YouTube and return the first result's thumbnail URL."""
+    opts = {
+        **_BASE_OPTS,
+        "extract_flat": False,
+        "skip_download": True,
+    }
+    with _make_ydl(opts) as ydl:
+        info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+
+    entries = info.get("entries") or []
+    first = entries[0] if entries else info
+    thumbnail = first.get("thumbnail") or ""
+    thumbnails = first.get("thumbnails") or []
+    if thumbnails:
+        best = thumbnails[-1]
+        thumbnail = best.get("url") or thumbnail
+
+    return json.dumps(
+        {
+            "title": first.get("title") or "",
+            "artist": first.get("uploader") or first.get("channel") or "",
+            "thumbnail": thumbnail,
+        },
+        ensure_ascii=False,
+    )
+
+
 # ── get_stream_url ─────────────────────────────────────────────────────────────
 
 def get_stream_url(url: str) -> str:

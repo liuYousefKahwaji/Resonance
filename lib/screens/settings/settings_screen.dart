@@ -2,11 +2,16 @@
 // Logic: UNCHANGED. Visual refresh only — new section headers, spacing, icons.
 
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:metadata_god/metadata_god.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/platform/android/storage_permission_service.dart';
 import 'package:resonance/platform/desktop/hotkey_settings_tile.dart';
 import 'package:resonance/platform/desktop/tray_settings.dart';
@@ -30,6 +35,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _introEnabled = true;
   String _downloadDirectory = 'Default App Folder';
   int _seekStepSeconds = 5;
+  bool _coverLookupRunning = false;
+  String _coverLookupStatus = '';
   final SettingsService _settingsService = SettingsService();
 
   @override
@@ -130,6 +137,207 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _fillMissingCovers() async {
+    if (_coverLookupRunning) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Fill missing covers?'),
+        content: const Text(
+          'This searches YouTube for each local track in the current playlist and embeds the first result thumbnail only when the track has no cover.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Start')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _coverLookupRunning = true;
+      _coverLookupStatus = 'Reading current playlist...';
+    });
+
+    var updated = 0;
+    var skipped = 0;
+    var failed = 0;
+
+    try {
+      final content = await FileService().readTextFromFile();
+      final tracks = content
+          .split('\n')
+          .map((line) => line.trim())
+          .where((line) => line.isNotEmpty && !line.startsWith('#'))
+          .where((line) => !line.startsWith('http://') && !line.startsWith('https://'))
+          .toList();
+
+      for (var i = 0; i < tracks.length; i++) {
+        final track = tracks[i];
+        if (!mounted) return;
+        setState(() => _coverLookupStatus = 'Checking ${i + 1}/${tracks.length}: ${p.basename(track)}');
+
+        try {
+          final file = File(track);
+          if (!await file.exists()) {
+            failed++;
+            continue;
+          }
+
+          final metadata = await MetadataGod.readMetadata(file: track);
+          final existingPicture = metadata.picture;
+          if (existingPicture != null && existingPicture.data.isNotEmpty) {
+            skipped++;
+            continue;
+          }
+
+          final query = (metadata.title?.trim().isNotEmpty ?? false)
+              ? metadata.title!.trim()
+              : p.basenameWithoutExtension(track);
+          if (query.isEmpty) {
+            failed++;
+            continue;
+          }
+
+          setState(() => _coverLookupStatus = 'Searching YouTube: $query');
+          final thumbnailUrl = await _lookupFirstThumbnail(query);
+          if (thumbnailUrl == null || thumbnailUrl.isEmpty) {
+            failed++;
+            continue;
+          }
+
+          final bytes = await _downloadBytes(thumbnailUrl);
+          if (bytes.isEmpty) {
+            failed++;
+            continue;
+          }
+
+          await MetadataGod.writeMetadata(
+            file: track,
+            metadata: _metadataWithPicture(
+              metadata,
+              Picture(mimeType: _mimeTypeForImage(thumbnailUrl, bytes), data: bytes),
+            ),
+          );
+          updated++;
+        } catch (_) {
+          failed++;
+        }
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Cover lookup complete: $updated updated, $skipped skipped, $failed failed.')),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Cover lookup failed: $e'), backgroundColor: Theme.of(context).colorScheme.error),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _coverLookupRunning = false;
+          _coverLookupStatus = '';
+        });
+      }
+    }
+  }
+
+  Future<String?> _lookupFirstThumbnail(String query) async {
+    if (Platform.isAndroid) {
+      const channel = MethodChannel('resonance/android_youtube');
+      final raw = await channel.invokeMethod<String>('getFirstThumbnail', {'query': query});
+      final data = jsonDecode(raw ?? '{}') as Map<String, dynamic>;
+      return data['thumbnail'] as String?;
+    }
+
+    if (Platform.isWindows) {
+      final binDir = p.join(p.dirname(Platform.resolvedExecutable), 'bin');
+      final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
+      final denoPath = p.join(binDir, 'deno.exe');
+      final process = await Process.start(ytDlpPath, [
+        '--js-runtimes',
+        'deno:$denoPath',
+        '--dump-single-json',
+        '--skip-download',
+        '--no-warnings',
+        'ytsearch1:$query',
+      ]);
+      process.stderr.drain();
+      final output = await process.stdout.transform(utf8.decoder).join();
+      final exitCode = await process.exitCode;
+      if (exitCode != 0 || output.trim().isEmpty) return null;
+      final data = jsonDecode(output) as Map<String, dynamic>;
+      final entries = data['entries'];
+      final first = entries is List && entries.isNotEmpty && entries.first is Map
+          ? Map<String, dynamic>.from(entries.first as Map)
+          : data;
+      final thumbnails = first['thumbnails'];
+      if (thumbnails is List && thumbnails.isNotEmpty && thumbnails.last is Map) {
+        return (thumbnails.last as Map)['url'] as String?;
+      }
+      return first['thumbnail'] as String?;
+    }
+
+    throw UnsupportedError('Cover lookup is only available on Android and Windows.');
+  }
+
+  Future<Uint8List> _downloadBytes(String url) async {
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 20);
+    try {
+      final request = await client.getUrl(Uri.parse(url));
+      request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0');
+      final response = await request.close();
+      if (response.statusCode < 200 || response.statusCode >= 300) return Uint8List(0);
+      final chunks = <int>[];
+      await for (final chunk in response) {
+        chunks.addAll(chunk);
+      }
+      return Uint8List.fromList(chunks);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Metadata _metadataWithPicture(Metadata metadata, Picture picture) {
+    return Metadata(
+      title: metadata.title,
+      durationMs: metadata.durationMs,
+      artist: metadata.artist,
+      album: metadata.album,
+      albumArtist: metadata.albumArtist,
+      trackNumber: metadata.trackNumber,
+      trackTotal: metadata.trackTotal,
+      discNumber: metadata.discNumber,
+      discTotal: metadata.discTotal,
+      year: metadata.year,
+      genre: metadata.genre,
+      picture: picture,
+      fileSize: metadata.fileSize,
+    );
+  }
+
+  String _mimeTypeForImage(String path, List<int> bytes) {
+    final extension = p.extension(Uri.tryParse(path)?.path ?? path).toLowerCase();
+    if (extension == '.png' || (bytes.length > 4 && bytes[0] == 0x89 && bytes[1] == 0x50)) {
+      return 'image/png';
+    }
+    if (extension == '.webp' ||
+        (bytes.length > 12 &&
+            bytes[0] == 0x52 &&
+            bytes[1] == 0x49 &&
+            bytes[2] == 0x46 &&
+            bytes[3] == 0x46 &&
+            bytes[8] == 0x57 &&
+            bytes[9] == 0x45)) {
+      return 'image/webp';
+    }
+    return 'image/jpeg';
+  }
+
   @override
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
@@ -226,6 +434,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   onTap: _pickDownloadDirectory,
                 ),
+                if (Platform.isAndroid || Platform.isWindows) ...[
+                  _Divider(),
+                  _SettingsTile(
+                    icon: Icons.image_search_rounded,
+                    title: 'Fill Missing Covers',
+                    subtitle: _coverLookupRunning
+                        ? _coverLookupStatus
+                        : 'Search YouTube for cover art for tracks missing embedded images',
+                    trailing: _coverLookupRunning
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.play_arrow_rounded, size: 18),
+                    onTap: _coverLookupRunning ? null : _fillMissingCovers,
+                  ),
+                ],
               ],
             ),
 

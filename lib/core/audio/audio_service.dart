@@ -459,6 +459,50 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> skipToPrevious() async => previous();
 
   @override
+  Future<void> stop() async {
+    _pendingRestoredTrack = null;
+    _loadGeneration++;
+    _streamUrlCache.clear();
+
+    try {
+      if (Platform.isWindows) {
+        await _windowsPlayer!.stop();
+        _windowsPosition = Duration.zero;
+        _windowsDuration = Duration.zero;
+        _windowsBufferedPosition = Duration.zero;
+        _windowsIsBuffering = false;
+        _windowsIsCompleted = false;
+      } else {
+        await _player.stop();
+      }
+    } catch (e) {
+      debugPrint('[PlayerHandler] Stop failed: $e');
+    }
+
+    mediaItem.add(null);
+    playbackState.add(
+      playbackState.value.copyWith(
+        controls: const [],
+        systemActions: const {},
+        processingState: AudioProcessingState.idle,
+        playing: false,
+        updatePosition: Duration.zero,
+        bufferedPosition: Duration.zero,
+        queueIndex: null,
+      ),
+    );
+    await DiscordPresenceService().clearPresence();
+    await super.stop();
+    if (Platform.isAndroid) {
+      unawaited(
+        const MethodChannel(
+          'resonance/app_control',
+        ).invokeMethod<void>('exitApp').catchError((e) => debugPrint('[PlayerHandler] Android app exit failed: $e')),
+      );
+    }
+  }
+
+  @override
   Future<void> setSpeed(double speed) async {
     if (Platform.isWindows) {
       await _windowsPlayer!.setRate(speed);

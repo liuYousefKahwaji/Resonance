@@ -284,7 +284,10 @@ class _MainAppState extends State<MainApp> {
   Future<String?> _askForPlaylistName(String title, String initialValue) async {
     final navigatorContext = _navigatorKey.currentState?.overlay?.context;
     if (navigatorContext == null) return null;
-    final controller = TextEditingController(text: initialValue);
+    final safeInitialValue = initialValue.length <= FileService.maxPlaylistNameLength
+        ? initialValue
+        : initialValue.substring(0, FileService.maxPlaylistNameLength);
+    final controller = TextEditingController(text: safeInitialValue);
     final result = await showDialog<String>(
       context: navigatorContext,
       builder: (dialogContext) => AlertDialog(
@@ -292,7 +295,7 @@ class _MainAppState extends State<MainApp> {
         content: TextField(
           controller: controller,
           autofocus: true,
-          maxLength: 60,
+          maxLength: FileService.maxPlaylistNameLength,
           decoration: const InputDecoration(labelText: 'Playlist name'),
           onSubmitted: (value) {
             if (value.trim().isNotEmpty) Navigator.pop(dialogContext, value.trim());
@@ -315,18 +318,26 @@ class _MainAppState extends State<MainApp> {
   }
 
   Future<void> _renameActivePlaylist() async {
-    final currentName = playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber';
+    await _renamePlaylist(activePlaylistNumber);
+  }
+
+  Future<void> _renamePlaylist(int number) async {
+    final currentName = playlistNames[number] ?? 'Playlist $number';
     final name = await _askForPlaylistName('Rename playlist', currentName);
     if (name == null || name == currentName) return;
-    await FileService().renamePlaylist(activePlaylistNumber, name);
+    await FileService().renamePlaylist(number, name);
     await _loadPlaylistFromDisk();
   }
 
   Future<void> _deleteActivePlaylist() async {
+    await _deletePlaylist(activePlaylistNumber);
+  }
+
+  Future<void> _deletePlaylist(int number) async {
     if (playlistNumbers.length <= 1) return;
     final navigatorContext = _navigatorKey.currentState?.overlay?.context;
     if (navigatorContext == null) return;
-    final name = playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber';
+    final name = playlistNames[number] ?? 'Playlist $number';
     final confirmed = await showDialog<bool>(
       context: navigatorContext,
       builder: (dialogContext) => AlertDialog(
@@ -344,8 +355,55 @@ class _MainAppState extends State<MainApp> {
     );
     if (confirmed != true) return;
     setState(() => isLoading = true);
-    await FileService().deletePlaylist(activePlaylistNumber);
+    await FileService().deletePlaylist(number);
     await _loadPlaylistFromDisk();
+  }
+
+  Future<void> _showPlaylistActions(int number) async {
+    final navigatorContext = _navigatorKey.currentState?.overlay?.context;
+    if (navigatorContext == null) return;
+    final name = playlistNames[number] ?? 'Playlist $number';
+    final action = await showModalBottomSheet<_PlaylistActionType>(
+      context: navigatorContext,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.queue_music_rounded),
+              title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+              subtitle: const Text('Playlist actions'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_rounded),
+              title: const Text('Rename'),
+              onTap: () => Navigator.pop(sheetContext, _PlaylistActionType.rename),
+            ),
+            ListTile(
+              enabled: playlistNumbers.length > 1,
+              leading: const Icon(Icons.delete_outline_rounded),
+              title: const Text('Delete'),
+              onTap: playlistNumbers.length > 1 ? () => Navigator.pop(sheetContext, _PlaylistActionType.delete) : null,
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+
+    switch (action) {
+      case _PlaylistActionType.rename:
+        await _renamePlaylist(number);
+        return;
+      case _PlaylistActionType.delete:
+        await _deletePlaylist(number);
+        return;
+      case null:
+      case _PlaylistActionType.select:
+      case _PlaylistActionType.create:
+        return;
+    }
   }
 
   Future<void> _revealCurrentTrack(String trackPath) async {
@@ -523,6 +581,19 @@ class _MainAppState extends State<MainApp> {
             },
             onReorder: _handleReorder,
           );
+    final animatedTrackList = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 240),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) {
+        final offset = Tween<Offset>(begin: const Offset(0.025, 0), end: Offset.zero).animate(animation);
+        return FadeTransition(
+          opacity: animation,
+          child: SlideTransition(position: offset, child: child),
+        );
+      },
+      child: KeyedSubtree(key: ValueKey('$activePlaylistNumber-$isLoading'), child: trackListWidget),
+    );
 
     return Column(
       children: [
@@ -542,13 +613,13 @@ class _MainAppState extends State<MainApp> {
                         onFileAdded: (newPath) {
                           setState(() => playlist.add(newPath));
                         },
-                        child: trackListWidget,
+                        child: animatedTrackList,
                       ),
                       DropOverlay(isDragging: _isDragging),
                     ],
                   ),
                 )
-              : trackListWidget,
+              : animatedTrackList,
         ),
 
         // ── Player panel ──
@@ -598,19 +669,26 @@ class _MainAppState extends State<MainApp> {
               for (final number in playlistNumbers)
                 PopupMenuItem<_PlaylistMenuAction>(
                   value: _PlaylistMenuAction.select(number),
-                  child: Row(
-                    children: [
-                      Icon(
-                        number == activePlaylistNumber
-                            ? Icons.radio_button_checked_rounded
-                            : Icons.radio_button_unchecked_rounded,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(playlistNames[number] ?? 'Playlist $number', overflow: TextOverflow.ellipsis),
-                      ),
-                    ],
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onLongPress: () {
+                      Navigator.pop(context);
+                      Future.microtask(() => _showPlaylistActions(number));
+                    },
+                    child: Row(
+                      children: [
+                        Icon(
+                          number == activePlaylistNumber
+                              ? Icons.radio_button_checked_rounded
+                              : Icons.radio_button_unchecked_rounded,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(playlistNames[number] ?? 'Playlist $number', overflow: TextOverflow.ellipsis),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               const PopupMenuDivider(),

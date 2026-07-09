@@ -5,6 +5,7 @@ import android.media.audiofx.LoudnessEnhancer
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import androidx.annotation.Keep
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
@@ -24,6 +25,7 @@ class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val METHOD_CHANNEL = "resonance/android_youtube"
         private const val EVENT_CHANNEL  = "resonance/android_youtube/events"
+        private const val APP_CONTROL_CHANNEL = "resonance/app_control"
     }
 
     // ── Loudness enhancer instance ─────────────────────────────────────
@@ -93,6 +95,21 @@ class MainActivity : FlutterFragmentActivity() {
                         }
                     }
 
+                    // ── getFirstThumbnail ───────────────────────────────────
+                    "getFirstThumbnail" -> {
+                        val query = call.argument<String>("query") ?: ""
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = bridge.callAttr("get_first_thumbnail", query).toString()
+                                withContext(Dispatchers.Main) { result.success(json) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("THUMBNAIL_ERROR", e.message, null)
+                                }
+                            }
+                        }
+                    }
+
                     // ── download ──────────────────────────────────────────────
                     "download" -> {
                         val url = call.argument<String>("url") ?: ""
@@ -144,6 +161,26 @@ class MainActivity : FlutterFragmentActivity() {
                         }
                     }
 
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, APP_CONTROL_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "exitApp" -> {
+                        result.success(null)
+                        Handler(Looper.getMainLooper()).post {
+                            try {
+                                finishAndRemoveTask()
+                            } catch (_: Exception) {
+                                moveTaskToBack(true)
+                            }
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                Process.killProcess(Process.myPid())
+                            }, 250)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }

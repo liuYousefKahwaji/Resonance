@@ -16,9 +16,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
 import 'package:audio_service/audio_service.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
@@ -42,6 +44,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
   bool _loading = true;
   String? _title;
   String? _artist;
+  Uint8List? _coverArt;
   late final AnimationController _pulseController;
 
   @override
@@ -49,6 +52,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
     super.initState();
     _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 850));
     _loadMetadata();
+    _loadCoverArt();
   }
 
   @override
@@ -60,13 +64,37 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
           _loading = true;
           _title = null;
           _artist = null;
+          _coverArt = null;
         });
       }
       _loadMetadata();
+      _loadCoverArt();
     }
     if (widget.pulse != 0 && oldWidget.pulse != widget.pulse) {
       _pulseController.forward(from: 0);
     }
+  }
+
+  Future<void> _loadCoverArt() async {
+    final isStream = widget.trackPath.startsWith('http://') || widget.trackPath.startsWith('https://');
+    if (isStream) return;
+    final path = widget.trackPath;
+    try {
+      final file = File(path);
+      if (!await file.exists()) return;
+      final modified = (await file.lastModified()).millisecondsSinceEpoch;
+      final cached = _CoverArtMemoryCache.lookup(path, modified);
+      if (cached != null) {
+        if (mounted && widget.trackPath == path) setState(() => _coverArt = cached.bytes);
+        return;
+      }
+
+      final metadata = await MetadataGod.readMetadata(file: path);
+      final bytes = metadata.picture?.data;
+      final art = bytes == null || bytes.isEmpty ? null : Uint8List.fromList(bytes);
+      _CoverArtMemoryCache.set(path, modified, art);
+      if (mounted && widget.trackPath == path) setState(() => _coverArt = art);
+    } catch (_) {}
   }
 
   @override
@@ -127,72 +155,184 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
     }
   }
 
-  void _showMetadataEditor(BuildContext context, String currentTitle, String currentArtist) {
+  void _showMetadataEditor(BuildContext context, String currentTitle, String currentArtist) async {
     final titleController = TextEditingController(text: currentTitle);
     final artistController = TextEditingController(text: currentArtist);
+    Metadata? existingMetadata;
+    Uint8List? coverBytes;
+    String? coverMimeType;
 
-    showDialog(
+    try {
+      existingMetadata = await MetadataGod.readMetadata(file: widget.trackPath);
+      final picture = existingMetadata.picture;
+      if (picture != null && picture.data.isNotEmpty) {
+        coverBytes = Uint8List.fromList(picture.data);
+        coverMimeType = picture.mimeType;
+      }
+    } catch (_) {}
+
+    if (!context.mounted) {
+      titleController.dispose();
+      artistController.dispose();
+      return;
+    }
+
+    await showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: Row(
-            children: [
-              Icon(Icons.edit_rounded, size: 18, color: Theme.of(context).colorScheme.primary),
-              const SizedBox(width: 10),
-              const Text('Edit Metadata'),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                decoration: const InputDecoration(
-                  labelText: 'Title',
-                  prefixIcon: Icon(Icons.music_note_rounded, size: 18),
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> pickCover() async {
+              final result = await FilePicker.pickFiles(type: FileType.image, withData: true);
+              final file = result?.files.single;
+              if (file == null) return;
+              final bytes = file.bytes ?? (file.path == null ? null : await File(file.path!).readAsBytes());
+              if (bytes == null || bytes.isEmpty) return;
+              setDialogState(() {
+                coverBytes = Uint8List.fromList(bytes);
+                coverMimeType = _mimeTypeForImage(file.path ?? file.name, bytes);
+              });
+            }
+
+            return AlertDialog(
+              title: Row(
+                children: [
+                  Icon(Icons.edit_rounded, size: 18, color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(width: 10),
+                  const Text('Edit Metadata'),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: titleController,
+                      decoration: const InputDecoration(
+                        labelText: 'Title',
+                        prefixIcon: Icon(Icons.music_note_rounded, size: 18),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: artistController,
+                      decoration: const InputDecoration(
+                        labelText: 'Artist',
+                        prefixIcon: Icon(Icons.person_rounded, size: 18),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            width: 58,
+                            height: 58,
+                            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                            child: coverBytes == null
+                                ? const Icon(Icons.image_rounded)
+                                : Image.memory(coverBytes!, fit: BoxFit.cover),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: pickCover,
+                            icon: const Icon(Icons.image_search_rounded, size: 18),
+                            label: Text(coverBytes == null ? 'Choose cover' : 'Change cover'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: artistController,
-                decoration: const InputDecoration(
-                  labelText: 'Artist',
-                  prefixIcon: Icon(Icons.person_rounded, size: 18),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                ElevatedButton(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    try {
+                      final title = titleController.text.trim();
+                      final artist = artistController.text.trim();
+                      await MetadataGod.writeMetadata(
+                        file: widget.trackPath,
+                        metadata: _updatedMetadata(
+                          existingMetadata,
+                          title: title,
+                          artist: artist,
+                          picture: coverBytes == null
+                              ? existingMetadata?.picture
+                              : Picture(mimeType: coverMimeType ?? 'image/jpeg', data: coverBytes!),
+                        ),
+                      );
+                      await MetadataCacheService.set(widget.trackPath, title, artist);
+                      if (coverBytes != null) {
+                        final modified = (await File(widget.trackPath).lastModified()).millisecondsSinceEpoch;
+                        _CoverArtMemoryCache.set(widget.trackPath, modified, coverBytes);
+                      }
+                      if (mounted) {
+                        setState(() {
+                          _title = title;
+                          _artist = artist;
+                          if (coverBytes != null) _coverArt = coverBytes;
+                        });
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(SnackBar(content: Text('Failed to update metadata: $e')));
+                      }
+                    }
+                  },
+                  child: const Text('Save'),
                 ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                try {
-                  await MetadataGod.writeMetadata(
-                    file: widget.trackPath,
-                    metadata: Metadata(title: titleController.text, artist: artistController.text),
-                  );
-                  await MetadataCacheService.set(widget.trackPath, titleController.text, artistController.text);
-                  if (mounted) {
-                    setState(() {
-                      _title = titleController.text;
-                      _artist = artistController.text;
-                    });
-                  }
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(SnackBar(content: Text('Failed to update metadata: $e')));
-                  }
-                }
-              },
-              child: const Text('Save'),
-            ),
-          ],
+              ],
+            );
+          },
         );
       },
     );
+    titleController.dispose();
+    artistController.dispose();
+  }
+
+  Metadata _updatedMetadata(Metadata? existing, {required String title, required String artist, Picture? picture}) {
+    return Metadata(
+      title: title,
+      durationMs: existing?.durationMs,
+      artist: artist,
+      album: existing?.album,
+      albumArtist: existing?.albumArtist,
+      trackNumber: existing?.trackNumber,
+      trackTotal: existing?.trackTotal,
+      discNumber: existing?.discNumber,
+      discTotal: existing?.discTotal,
+      year: existing?.year,
+      genre: existing?.genre,
+      picture: picture,
+      fileSize: existing?.fileSize,
+    );
+  }
+
+  String _mimeTypeForImage(String path, List<int> bytes) {
+    final extension = p.extension(path).toLowerCase();
+    if (extension == '.png' || (bytes.length > 4 && bytes[0] == 0x89 && bytes[1] == 0x50)) {
+      return 'image/png';
+    }
+    if (extension == '.webp' ||
+        (bytes.length > 12 &&
+            bytes[0] == 0x52 &&
+            bytes[1] == 0x49 &&
+            bytes[2] == 0x46 &&
+            bytes[3] == 0x46 &&
+            bytes[8] == 0x57 &&
+            bytes[9] == 0x45)) {
+      return 'image/webp';
+    }
+    return 'image/jpeg';
   }
 
   @override
@@ -229,6 +369,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
           loading: _loading,
           title: _title,
           artist: _artist,
+          coverArt: _coverArt,
           onEditMetadata: _showMetadataEditor,
         ),
       ),
@@ -245,6 +386,7 @@ class _TrackTileContent extends StatelessWidget {
   final bool loading;
   final String? title;
   final String? artist;
+  final Uint8List? coverArt;
   final void Function(BuildContext, String, String) onEditMetadata;
 
   const _TrackTileContent({
@@ -254,6 +396,7 @@ class _TrackTileContent extends StatelessWidget {
     required this.loading,
     required this.title,
     required this.artist,
+    required this.coverArt,
     required this.onEditMetadata,
   });
 
@@ -327,23 +470,40 @@ class _TrackTileContent extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       child: Row(
                         children: [
-                          // ── Drag handle ───────────────────────────
+                          // ── Drag handle / shuffle cue ─────────────
                           ReorderableDragStartListener(
                             index: index,
                             child: Padding(
                               padding: const EdgeInsets.only(right: 8),
-                              child: Icon(
-                                Icons.drag_handle_rounded,
-                                size: 18,
-                                color: isCurrentTrack
-                                    ? primary.withValues(alpha: 0.5)
-                                    : (isDark ? const Color(0xFF3D3D55) : const Color(0xFFBDB8E0)),
+                              child: ValueListenableBuilder<int>(
+                                valueListenable: handler.playbackModeRevision,
+                                builder: (context, _, __) {
+                                  final shuffle = handler.getShuffleMode();
+                                  return AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 180),
+                                    child: Icon(
+                                      shuffle ? Icons.shuffle_rounded : Icons.drag_handle_rounded,
+                                      key: ValueKey(shuffle),
+                                      size: 18,
+                                      color: shuffle
+                                          ? primary.withValues(alpha: isCurrentTrack ? 0.85 : 0.55)
+                                          : isCurrentTrack
+                                          ? primary.withValues(alpha: 0.5)
+                                          : (isDark ? const Color(0xFF3D3D55) : const Color(0xFFBDB8E0)),
+                                    ),
+                                  );
+                                },
                               ),
                             ),
                           ),
 
                           // ── Icon ─────────────────────────────────
-                          _TrackIcon(isPlaying: isPlaying, isStream: isStream, isLoading: isLoading),
+                          _TrackIcon(
+                            isPlaying: isPlaying,
+                            isStream: isStream,
+                            isLoading: isLoading,
+                            coverArt: coverArt,
+                          ),
                           const SizedBox(width: 12),
 
                           // ── Title + artist ────────────────────────
@@ -469,8 +629,9 @@ class _TrackIcon extends StatelessWidget {
   final bool isPlaying;
   final bool isStream;
   final bool isLoading;
+  final Uint8List? coverArt;
 
-  const _TrackIcon({required this.isPlaying, this.isStream = false, this.isLoading = false});
+  const _TrackIcon({required this.isPlaying, this.isStream = false, this.isLoading = false, this.coverArt});
 
   @override
   Widget build(BuildContext context) {
@@ -496,6 +657,20 @@ class _TrackIcon extends StatelessWidget {
                 padding: const EdgeInsets.all(8),
                 child: CircularProgressIndicator(strokeWidth: 2, color: primary),
               )
+            : coverArt != null
+            ? ClipRRect(
+                key: ValueKey('cover-${coverArt!.length}'),
+                borderRadius: BorderRadius.circular(8),
+                child: Image.memory(
+                  coverArt!,
+                  width: 34,
+                  height: 34,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  cacheWidth: 96,
+                  cacheHeight: 96,
+                ),
+              )
             : Icon(
                 isPlaying ? Icons.graphic_eq_rounded : (isStream ? Icons.sensors_rounded : Icons.music_note_rounded),
                 key: ValueKey(
@@ -510,5 +685,33 @@ class _TrackIcon extends StatelessWidget {
               ),
       ),
     );
+  }
+}
+
+class _CoverArtCacheEntry {
+  final int modified;
+  final Uint8List? bytes;
+
+  const _CoverArtCacheEntry({required this.modified, required this.bytes});
+}
+
+class _CoverArtMemoryCache {
+  static const int _maxEntries = 80;
+  static final Map<String, _CoverArtCacheEntry> _entries = {};
+
+  static _CoverArtCacheEntry? lookup(String path, int modified) {
+    if (!_entries.containsKey(path)) return null;
+    final entry = _entries.remove(path)!;
+    if (entry.modified != modified) return null;
+    _entries[path] = entry;
+    return entry;
+  }
+
+  static void set(String path, int modified, Uint8List? bytes) {
+    _entries.remove(path);
+    _entries[path] = _CoverArtCacheEntry(modified: modified, bytes: bytes);
+    while (_entries.length > _maxEntries) {
+      _entries.remove(_entries.keys.first);
+    }
   }
 }

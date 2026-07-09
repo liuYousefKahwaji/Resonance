@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class FileService {
   static const String _activePlaylistKey = 'active_resonance_playlist';
   static const String _playlistNamesKey = 'resonance_playlist_names';
+  static const int maxPlaylistNameLength = 25;
   static const int defaultPlaylistNumber = 1;
   final String? _documentsPathOverride;
 
@@ -95,11 +96,17 @@ class FileService {
   }
 
   Future<void> renamePlaylist(int number, String name) async {
-    final cleanName = name.trim();
+    final cleanName = _normalizePlaylistName(name);
     if (cleanName.isEmpty) return;
     final names = await getPlaylistNames();
     names[number] = cleanName;
     await _savePlaylistNames(names);
+  }
+
+  String _normalizePlaylistName(String name) {
+    final cleanName = name.trim();
+    if (cleanName.length <= maxPlaylistNameLength) return cleanName;
+    return cleanName.substring(0, maxPlaylistNameLength).trimRight();
   }
 
   /// Deletes the numbered storage file while keeping filenames stable for all
