@@ -10,6 +10,9 @@
     <!-- Android ≤12 (API ≤32): legacy broad storage permission -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <!-- ── Audio service / background playback permissions ──────────────── -->
     <!-- Required to run audio as a foreground service -->

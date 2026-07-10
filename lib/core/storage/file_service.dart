@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -72,6 +73,17 @@ class FileService {
     return next;
   }
 
+  /// Creates an imported playlist through the same numbered-file and separate
+  /// display-name flow used by the rest of Resonance.
+  Future<({int number, String displayName})> createImportedPlaylist(String requestedName, List<String> tracks) async {
+    final names = await getPlaylistNames();
+    final displayName = _availablePlaylistName(requestedName, names.values.toSet());
+    final number = await createNextPlaylist();
+    await renamePlaylist(number, displayName);
+    await reorderPlaylist(tracks);
+    return (number: number, displayName: displayName);
+  }
+
   Future<Map<int, String>> getPlaylistNames() async {
     final numbers = await listPlaylistNumbers();
     final prefs = await SharedPreferences.getInstance();
@@ -109,6 +121,20 @@ class FileService {
     return cleanName.substring(0, maxPlaylistNameLength).trimRight();
   }
 
+  String _availablePlaylistName(String requestedName, Set<String> existingNames) {
+    final base = _normalizePlaylistName(requestedName).isEmpty
+        ? 'Imported Playlist'
+        : _normalizePlaylistName(requestedName);
+    if (!existingNames.contains(base)) return base;
+    for (var copy = 2; ; copy++) {
+      final suffix = ' ($copy)';
+      final maximumBaseLength = maxPlaylistNameLength - suffix.length;
+      final shortened = base.length <= maximumBaseLength ? base : base.substring(0, maximumBaseLength).trimRight();
+      final candidate = '$shortened$suffix';
+      if (!existingNames.contains(candidate)) return candidate;
+    }
+  }
+
   /// Deletes the numbered storage file while keeping filenames stable for all
   /// other playlists. Returns the playlist which should become active.
   Future<int> deletePlaylist(int number) async {
@@ -129,14 +155,32 @@ class FileService {
     return nextActive;
   }
 
-  Future<int?> findPlaylistContaining(String trackPath) async {
-    for (final number in await listPlaylistNumbers()) {
+  Future<int?> findPlaylistContaining(String trackPath, {int? preferredPlaylistNumber}) async {
+    final numbers = await listPlaylistNumbers();
+    final searchOrder = <int>[
+      if (preferredPlaylistNumber != null && numbers.contains(preferredPlaylistNumber)) preferredPlaylistNumber,
+      ...numbers.where((number) => number != preferredPlaylistNumber),
+    ];
+    for (final number in searchOrder) {
       final file = await _playlistFile(number);
       if (!await file.exists()) continue;
       final tracks = (await file.readAsLines()).map((line) => line.trim());
-      if (tracks.contains(trackPath)) return number;
+      if (tracks.any((candidate) => _sameTrackPath(candidate, trackPath))) return number;
     }
     return null;
+  }
+
+  bool _sameTrackPath(String first, String second) {
+    if (first == second) return true;
+    if (first.startsWith('http://') ||
+        first.startsWith('https://') ||
+        second.startsWith('http://') ||
+        second.startsWith('https://')) {
+      return false;
+    }
+    final firstPath = p.normalize(p.absolute(first));
+    final secondPath = p.normalize(p.absolute(second));
+    return Platform.isWindows ? firstPath.toLowerCase() == secondPath.toLowerCase() : firstPath == secondPath;
   }
 
   Future<void> _savePlaylistNames(Map<int, String> names) async {

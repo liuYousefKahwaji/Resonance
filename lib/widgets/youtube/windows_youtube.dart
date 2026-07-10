@@ -15,6 +15,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/services/import_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
+import 'package:resonance/models/track_source_record.dart';
+import 'package:resonance/services/track_source_repository.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -152,7 +154,7 @@ class MediaDownloader {
 
     required Function(double percentage, String status) onProgress,
 
-    required Function(String filePath) onTrackDownloaded,
+    required Function(String filePath, String? youtubeVideoId) onTrackDownloaded,
   }) async {
     final binDir = await binDirPath;
 
@@ -232,7 +234,7 @@ class MediaDownloader {
           '--yes-playlist',
 
           '--print',
-          'after_move:%(filepath)s',
+          'after_move:%(filepath)s|%(id)s',
 
           '-o',
           outputTemplate,
@@ -318,10 +320,10 @@ class MediaDownloader {
         final processedPaths = <String>{};
         var importedCount = 0;
 
-        Future<void> importPath(String path) async {
+        Future<void> importPath(String path, {String? youtubeVideoId}) async {
           final normalized = p.normalize(path);
           if (processedPaths.add(normalized) && await File(normalized).exists()) {
-            await onTrackDownloaded(normalized);
+            await onTrackDownloaded(normalized, youtubeVideoId);
             importedCount++;
           }
         }
@@ -337,16 +339,25 @@ class MediaDownloader {
             if (match != null) {
               final path = p.normalize(match.group(1)!);
 
-              await importPath(path);
-              await importPath(p.setExtension(path, '.mp3'));
+              final inputVideoId = TrackSourceRepository.videoIdFromUrlOrId(url);
+              await importPath(path, youtubeVideoId: inputVideoId);
+              await importPath(p.setExtension(path, '.mp3'), youtubeVideoId: inputVideoId);
             }
-          } else if (_looksLikeAudioPath(trimmed) && !trimmed.contains('[')) {
+          } else if (!trimmed.contains('[')) {
             // --print after_move:%(filepath)s line
-
-            final cleanPath = p.normalize(trimmed);
-
-            await Future.delayed(const Duration(milliseconds: 150));
-            await importPath(cleanPath);
+            final separator = trimmed.lastIndexOf('|');
+            final candidateId = separator < 0 ? null : trimmed.substring(separator + 1);
+            final candidatePath = separator < 0 ? trimmed : trimmed.substring(0, separator);
+            if (_looksLikeAudioPath(candidatePath)) {
+              final cleanPath = p.normalize(candidatePath);
+              await Future.delayed(const Duration(milliseconds: 150));
+              await importPath(
+                cleanPath,
+                youtubeVideoId: candidateId != null && TrackSourceRepository.isValidYoutubeVideoId(candidateId)
+                    ? candidateId
+                    : TrackSourceRepository.videoIdFromUrlOrId(url),
+              );
+            }
           }
         }
 
@@ -362,7 +373,9 @@ class MediaDownloader {
         await for (final entity in targetDirectory.list()) {
           if (entity is! File || !_looksLikeAudioPath(entity.path)) continue;
           final normalized = p.normalize(entity.path);
-          if (!pathsBeforeDownload.contains(normalized)) await importPath(normalized);
+          if (!pathsBeforeDownload.contains(normalized)) {
+            await importPath(normalized, youtubeVideoId: TrackSourceRepository.videoIdFromUrlOrId(url));
+          }
         }
         if (importedCount == 0) {
           throw Exception('Download finished, but no audio file could be imported');
@@ -452,7 +465,15 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
           }
         },
 
-        onTrackDownloaded: (filePath) async {
+        onTrackDownloaded: (filePath, youtubeVideoId) async {
+          if (youtubeVideoId != null) {
+            await const TrackSourceRepository().saveSource(
+              localPath: filePath,
+              youtubeVideoId: youtubeVideoId,
+              method: TrackSourceMethod.downloadedByResonance,
+              lastVerifiedAt: DateTime.now().toUtc(),
+            );
+          }
           await ImportService.importFiles([filePath], (newPath) {
             widget.onFileAdded?.call(newPath);
           });
@@ -505,6 +526,14 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     final targetArtist = artist ?? 'YouTube';
 
     await MetadataCacheService.set(url, targetTitle, targetArtist);
+    final youtubeVideoId = TrackSourceRepository.videoIdFromUrlOrId(url);
+    if (youtubeVideoId != null) {
+      await const TrackSourceRepository().saveSource(
+        localPath: url,
+        youtubeVideoId: youtubeVideoId,
+        method: TrackSourceMethod.manuallySelected,
+      );
+    }
 
     final playlistContent = await FileService().readTextFromFile();
     final updatedContent = '${playlistContent.trim()}\n$url\n';

@@ -37,6 +37,11 @@ dependencies:
   ffmpeg_kit_audio_flutter: 1.1.0
   media_kit: ^1.2.6
   media_kit_libs_windows_audio: ^1.0.9
+  crypto: ^3.0.6
+  image: ^4.8.0
+  mobile_scanner: ^7.2.0
+  qr_flutter: ^4.1.0
+  zxing2: ^0.2.4
 
 dev_dependencies:
   flutter_test:

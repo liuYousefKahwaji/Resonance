@@ -12,7 +12,8 @@ import 'package:resonance/core/audio/audio_service.dart';
 
 class AlbumCover extends StatefulWidget {
   final ValueChanged<String>? onTap;
-  const AlbumCover({super.key, this.onTap});
+  final int artworkRevision;
+  const AlbumCover({super.key, this.onTap, this.artworkRevision = 0});
 
   @override
   State<AlbumCover> createState() => _AlbumCoverState();
@@ -115,6 +116,7 @@ class _AlbumCoverState extends State<AlbumCover> with SingleTickerProviderStateM
                     isLoading: isLoading,
                     hasTrack: item != null,
                     isDark: isDark,
+                    artworkRevision: widget.artworkRevision,
                     onTap: item == null ? null : () => widget.onTap?.call(path),
                   ),
                 ),
@@ -135,6 +137,7 @@ class _NowPlayingCard extends StatelessWidget {
   final bool isLoading;
   final bool hasTrack;
   final bool isDark;
+  final int artworkRevision;
   final VoidCallback? onTap;
 
   const _NowPlayingCard({
@@ -145,6 +148,7 @@ class _NowPlayingCard extends StatelessWidget {
     required this.isLoading,
     required this.hasTrack,
     required this.isDark,
+    required this.artworkRevision,
     required this.onTap,
   });
 
@@ -176,7 +180,13 @@ class _NowPlayingCard extends StatelessWidget {
             // Prevent the Row from overflowing — each child must be sized.
             mainAxisSize: MainAxisSize.max,
             children: [
-              _AlbumIcon(isPlaying: isPlaying, hasTrack: hasTrack, isLoading: isLoading, path: path),
+              _AlbumIcon(
+                isPlaying: isPlaying,
+                hasTrack: hasTrack,
+                isLoading: isLoading,
+                path: path,
+                artworkRevision: artworkRevision,
+              ),
               const SizedBox(width: 14),
               // Expanded forces the text column to take remaining space and
               // enables Text overflow / ellipsis to work correctly.
@@ -230,8 +240,15 @@ class _AlbumIcon extends StatefulWidget {
   final bool isLoading;
   final bool hasTrack;
   final String path;
+  final int artworkRevision;
 
-  const _AlbumIcon({required this.isPlaying, required this.hasTrack, required this.path, required this.isLoading});
+  const _AlbumIcon({
+    required this.isPlaying,
+    required this.hasTrack,
+    required this.path,
+    required this.isLoading,
+    required this.artworkRevision,
+  });
 
   @override
   State<_AlbumIcon> createState() => _AlbumIconState();
@@ -253,7 +270,7 @@ class _AlbumIconState extends State<_AlbumIcon> with SingleTickerProviderStateMi
   @override
   void didUpdateWidget(covariant _AlbumIcon old) {
     super.didUpdateWidget(old);
-    if (old.path != widget.path) {
+    if (old.path != widget.path || old.artworkRevision != widget.artworkRevision) {
       _albumArt = null;
       _loadedPath = null;
       _loadAlbumArt();

@@ -33,8 +33,16 @@ class TrackTile extends StatefulWidget {
   final int index;
   final VoidCallback onDelete;
   final int pulse;
+  final int artworkRevision;
 
-  const TrackTile({super.key, required this.trackPath, required this.index, required this.onDelete, this.pulse = 0});
+  const TrackTile({
+    super.key,
+    required this.trackPath,
+    required this.index,
+    required this.onDelete,
+    this.pulse = 0,
+    this.artworkRevision = 0,
+  });
 
   @override
   State<TrackTile> createState() => _TrackTileState();
@@ -70,12 +78,15 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
       _loadMetadata();
       _loadCoverArt();
     }
+    if (oldWidget.trackPath == widget.trackPath && oldWidget.artworkRevision != widget.artworkRevision) {
+      _loadCoverArt(force: true);
+    }
     if (widget.pulse != 0 && oldWidget.pulse != widget.pulse) {
       _pulseController.forward(from: 0);
     }
   }
 
-  Future<void> _loadCoverArt() async {
+  Future<void> _loadCoverArt({bool force = false}) async {
     final isStream = widget.trackPath.startsWith('http://') || widget.trackPath.startsWith('https://');
     if (isStream) return;
     final path = widget.trackPath;
@@ -83,7 +94,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
       final file = File(path);
       if (!await file.exists()) return;
       final modified = (await file.lastModified()).millisecondsSinceEpoch;
-      final cached = _CoverArtMemoryCache.lookup(path, modified);
+      final cached = force ? null : _CoverArtMemoryCache.lookup(path, modified, widget.artworkRevision);
       if (cached != null) {
         if (mounted && widget.trackPath == path) setState(() => _coverArt = cached.bytes);
         return;
@@ -92,7 +103,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
       final metadata = await MetadataGod.readMetadata(file: path);
       final bytes = metadata.picture?.data;
       final art = bytes == null || bytes.isEmpty ? null : Uint8List.fromList(bytes);
-      _CoverArtMemoryCache.set(path, modified, art);
+      _CoverArtMemoryCache.set(path, modified, widget.artworkRevision, art);
       if (mounted && widget.trackPath == path) setState(() => _coverArt = art);
     } catch (_) {}
   }
@@ -161,6 +172,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
     Metadata? existingMetadata;
     Uint8List? coverBytes;
     String? coverMimeType;
+    var coverRemoved = false;
 
     try {
       existingMetadata = await MetadataGod.readMetadata(file: widget.trackPath);
@@ -191,6 +203,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
               setDialogState(() {
                 coverBytes = Uint8List.fromList(bytes);
                 coverMimeType = _mimeTypeForImage(file.path ?? file.name, bytes);
+                coverRemoved = false;
               });
             }
 
@@ -237,10 +250,25 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: pickCover,
-                            icon: const Icon(Icons.image_search_rounded, size: 18),
-                            label: Text(coverBytes == null ? 'Choose cover' : 'Change cover'),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: pickCover,
+                                icon: const Icon(Icons.image_search_rounded, size: 18),
+                                label: Text(coverBytes == null ? 'Choose cover' : 'Change cover'),
+                              ),
+                              if (coverBytes != null)
+                                TextButton.icon(
+                                  onPressed: () => setDialogState(() {
+                                    coverBytes = null;
+                                    coverMimeType = null;
+                                    coverRemoved = true;
+                                  }),
+                                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                                  label: const Text('Remove cover'),
+                                ),
+                            ],
                           ),
                         ),
                       ],
@@ -256,27 +284,34 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                     try {
                       final title = titleController.text.trim();
                       final artist = artistController.text.trim();
-                      await MetadataGod.writeMetadata(
-                        file: widget.trackPath,
-                        metadata: _updatedMetadata(
-                          existingMetadata,
-                          title: title,
-                          artist: artist,
-                          picture: coverBytes == null
-                              ? existingMetadata?.picture
-                              : Picture(mimeType: coverMimeType ?? 'image/jpeg', data: coverBytes!),
+                      final picture = coverRemoved
+                          ? null
+                          : coverBytes == null
+                          ? existingMetadata?.picture
+                          : Picture(mimeType: coverMimeType ?? 'image/jpeg', data: coverBytes!);
+                      final handler = Provider.of<PlayerHandler>(this.context, listen: false);
+                      await handler.withTrackFileReleased(
+                        widget.trackPath,
+                        () => MetadataGod.writeMetadata(
+                          file: widget.trackPath,
+                          metadata: _updatedMetadata(existingMetadata, title: title, artist: artist, picture: picture),
                         ),
+                        updatedTitle: title,
+                        updatedArtist: artist,
                       );
                       await MetadataCacheService.set(widget.trackPath, title, artist);
-                      if (coverBytes != null) {
-                        final modified = (await File(widget.trackPath).lastModified()).millisecondsSinceEpoch;
-                        _CoverArtMemoryCache.set(widget.trackPath, modified, coverBytes);
-                      }
+                      final modified = (await File(widget.trackPath).lastModified()).millisecondsSinceEpoch;
+                      _CoverArtMemoryCache.set(
+                        widget.trackPath,
+                        modified,
+                        widget.artworkRevision,
+                        picture == null ? null : coverBytes,
+                      );
                       if (mounted) {
                         setState(() {
                           _title = title;
                           _artist = artist;
-                          if (coverBytes != null) _coverArt = coverBytes;
+                          _coverArt = picture == null ? null : coverBytes;
                         });
                       }
                     } catch (e) {
@@ -690,26 +725,27 @@ class _TrackIcon extends StatelessWidget {
 
 class _CoverArtCacheEntry {
   final int modified;
+  final int revision;
   final Uint8List? bytes;
 
-  const _CoverArtCacheEntry({required this.modified, required this.bytes});
+  const _CoverArtCacheEntry({required this.modified, required this.revision, required this.bytes});
 }
 
 class _CoverArtMemoryCache {
   static const int _maxEntries = 80;
   static final Map<String, _CoverArtCacheEntry> _entries = {};
 
-  static _CoverArtCacheEntry? lookup(String path, int modified) {
+  static _CoverArtCacheEntry? lookup(String path, int modified, int revision) {
     if (!_entries.containsKey(path)) return null;
     final entry = _entries.remove(path)!;
-    if (entry.modified != modified) return null;
+    if (entry.modified != modified || entry.revision != revision) return null;
     _entries[path] = entry;
     return entry;
   }
 
-  static void set(String path, int modified, Uint8List? bytes) {
+  static void set(String path, int modified, int revision, Uint8List? bytes) {
     _entries.remove(path);
-    _entries[path] = _CoverArtCacheEntry(modified: modified, bytes: bytes);
+    _entries[path] = _CoverArtCacheEntry(modified: modified, revision: revision, bytes: bytes);
     while (_entries.length > _maxEntries) {
       _entries.remove(_entries.keys.first);
     }

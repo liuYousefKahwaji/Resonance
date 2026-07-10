@@ -243,6 +243,40 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   Duration? get _currentDuration => Platform.isWindows ? _windowsDuration : _player.duration;
 
+  /// Windows media backends keep the current audio file open while it is
+  /// paused. Release that handle for an in-place metadata update, then restore
+  /// the track, position, and play state without requiring elevation.
+  Future<T> withTrackFileReleased<T>(
+    String filePath,
+    Future<T> Function() action, {
+    required String updatedTitle,
+    required String updatedArtist,
+  }) async {
+    final current = mediaItem.value;
+    if (!Platform.isWindows || current == null || current.id.startsWith('http')) return action();
+    final normalizedTarget = p.normalize(p.absolute(filePath)).toLowerCase();
+    final normalizedCurrent = p.normalize(p.absolute(current.id)).toLowerCase();
+    if (normalizedTarget != normalizedCurrent) return action();
+
+    final wasPlaying = _isWindowsPlaying;
+    final position = _currentPosition;
+    var updated = false;
+    try {
+      await _windowsPlayer!.stop();
+      final result = await action();
+      updated = true;
+      return result;
+    } finally {
+      await loadTrack(
+        filePath,
+        updated ? updatedTitle : current.title,
+        updated ? updatedArtist : current.artist ?? 'Unknown Artist',
+      );
+      await seek(position);
+      if (!wasPlaying) await pause();
+    }
+  }
+
   void _updatePlaybackState() {
     if (Platform.isWindows) {
       final playing = _isWindowsPlaying;

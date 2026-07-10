@@ -162,6 +162,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     var updated = 0;
     var skipped = 0;
     var failed = 0;
+    final handler = Provider.of<PlayerHandler>(context, listen: false);
 
     try {
       final content = await FileService().readTextFromFile();
@@ -212,12 +213,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             continue;
           }
 
-          await MetadataGod.writeMetadata(
-            file: track,
-            metadata: _metadataWithPicture(
-              metadata,
-              Picture(mimeType: _mimeTypeForImage(thumbnailUrl, bytes), data: bytes),
+          await handler.withTrackFileReleased(
+            track,
+            () => MetadataGod.writeMetadata(
+              file: track,
+              metadata: _metadataWithPicture(
+                metadata,
+                Picture(mimeType: _mimeTypeForImage(thumbnailUrl, bytes), data: bytes),
+              ),
             ),
+            updatedTitle: metadata.title?.trim().isNotEmpty == true
+                ? metadata.title!.trim()
+                : p.basenameWithoutExtension(track),
+            updatedArtist: metadata.artist?.trim().isNotEmpty == true ? metadata.artist!.trim() : 'Unknown Artist',
           );
           updated++;
         } catch (_) {

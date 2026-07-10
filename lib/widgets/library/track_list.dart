@@ -18,6 +18,7 @@ class TrackList extends StatelessWidget {
   final ScrollController controller;
   final String? pulsingTrackPath;
   final int pulse;
+  final int artworkRevision;
 
   const TrackList({
     super.key,
@@ -27,6 +28,7 @@ class TrackList extends StatelessWidget {
     required this.controller,
     required this.pulsingTrackPath,
     required this.pulse,
+    required this.artworkRevision,
   });
 
   @override
@@ -48,6 +50,7 @@ class TrackList extends StatelessWidget {
           index: index,
           onDelete: () => onTrackDeleted(index, tracks[index]),
           pulse: pulsingTrackPath == tracks[index] ? pulse : 0,
+          artworkRevision: artworkRevision,
         );
       },
       onReorder: onReorder,

@@ -1,11 +1,16 @@
 package com.example.resonance
 
+import android.Manifest
+import android.content.ContentValues
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.audiofx.LoudnessEnhancer
+import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.provider.MediaStore
 import androidx.annotation.Keep
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
@@ -19,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : FlutterFragmentActivity() {
 
@@ -26,10 +32,14 @@ class MainActivity : FlutterFragmentActivity() {
         private const val METHOD_CHANNEL = "resonance/android_youtube"
         private const val EVENT_CHANNEL  = "resonance/android_youtube/events"
         private const val APP_CONTROL_CHANNEL = "resonance/app_control"
+        private const val PLAYLIST_TRANSFER_CHANNEL = "resonance/playlist_transfer"
+        private const val QR_STORAGE_PERMISSION_REQUEST = 4102
     }
 
     // ── Loudness enhancer instance ─────────────────────────────────────
     private var loudnessEnhancer: LoudnessEnhancer? = null
+    private var pendingQrFiles: List<Map<String, Any?>>? = null
+    private var pendingQrResult: MethodChannel.Result? = null
 
     override fun provideFlutterEngine(context: Context): FlutterEngine? =
         AudioServicePlugin.getFlutterEngine(context)
@@ -185,8 +195,105 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
 
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PLAYLIST_TRANSFER_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "saveQrCodes" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val files = call.argument<List<Map<String, Any?>>>("files") ?: emptyList()
+                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            pendingQrFiles = files
+                            pendingQrResult = result
+                            requestPermissions(
+                                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                                QR_STORAGE_PERMISSION_REQUEST,
+                            )
+                        } else {
+                            saveQrCodesAsync(files, result)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // ── Loudness Enhancer channel ──────────────────────────────────────
         setupLoudnessChannel(flutterEngine)
+    }
+
+    private fun saveQrCodesAsync(files: List<Map<String, Any?>>, result: MethodChannel.Result) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                saveQrCodes(files)
+                withContext(Dispatchers.Main) { result.success("Pictures/Resonance") }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    result.error("QR_SAVE_ERROR", e.message ?: "Could not save QR codes", null)
+                }
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != QR_STORAGE_PERMISSION_REQUEST) return
+        val files = pendingQrFiles
+        val result = pendingQrResult
+        pendingQrFiles = null
+        pendingQrResult = null
+        if (files == null || result == null) return
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            saveQrCodesAsync(files, result)
+        } else {
+            result.error("QR_SAVE_PERMISSION_DENIED", "Storage permission was denied", null)
+        }
+    }
+
+    private fun saveQrCodes(files: List<Map<String, Any?>>) {
+        if (files.isEmpty()) throw IllegalArgumentException("No QR images were provided")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            throw SecurityException("Storage permission is required to save QR images on this Android version")
+        }
+        files.forEach { item ->
+            val rawName = item["name"] as? String ?: throw IllegalArgumentException("A QR filename is missing")
+            val name = File(rawName).name.let { if (it.endsWith(".png", true)) it else "$it.png" }
+            val bytes = item["bytes"] as? ByteArray ?: throw IllegalArgumentException("QR image data is missing")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Resonance")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("Android could not create $name")
+                try {
+                    contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                        ?: throw IllegalStateException("Android could not open $name for writing")
+                    values.clear()
+                    values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    contentResolver.update(uri, values, null, null)
+                } catch (e: Exception) {
+                    contentResolver.delete(uri, null, null)
+                    throw e
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                val directory = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                    "Resonance",
+                )
+                directory.mkdirs()
+                FileOutputStream(File(directory, name)).use { it.write(bytes) }
+            }
+        }
     }
 
     /**

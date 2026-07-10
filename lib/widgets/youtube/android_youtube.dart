@@ -21,6 +21,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/services/import_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
+import 'package:resonance/models/track_source_record.dart';
+import 'package:resonance/models/youtube_download_result.dart';
+import 'package:resonance/services/track_source_repository.dart';
 
 class YtSearchResult {
   final String title;
@@ -47,7 +50,7 @@ class YtSearchResult {
   }
 }
 
-class _AndroidYoutubeDownloader {
+class AndroidYoutubeDownloader {
   static const _method = MethodChannel('resonance/android_youtube');
   static const _event = EventChannel('resonance/android_youtube/events');
 
@@ -71,6 +74,127 @@ class _AndroidYoutubeDownloader {
   }
 
   Future<String> get outputDir => _resolveOutputDir();
+
+  Future<List<YoutubeDownloadResult>> downloadAudio(
+    String url, {
+    required void Function(double percentage, String status) onProgress,
+  }) async {
+    final pendingTracks =
+        <String, ({String path, String? title, String? artist, String? coverPath, String? videoId})>{};
+    final done = Completer<void>();
+    late final StreamSubscription<String> subscription;
+    subscription = download(url, await outputDir).listen(
+      (event) {
+        if (event.startsWith('progress:')) {
+          final parts = event.split(':');
+          final percentage = double.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0.0;
+          onProgress(percentage, parts.length > 2 ? parts.sublist(2).join(':') : 'Downloading...');
+        } else if (event.startsWith('track:')) {
+          final parts = event.substring('track:'.length).split('|');
+          if (parts.isEmpty || parts[0].trim().isEmpty) return;
+          final path = p.normalize(parts[0]);
+          final candidateId = parts.length > 4 ? Uri.decodeComponent(parts[4]) : null;
+          pendingTracks[path] = (
+            path: path,
+            title: parts.length > 1 && parts[1].isNotEmpty ? Uri.decodeComponent(parts[1]) : null,
+            artist: parts.length > 2 && parts[2].isNotEmpty ? Uri.decodeComponent(parts[2]) : null,
+            coverPath: parts.length > 3 && parts[3].isNotEmpty ? Uri.decodeComponent(parts[3]) : null,
+            videoId: candidateId != null && TrackSourceRepository.isValidYoutubeVideoId(candidateId)
+                ? candidateId
+                : TrackSourceRepository.videoIdFromUrlOrId(url),
+          );
+        } else if (event == 'done') {
+          if (!done.isCompleted) done.complete();
+        } else if (event.startsWith('error:')) {
+          if (!done.isCompleted) done.completeError(Exception(event.substring('error:'.length)));
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!done.isCompleted) done.completeError(error, stackTrace);
+      },
+      onDone: () {
+        if (!done.isCompleted) done.complete();
+      },
+    );
+    try {
+      await done.future;
+    } finally {
+      await subscription.cancel();
+    }
+    if (pendingTracks.isEmpty) throw Exception('The download completed without an audio file');
+    final results = <YoutubeDownloadResult>[];
+    for (final track in pendingTracks.values) {
+      onProgress(99, 'Converting audio...');
+      final converted = await convertAndroidYoutubeAudioToMp3(
+        track.path,
+        title: track.title,
+        artist: track.artist,
+        coverPath: track.coverPath,
+      );
+      results.add(
+        YoutubeDownloadResult(
+          localPath: converted,
+          youtubeVideoId: track.videoId,
+          title: track.title,
+          artist: track.artist,
+        ),
+      );
+    }
+    return results;
+  }
+}
+
+Future<String> convertAndroidYoutubeAudioToMp3(
+  String inputPath, {
+  String? title,
+  String? artist,
+  String? coverPath,
+}) async {
+  final finalPath = p.join(p.dirname(inputPath), '${p.basenameWithoutExtension(inputPath)}.mp3');
+  final outputPath = p.equals(inputPath, finalPath) ? '$finalPath.resonance.mp3' : finalPath;
+  final hasCover = coverPath != null && coverPath.isNotEmpty && await File(coverPath).exists();
+  final args = <String>['-y', '-i', inputPath];
+  if (hasCover) {
+    args.addAll(['-i', coverPath, '-map', '0:a:0', '-map', '1:v:0']);
+  } else {
+    args.add('-vn');
+  }
+  args.addAll(['-map_metadata', '0']);
+  if (title != null && title.isNotEmpty) args.addAll(['-metadata', 'title=$title']);
+  if (artist != null && artist.isNotEmpty) args.addAll(['-metadata', 'artist=$artist']);
+  if (hasCover) {
+    args.addAll([
+      '-metadata:s:v',
+      'title=Album cover',
+      '-metadata:s:v',
+      'comment=Cover (front)',
+      '-codec:v',
+      'mjpeg',
+      '-id3v2_version',
+      '3',
+    ]);
+  }
+  args.addAll(['-codec:a', 'libmp3lame', '-b:a', '192k', outputPath]);
+  final session = await FFmpegKit.executeWithArguments(args);
+  final rc = await session.getReturnCode();
+  if (!ReturnCode.isSuccess(rc)) {
+    final logs = await session.getAllLogsAsString();
+    throw Exception('Audio conversion failed: ${(logs ?? '').trim()}');
+  }
+  final output = File(outputPath);
+  if (!await output.exists() || await output.length() == 0) {
+    throw Exception('Audio conversion produced no output file');
+  }
+  try {
+    await File(inputPath).delete();
+  } catch (_) {}
+  if (hasCover) {
+    try {
+      await File(coverPath).delete();
+    } catch (_) {}
+  }
+  if (outputPath != finalPath) await File(outputPath).rename(finalPath);
+  return finalPath;
 }
 
 enum _DialogMode { input, searching, results, downloading }
@@ -86,70 +210,18 @@ class AndroidYoutube extends StatefulWidget {
 class _AndroidYoutubeState extends State<AndroidYoutube> {
   final _urlController = TextEditingController();
   final _searchController = TextEditingController();
-  final _downloader = _AndroidYoutubeDownloader();
+  final _downloader = AndroidYoutubeDownloader();
 
   _DialogMode _mode = _DialogMode.input;
   bool _isUrlMode = true;
   List<YtSearchResult> _searchResults = [];
   double _downloadPercentage = 0.0;
   String _statusMessage = '';
-  StreamSubscription<String>? _downloadSub;
-
-  Future<String> _convertToMp3(String inputPath, {String? title, String? artist, String? coverPath}) async {
-    final finalPath = p.join(p.dirname(inputPath), '${p.basenameWithoutExtension(inputPath)}.mp3');
-    final outputPath = p.equals(inputPath, finalPath) ? '$finalPath.resonance.mp3' : finalPath;
-    final hasCover = coverPath != null && coverPath.isNotEmpty && await File(coverPath).exists();
-    final args = <String>['-y', '-i', inputPath];
-    if (hasCover) {
-      args.addAll(['-i', coverPath, '-map', '0:a:0', '-map', '1:v:0']);
-    } else {
-      args.add('-vn');
-    }
-    args.addAll(['-map_metadata', '0']);
-    if (title != null && title.isNotEmpty) args.addAll(['-metadata', 'title=$title']);
-    if (artist != null && artist.isNotEmpty) args.addAll(['-metadata', 'artist=$artist']);
-    if (hasCover) {
-      args.addAll([
-        '-metadata:s:v',
-        'title=Album cover',
-        '-metadata:s:v',
-        'comment=Cover (front)',
-        '-codec:v',
-        'mjpeg',
-        '-id3v2_version',
-        '3',
-      ]);
-    }
-    args.addAll(['-codec:a', 'libmp3lame', '-b:a', '192k', outputPath]);
-    final session = await FFmpegKit.executeWithArguments(args);
-    final rc = await session.getReturnCode();
-    if (!ReturnCode.isSuccess(rc)) {
-      final logs = await session.getAllLogsAsString();
-      throw Exception('Audio conversion failed: ${(logs ?? '').trim()}');
-    }
-    final output = File(outputPath);
-    if (!await output.exists() || await output.length() == 0) {
-      throw Exception('Audio conversion produced no output file');
-    }
-    try {
-      await File(inputPath).delete();
-    } catch (_) {}
-    if (hasCover) {
-      try {
-        await File(coverPath).delete();
-      } catch (_) {}
-    }
-    if (outputPath != finalPath) {
-      await File(outputPath).rename(finalPath);
-    }
-    return finalPath;
-  }
 
   @override
   void dispose() {
     _urlController.dispose();
     _searchController.dispose();
-    _downloadSub?.cancel();
     super.dispose();
   }
 
@@ -159,112 +231,57 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
       _downloadPercentage = 0.0;
       _statusMessage = 'Analyzing URL...';
     });
-    final outputDir = await _downloader.outputDir;
-    _downloadSub?.cancel();
-    final pendingTracks = <({String path, String? title, String? artist, String? coverPath})>[];
-    var completed = false;
-
-    Future<void> finishDownload() async {
-      if (completed) return;
-      completed = true;
-      try {
-        await _downloadSub?.cancel();
-        if (pendingTracks.isEmpty) {
-          throw Exception('The download completed without an audio file');
-        }
-        for (final track in pendingTracks) {
+    try {
+      final tracks = await _downloader.downloadAudio(
+        url,
+        onProgress: (percentage, status) {
           if (mounted) {
             setState(() {
-              _downloadPercentage = 99.0;
-              _statusMessage = 'Converting audio...';
+              _downloadPercentage = percentage;
+              _statusMessage = status;
             });
           }
-          final converted = await _convertToMp3(
-            track.path,
-            title: track.title,
-            artist: track.artist,
-            coverPath: track.coverPath,
+        },
+      );
+      for (final track in tracks) {
+        if (track.youtubeVideoId != null) {
+          await const TrackSourceRepository().saveSource(
+            localPath: track.localPath,
+            youtubeVideoId: track.youtubeVideoId!,
+            method: TrackSourceMethod.downloadedByResonance,
+            lastVerifiedAt: DateTime.now().toUtc(),
           );
-          await ImportService.importFiles([converted], (newPath) {
-            widget.onFileAdded?.call(newPath);
-          });
         }
-        if (mounted) {
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Row(
-                children: [
-                  Icon(Icons.check_circle, color: Colors.greenAccent),
-                  SizedBox(width: 8),
-                  Text(
-                    'Download & Import Complete!',
-                    style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
-                  ),
-                ],
-              ),
-              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 3),
+        await ImportService.importFiles([track.localPath], (newPath) => widget.onFileAdded?.call(newPath));
+      }
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.greenAccent),
+                SizedBox(width: 8),
+                Text(
+                  'Download & Import Complete!',
+                  style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
+                ),
+              ],
             ),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          setState(() => _mode = _DialogMode.input);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Download failed: $e'), backgroundColor: Theme.of(context).colorScheme.error),
-          );
-        }
+            backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _mode = _DialogMode.input);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Download failed: $error'), backgroundColor: Theme.of(context).colorScheme.error),
+        );
       }
     }
-
-    _downloadSub = _downloader
-        .download(url, outputDir)
-        .listen(
-          (event) {
-            if (event.startsWith('progress:')) {
-              final parts = event.split(':');
-              final pct = double.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0.0;
-              final msg = parts.sublist(2).join(':');
-              if (mounted) {
-                setState(() {
-                  _downloadPercentage = pct;
-                  _statusMessage = msg;
-                });
-              }
-            } else if (event.startsWith('track:')) {
-              final parts = event.substring('track:'.length).split('|');
-              pendingTracks.add((
-                path: parts[0],
-                title: parts.length > 1 ? Uri.decodeComponent(parts[1]) : null,
-                artist: parts.length > 2 ? Uri.decodeComponent(parts[2]) : null,
-                coverPath: parts.length > 3 ? Uri.decodeComponent(parts[3]) : null,
-              ));
-            } else if (event == 'done') {
-              unawaited(finishDownload());
-            } else if (event.startsWith('error:')) {
-              completed = true;
-              final msg = event.substring('error:'.length);
-              _downloadSub?.cancel();
-              if (mounted) {
-                setState(() => _mode = _DialogMode.input);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error: $msg'), backgroundColor: Theme.of(context).colorScheme.error),
-                );
-              }
-            }
-          },
-          onError: (e) {
-            if (mounted) {
-              setState(() => _mode = _DialogMode.input);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Error: $e'), backgroundColor: Theme.of(context).colorScheme.error),
-              );
-            }
-          },
-          onDone: () async => finishDownload(),
-        );
   }
 
   Future<void> _startStream(String url, {required String title, required String artist}) async {
@@ -273,6 +290,14 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     final snackBarBackground = Theme.of(context).colorScheme.surfaceContainerHigh;
 
     await MetadataCacheService.set(url, title, artist);
+    final youtubeVideoId = TrackSourceRepository.videoIdFromUrlOrId(url);
+    if (youtubeVideoId != null) {
+      await const TrackSourceRepository().saveSource(
+        localPath: url,
+        youtubeVideoId: youtubeVideoId,
+        method: TrackSourceMethod.manuallySelected,
+      );
+    }
 
     final playlistContent = await FileService().readTextFromFile();
     final updatedContent = '${playlistContent.trim()}\n$url\n';

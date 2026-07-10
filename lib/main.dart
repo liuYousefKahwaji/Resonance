@@ -5,10 +5,15 @@ import 'dart:math' as math;
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/screens/settings/settings_screen.dart';
+import 'package:resonance/screens/playlist_transfer/playlist_export_screen.dart';
+import 'package:resonance/screens/playlist_transfer/playlist_import_screen.dart';
+import 'package:resonance/services/playlist_transfer_codec.dart';
+import 'package:resonance/services/playlist_transfer_export_service.dart';
 import 'package:resonance/services/discord_presence_service.dart';
 import 'package:resonance/widgets/library/import_track_button.dart';
 import 'package:resonance/widgets/library/track_list.dart';
@@ -194,6 +199,7 @@ class _MainAppState extends State<MainApp> {
   ja.AudioPlayer? _introPlayer;
   final ScrollController _playlistScrollController = ScrollController();
   int _trackPulse = 0;
+  int _artworkRevision = 0;
   String? _pulsingTrackPath;
   bool _exitInProgress = false;
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
@@ -279,6 +285,111 @@ class _MainAppState extends State<MainApp> {
     final number = await FileService().createNextPlaylist();
     await FileService().renamePlaylist(number, name);
     await _loadPlaylistFromDisk();
+  }
+
+  Future<void> _transferCurrentPlaylist(BuildContext navigatorContext) async {
+    if (playlist.isEmpty) {
+      ScaffoldMessenger.of(
+        navigatorContext,
+      ).showSnackBar(const SnackBar(content: Text('Add at least one track before transferring this playlist.')));
+      return;
+    }
+    PlaylistSourceScan scan;
+    _showTransferProgress(navigatorContext, 'Scanning playlist and checking saved sources…');
+    try {
+      scan = await const PlaylistTransferExportService().scanPlaylist(
+        playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber',
+        List<String>.from(playlist),
+      );
+    } catch (error) {
+      if (mounted) Navigator.of(navigatorContext, rootNavigator: true).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          navigatorContext,
+        ).showSnackBar(SnackBar(content: Text('Could not prepare transfer: $error')));
+      }
+      return;
+    }
+    if (mounted) Navigator.of(navigatorContext, rootNavigator: true).pop();
+    if (!mounted) return;
+
+    if (scan.unresolved.isNotEmpty) {
+      final completed = await Navigator.push<bool>(
+        navigatorContext,
+        MaterialPageRoute(builder: (_) => PlaylistSourceResolutionScreen(scan: scan)),
+      );
+      if (completed != true || !mounted) return;
+    }
+
+    final resolved = scan.resolvedVideoIds.length;
+    final confirmed = await showDialog<bool>(
+      context: navigatorContext,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Generate playlist QR codes?'),
+        content: Text(
+          'Playlist: ${scan.playlistName}\n\n'
+          'Tracks in playlist: ${scan.playlistTracks.length}\n'
+          'Sources resolved: $resolved\n'
+          'Skipped: ${scan.skippedEntryCount}\n\n'
+          '${scan.skippedEntryCount == 0 ? 'Every playlist entry will be transferred.' : 'Skipped tracks will not be transferred.'}',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: resolved == 0 ? null : () => Navigator.pop(dialogContext, true),
+            child: const Text('Generate QR Codes'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    _showTransferProgress(navigatorContext, 'Compressing playlist and generating QR data…');
+    try {
+      final transfer = await compute(_encodeTransferManifest, scan.createManifest().toJson());
+      if (mounted) Navigator.of(navigatorContext, rootNavigator: true).pop();
+      if (!mounted) return;
+      await Navigator.push(
+        navigatorContext,
+        MaterialPageRoute(builder: (_) => PlaylistQrDisplayScreen(transfer: transfer)),
+      );
+    } catch (error) {
+      if (mounted) Navigator.of(navigatorContext, rootNavigator: true).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          navigatorContext,
+        ).showSnackBar(SnackBar(content: Text('Could not generate QR codes: $error')));
+      }
+    }
+  }
+
+  Future<void> _importTransferredPlaylist(BuildContext navigatorContext) async {
+    final imported = await Navigator.push<bool>(
+      navigatorContext,
+      MaterialPageRoute(builder: (_) => const PlaylistImportScreen()),
+    );
+    if (imported == true && mounted) await _loadPlaylistFromDisk();
+  }
+
+  void _showTransferProgress(BuildContext context, String message) {
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            content: Row(
+              children: [
+                const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5)),
+                const SizedBox(width: 18),
+                Expanded(child: Text(message)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<String?> _askForPlaylistName(String title, String initialValue) async {
@@ -409,7 +520,10 @@ class _MainAppState extends State<MainApp> {
   Future<void> _revealCurrentTrack(String trackPath) async {
     if (trackPath.isEmpty) return;
     final service = FileService();
-    final containingPlaylist = await service.findPlaylistContaining(trackPath);
+    final containingPlaylist = await service.findPlaylistContaining(
+      trackPath,
+      preferredPlaylistNumber: activePlaylistNumber,
+    );
     if (!mounted) return;
     if (containingPlaylist == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This track is not in any playlist.')));
@@ -536,14 +650,17 @@ class _MainAppState extends State<MainApp> {
       centerTitle: true,
       actions: [
         IconButton(
-          onPressed: () => Navigator.push(
-            context,
-            PageRouteBuilder(
-              pageBuilder: (_, __, ___) => const SettingsScreen(),
-              transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
-              transitionDuration: const Duration(milliseconds: 200),
-            ),
-          ),
+          onPressed: () async {
+            await Navigator.push(
+              context,
+              PageRouteBuilder(
+                pageBuilder: (_, __, ___) => const SettingsScreen(),
+                transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
+                transitionDuration: const Duration(milliseconds: 200),
+              ),
+            );
+            if (mounted) setState(() => _artworkRevision++);
+          },
           icon: Icon(Icons.tune_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
           tooltip: 'Settings',
         ),
@@ -575,6 +692,7 @@ class _MainAppState extends State<MainApp> {
             controller: _playlistScrollController,
             pulsingTrackPath: _pulsingTrackPath,
             pulse: _trackPulse,
+            artworkRevision: _artworkRevision,
             onTrackDeleted: (index, trackPath) async {
               setState(() => playlist.removeAt(index));
               await FileService().removeFromPlaylist(trackPath);
@@ -623,7 +741,7 @@ class _MainAppState extends State<MainApp> {
         ),
 
         // ── Player panel ──
-        AlbumCover(onTap: _revealCurrentTrack),
+        AlbumCover(onTap: _revealCurrentTrack, artworkRevision: _artworkRevision),
         PlayerControls(),
       ],
     );
@@ -646,6 +764,21 @@ class _MainAppState extends State<MainApp> {
             ),
           ),
           const Spacer(),
+          IconButton(
+            onPressed: () => setState(() => _artworkRevision++),
+            icon: const Icon(Icons.refresh_rounded, size: 20),
+            tooltip: 'Refresh track covers',
+          ),
+          IconButton(
+            onPressed: () => _transferCurrentPlaylist(context),
+            icon: const Icon(Icons.qr_code_2_rounded, size: 21),
+            tooltip: 'Transfer current playlist',
+          ),
+          IconButton(
+            onPressed: () => _importTransferredPlaylist(context),
+            icon: const Icon(Icons.qr_code_scanner_rounded, size: 21),
+            tooltip: 'Import playlist from another device',
+          ),
           PopupMenuButton<_PlaylistMenuAction>(
             tooltip: 'Switch playlist',
             icon: const Icon(Icons.queue_music_rounded),
@@ -749,6 +882,10 @@ class _PlaylistMenuAction {
   final int? playlistNumber;
   const _PlaylistMenuAction(this.type) : playlistNumber = null;
   const _PlaylistMenuAction.select(this.playlistNumber) : type = _PlaylistActionType.select;
+}
+
+EncodedPlaylistTransfer _encodeTransferManifest(Map<String, dynamic> json) {
+  return PlaylistTransferCodec.encode(PlaylistTransferManifest.fromJson(json));
 }
 
 class _IntroOverlay extends StatefulWidget {

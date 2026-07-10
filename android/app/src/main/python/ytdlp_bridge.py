@@ -173,7 +173,7 @@ def download(url: str, output_dir: str, event_sink) -> None:
 
     event_sink.success(msg) is called with:
       "progress:<percent>:<message>"
-      "track:<filepath>|<title_encoded>|<artist_encoded>"
+      "track:<filepath>|<title_encoded>|<artist_encoded>|<cover_encoded>|<video_id>"
       "done"
       "error:<message>"
     """
@@ -215,6 +215,7 @@ def download(url: str, output_dir: str, event_sink) -> None:
             if filepath:
                 title = info.get("title") or ""
                 artist = info.get("uploader") or info.get("channel") or info.get("artist") or ""
+                video_id = info.get("id") or ""
                 cover_path = ""
                 thumbnail_url = info.get("thumbnail")
                 if thumbnail_url:
@@ -227,7 +228,7 @@ def download(url: str, output_dir: str, event_sink) -> None:
                         cover_path = ""
                 event_sink.success(
                     f"track:{filepath}|{quote(title, safe='')}|{quote(artist, safe='')}"
-                    f"|{quote(cover_path, safe='')}"
+                    f"|{quote(cover_path, safe='')}|{quote(video_id, safe='')}"
                 )
                 current_item[0] += 1
 
