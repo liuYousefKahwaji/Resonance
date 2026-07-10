@@ -10,8 +10,11 @@ class FileService {
   static const int maxPlaylistNameLength = 25;
   static const int defaultPlaylistNumber = 1;
   final String? _documentsPathOverride;
+  final bool? _isWindowsOverride;
 
-  FileService({String? documentsPathOverride}) : _documentsPathOverride = documentsPathOverride;
+  FileService({String? documentsPathOverride, bool? isWindowsOverride})
+    : _documentsPathOverride = documentsPathOverride,
+      _isWindowsOverride = isWindowsOverride;
 
   // 1. Get the directory path safely
   Future<String> get _localPath async {
@@ -165,12 +168,12 @@ class FileService {
       final file = await _playlistFile(number);
       if (!await file.exists()) continue;
       final tracks = (await file.readAsLines()).map((line) => line.trim());
-      if (tracks.any((candidate) => _sameTrackPath(candidate, trackPath))) return number;
+      if (tracks.any((candidate) => sameTrackPath(candidate, trackPath))) return number;
     }
     return null;
   }
 
-  bool _sameTrackPath(String first, String second) {
+  bool sameTrackPath(String first, String second) {
     if (first == second) return true;
     if (first.startsWith('http://') ||
         first.startsWith('https://') ||
@@ -180,7 +183,13 @@ class FileService {
     }
     final firstPath = p.normalize(p.absolute(first));
     final secondPath = p.normalize(p.absolute(second));
-    return Platform.isWindows ? firstPath.toLowerCase() == secondPath.toLowerCase() : firstPath == secondPath;
+    return (_isWindowsOverride ?? Platform.isWindows)
+        ? firstPath.toLowerCase() == secondPath.toLowerCase()
+        : firstPath == secondPath;
+  }
+
+  int findTrackIndex(List<String> tracks, String trackPath) {
+    return tracks.indexWhere((candidate) => sameTrackPath(candidate, trackPath));
   }
 
   Future<void> _savePlaylistNames(Map<int, String> names) async {

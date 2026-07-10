@@ -40,6 +40,18 @@ void main() {
     expect(await service.findPlaylistContaining(track, preferredPlaylistNumber: second), second);
   });
 
+  test('track index lookup uses normalized Windows paths', () async {
+    SharedPreferences.setMockInitialValues({});
+    final service = FileService(isWindowsOverride: true);
+    expect(
+      service.findTrackIndex(const [
+        r'C:\Music\First.mp3',
+        r'C:\Music\Folder\Target.mp3',
+      ], r'c:\music\folder\.\TARGET.mp3'),
+      1,
+    );
+  });
+
   test('imported playlists preserve internal numbering, display names, order, and duplicates', () async {
     SharedPreferences.setMockInitialValues({});
     final directory = await Directory.systemTemp.createTemp('resonance-imported-playlist-');

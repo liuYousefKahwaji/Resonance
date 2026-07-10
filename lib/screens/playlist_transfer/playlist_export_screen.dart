@@ -2,11 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/services/playlist_qr_image_service.dart';
 import 'package:resonance/services/playlist_transfer_codec.dart';
 import 'package:resonance/services/playlist_transfer_export_service.dart';
-import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/youtube_transfer_service.dart';
 
 class PlaylistSourceResolutionScreen extends StatefulWidget {
@@ -20,19 +18,319 @@ class PlaylistSourceResolutionScreen extends StatefulWidget {
 
 class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutionScreen> {
   final YoutubeTransferService _youtube = YoutubeTransferService();
-  final TrackSourceRepository _sources = const TrackSourceRepository();
-  final TextEditingController _queryController = TextEditingController();
-  var _index = 0;
-  var _loading = false;
+  final PlaylistTransferExportService _export = const PlaylistTransferExportService();
+  List<PlaylistSourceMatch> _matches = const [];
+  var _matching = true;
+  var _saving = false;
+  var _cancelled = false;
+  var _completed = 0;
+  String _currentTrack = '';
   String? _error;
-  List<YoutubeSearchCandidate> _results = const [];
-
-  UnresolvedPlaylistTrack get _current => widget.scan.unresolved[_index];
 
   @override
   void initState() {
     super.initState();
-    _prepareCurrent();
+    unawaited(_findMatches());
+  }
+
+  Future<void> _findMatches() async {
+    try {
+      final matches = await _export.findAutomaticMatches(
+        widget.scan,
+        _youtube.search,
+        isCancelled: () => _cancelled,
+        onProgress: (completed, total, track) {
+          if (!mounted) return;
+          setState(() {
+            _completed = completed;
+            _currentTrack = '${track.artist} — ${track.title}';
+          });
+        },
+      );
+      if (mounted) {
+        setState(() {
+          _matches = matches;
+          _matching = false;
+        });
+      }
+    } on PlaylistSourceMatchingCancelled {
+      return;
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = 'Source matching failed: $error';
+          _matching = false;
+        });
+      }
+    }
+  }
+
+  void _cancel() {
+    _cancelled = true;
+    Navigator.pop(context, false);
+  }
+
+  Future<void> _editMatch(PlaylistSourceMatch match) async {
+    final result = await showDialog<_SourceEditorResult>(
+      context: context,
+      builder: (_) => _SourceMatchEditorDialog(
+        youtube: _youtube,
+        track: match.track,
+        initialQuery: match.query,
+        initialCandidates: match.candidates,
+        selectedVideoId: match.selected?.videoId,
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      match.query = result.query;
+      match.candidates = result.candidates;
+      match.selected = result.selected;
+      match.error = null;
+      match.skipped = false;
+      match.manuallyChanged = true;
+    });
+  }
+
+  Future<void> _finish() async {
+    setState(() => _saving = true);
+    try {
+      await _export.commitMatches(widget.scan, _matches);
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save source matches: $error')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_matching ? 'Finding Playlist Sources' : 'Review Source Matches'),
+        leading: IconButton(icon: const Icon(Icons.close_rounded), tooltip: 'Cancel transfer', onPressed: _cancel),
+      ),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 860),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: _matching
+                  ? _buildMatchingProgress(theme)
+                  : _error != null
+                  ? _buildFatalError(theme)
+                  : _buildReview(theme),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMatchingProgress(ThemeData theme) {
+    final total = widget.scan.unresolved.length;
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Icon(Icons.manage_search_rounded, size: 64),
+        const SizedBox(height: 20),
+        Text(
+          'Automatically selecting the top YouTube result',
+          style: theme.textTheme.titleLarge,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 10),
+        Text('$_completed of $total tracks checked', textAlign: TextAlign.center),
+        const SizedBox(height: 16),
+        LinearProgressIndicator(value: total == 0 ? 1 : _completed / total),
+        const SizedBox(height: 14),
+        Text(_currentTrack, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+        const SizedBox(height: 24),
+        TextButton.icon(onPressed: _cancel, icon: const Icon(Icons.close_rounded), label: const Text('Cancel export')),
+      ],
+    );
+  }
+
+  Widget _buildFatalError(ThemeData theme) => Column(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      Icon(Icons.error_outline_rounded, size: 58, color: theme.colorScheme.error),
+      const SizedBox(height: 16),
+      Text(_error!, textAlign: TextAlign.center),
+      const SizedBox(height: 18),
+      FilledButton(onPressed: _cancel, child: const Text('Close')),
+    ],
+  );
+
+  Widget _buildReview(ThemeData theme) {
+    final selectedCount = _matches.where((match) => !match.skipped && match.selected != null).length;
+    final unresolvedCount = _matches.length - selectedCount;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                const Icon(Icons.auto_awesome_rounded),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'The top result was selected automatically for $selectedCount track${selectedCount == 1 ? '' : 's'}. Review only the matches you want to replace.',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Expanded(
+          child: ListView.builder(
+            itemCount: _matches.length,
+            itemBuilder: (context, index) => _buildMatchCard(theme, _matches[index], index),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          alignment: WrapAlignment.end,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            TextButton(onPressed: _saving ? null : _cancel, child: const Text('Cancel export')),
+            Text('$unresolvedCount unresolved'),
+            FilledButton.icon(
+              onPressed: _saving ? null : _finish,
+              icon: _saving
+                  ? const SizedBox(width: 17, height: 17, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.check_rounded),
+              label: Text(_saving ? 'Saving…' : 'Finish matching'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMatchCard(ThemeData theme, PlaylistSourceMatch match, int index) {
+    final selected = match.selected;
+    final status = match.skipped
+        ? 'Skipped'
+        : selected == null
+        ? 'Unresolved'
+        : match.manuallyChanged
+        ? 'Replaced'
+        : 'Top result';
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(radius: 16, child: Text('${index + 1}', style: const TextStyle(fontSize: 12))),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${match.track.artist} — ${match.track.title}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (match.track.occurrenceCount > 1)
+                        Text(
+                          'Appears ${match.track.occurrenceCount} times in the playlist',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Chip(label: Text(status)),
+              ],
+            ),
+            const Divider(height: 20),
+            if (selected != null && !match.skipped) ...[
+              Text(selected.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 3),
+              Text(
+                [selected.uploader, if (selected.formattedDuration.isNotEmpty) selected.formattedDuration].join(' · '),
+                style: theme.textTheme.bodySmall,
+              ),
+            ] else
+              Text(match.skipped ? 'This track will not be transferred.' : match.error ?? 'No source selected.'),
+            const SizedBox(height: 8),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              children: [
+                TextButton.icon(
+                  onPressed: () => _editMatch(match),
+                  icon: const Icon(Icons.swap_horiz_rounded),
+                  label: Text(selected == null ? 'Find a match' : 'Replace'),
+                ),
+                TextButton.icon(
+                  onPressed: () => setState(() => match.skipped = !match.skipped),
+                  icon: Icon(match.skipped ? Icons.undo_rounded : Icons.skip_next_rounded),
+                  label: Text(match.skipped ? 'Restore' : 'Skip'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SourceEditorResult {
+  final String query;
+  final List<YoutubeSearchCandidate> candidates;
+  final YoutubeSearchCandidate selected;
+
+  const _SourceEditorResult({required this.query, required this.candidates, required this.selected});
+}
+
+class _SourceMatchEditorDialog extends StatefulWidget {
+  final YoutubeTransferService youtube;
+  final UnresolvedPlaylistTrack track;
+  final String initialQuery;
+  final List<YoutubeSearchCandidate> initialCandidates;
+  final String? selectedVideoId;
+
+  const _SourceMatchEditorDialog({
+    required this.youtube,
+    required this.track,
+    required this.initialQuery,
+    required this.initialCandidates,
+    required this.selectedVideoId,
+  });
+
+  @override
+  State<_SourceMatchEditorDialog> createState() => _SourceMatchEditorDialogState();
+}
+
+class _SourceMatchEditorDialogState extends State<_SourceMatchEditorDialog> {
+  late final TextEditingController _queryController;
+  late List<YoutubeSearchCandidate> _results;
+  var _loading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _queryController = TextEditingController(text: widget.initialQuery);
+    _results = widget.initialCandidates;
   }
 
   @override
@@ -41,27 +339,15 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
     super.dispose();
   }
 
-  void _prepareCurrent() {
-    if (_index >= widget.scan.unresolved.length) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) Navigator.pop(context, true);
-      });
-      return;
-    }
-    _queryController.text = _current.searchQuery;
-    unawaited(_search());
-  }
-
   Future<void> _search() async {
     final query = _queryController.text.trim();
     if (query.isEmpty) return;
     setState(() {
       _loading = true;
       _error = null;
-      _results = const [];
     });
     try {
-      final results = await _youtube.search(query);
+      final results = await widget.youtube.search(query);
       if (mounted) setState(() => _results = results);
     } catch (error) {
       if (mounted) setState(() => _error = 'Search failed: $error');
@@ -70,139 +356,71 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
     }
   }
 
-  Future<void> _accept(YoutubeSearchCandidate candidate) async {
-    await _sources.saveSource(
-      localPath: _current.localPath,
-      youtubeVideoId: candidate.videoId,
-      method: TrackSourceMethod.manuallySelected,
+  void _select(YoutubeSearchCandidate candidate) {
+    Navigator.pop(
+      context,
+      _SourceEditorResult(
+        query: _queryController.text.trim(),
+        candidates: List.unmodifiable(_results),
+        selected: candidate,
+      ),
     );
-    widget.scan.resolvedByPath[_current.localPath] = candidate.videoId;
-    _advance();
-  }
-
-  void _advance() {
-    setState(() {
-      _index++;
-      _results = const [];
-      _error = null;
-    });
-    _prepareCurrent();
   }
 
   @override
-  Widget build(BuildContext context) {
-    if (_index >= widget.scan.unresolved.length) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-    final theme = Theme.of(context);
-    final track = _current;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Resolve Playlist Sources'),
-        leading: IconButton(
-          icon: const Icon(Icons.close_rounded),
-          tooltip: 'Cancel transfer',
-          onPressed: () => Navigator.pop(context, false),
-        ),
-      ),
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  LinearProgressIndicator(value: _index / widget.scan.unresolved.length),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Track ${_index + 1} of ${widget.scan.unresolved.length} requiring a source',
-                    style: theme.textTheme.labelLarge,
-                  ),
-                  const SizedBox(height: 18),
-                  Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.audio_file_rounded),
-                      title: Text(track.title),
-                      subtitle: Text(
-                        '${track.artist}${track.occurrenceCount > 1 ? ' · appears ${track.occurrenceCount} times' : ''}\n${track.localPath}',
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      isThreeLine: true,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _queryController,
-                    decoration: InputDecoration(
-                      labelText: 'YouTube search',
-                      prefixIcon: const Icon(Icons.search_rounded),
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.refresh_rounded),
-                        onPressed: _loading ? null : _search,
-                      ),
-                    ),
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (_) => _search(),
-                  ),
-                  const SizedBox(height: 12),
-                  if (_loading) const LinearProgressIndicator(),
-                  if (_error != null)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      child: Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
-                    ),
-                  Expanded(
-                    child: _loading
-                        ? const Center(child: Text('Searching YouTube…'))
-                        : _results.isEmpty
-                        ? const Center(child: Text('No results. Edit the query, retry, or skip this track.'))
-                        : ListView.separated(
-                            itemCount: _results.length,
-                            separatorBuilder: (_, __) => const Divider(height: 1),
-                            itemBuilder: (context, index) {
-                              final result = _results[index];
-                              return ListTile(
-                                leading: CircleAvatar(child: Text('${index + 1}')),
-                                title: Text(result.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-                                subtitle: Text(
-                                  [
-                                    result.uploader,
-                                    if (result.formattedDuration.isNotEmpty) result.formattedDuration,
-                                  ].join(' · '),
-                                ),
-                                trailing: const Icon(Icons.check_circle_outline_rounded),
-                                onTap: () => _accept(result),
-                              );
-                            },
-                          ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      TextButton.icon(
-                        onPressed: () => Navigator.pop(context, false),
-                        icon: const Icon(Icons.close_rounded),
-                        label: const Text('Cancel export'),
-                      ),
-                      const Spacer(),
-                      OutlinedButton.icon(
-                        onPressed: _advance,
-                        icon: const Icon(Icons.skip_next_rounded),
-                        label: Text(track.occurrenceCount > 1 ? 'Skip ${track.occurrenceCount} entries' : 'Skip track'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text('Replace “${widget.track.title}”', maxLines: 2, overflow: TextOverflow.ellipsis),
+    content: SizedBox(
+      width: 620,
+      height: (MediaQuery.sizeOf(context).height * 0.62).clamp(280, 440),
+      child: Column(
+        children: [
+          TextField(
+            controller: _queryController,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (_) => _search(),
+            decoration: InputDecoration(
+              labelText: 'YouTube search',
+              prefixIcon: const Icon(Icons.search_rounded),
+              suffixIcon: IconButton(onPressed: _loading ? null : _search, icon: const Icon(Icons.refresh_rounded)),
             ),
           ),
-        ),
+          const SizedBox(height: 10),
+          if (_loading) const LinearProgressIndicator(),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            ),
+          Expanded(
+            child: _results.isEmpty && !_loading
+                ? const Center(child: Text('No results. Edit the query and search again.'))
+                : ListView.separated(
+                    itemCount: _results.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final result = _results[index];
+                      final selected = result.videoId == widget.selectedVideoId;
+                      return ListTile(
+                        leading: CircleAvatar(child: Text('${index + 1}')),
+                        title: Text(result.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(
+                          [
+                            result.uploader,
+                            if (result.formattedDuration.isNotEmpty) result.formattedDuration,
+                          ].join(' · '),
+                        ),
+                        trailing: Icon(selected ? Icons.check_circle_rounded : Icons.chevron_right_rounded),
+                        onTap: () => _select(result),
+                      );
+                    },
+                  ),
+          ),
+        ],
       ),
-    );
-  }
+    ),
+    actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel'))],
+  );
 }
 
 class PlaylistQrDisplayScreen extends StatefulWidget {

@@ -12,13 +12,17 @@ import 'package:flutter/material.dart';
 import 'package:resonance/widgets/library/track_tile.dart';
 
 class TrackList extends StatelessWidget {
+  static const double itemExtent = 70;
+  static const double topPadding = 4;
+
   final List<String> tracks;
   final Function(int index, String path) onTrackDeleted;
   final Function(int oldIndex, int newIndex) onReorder;
   final ScrollController controller;
-  final String? pulsingTrackPath;
+  final int? pulsingTrackIndex;
   final int pulse;
   final int artworkRevision;
+  final GlobalKey Function(int index) itemKeyForIndex;
 
   const TrackList({
     super.key,
@@ -26,9 +30,10 @@ class TrackList extends StatelessWidget {
     required this.onTrackDeleted,
     required this.onReorder,
     required this.controller,
-    required this.pulsingTrackPath,
+    required this.pulsingTrackIndex,
     required this.pulse,
     required this.artworkRevision,
+    required this.itemKeyForIndex,
   });
 
   @override
@@ -40,16 +45,17 @@ class TrackList extends StatelessWidget {
     return ReorderableListView.builder(
       scrollController: controller,
       buildDefaultDragHandles: false,
-      padding: const EdgeInsets.only(top: 4, bottom: 8),
+      padding: const EdgeInsets.only(top: topPadding, bottom: 8),
       cacheExtent: 400,
+      itemExtent: itemExtent,
       itemCount: tracks.length,
       itemBuilder: (context, index) {
         return TrackTile(
-          key: ValueKey('${tracks[index]}-$index'),
+          key: itemKeyForIndex(index),
           trackPath: tracks[index],
           index: index,
           onDelete: () => onTrackDeleted(index, tracks[index]),
-          pulse: pulsingTrackPath == tracks[index] ? pulse : 0,
+          pulse: pulsingTrackIndex == index ? pulse : 0,
           artworkRevision: artworkRevision,
         );
       },

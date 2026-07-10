@@ -200,7 +200,8 @@ class _MainAppState extends State<MainApp> {
   final ScrollController _playlistScrollController = ScrollController();
   int _trackPulse = 0;
   int _artworkRevision = 0;
-  String? _pulsingTrackPath;
+  int? _pulsingTrackIndex;
+  final Map<int, GlobalKey> _trackItemKeys = {};
   bool _exitInProgress = false;
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
 
@@ -262,6 +263,7 @@ class _MainAppState extends State<MainApp> {
     final fileData = await service.readTextFromFile();
     final names = await service.getPlaylistNames();
     if (mounted) {
+      _trackItemKeys.clear();
       setState(() {
         playlistNumbers = numbers;
         activePlaylistNumber = active;
@@ -532,22 +534,40 @@ class _MainAppState extends State<MainApp> {
     if (containingPlaylist != activePlaylistNumber) {
       await _switchPlaylist(containingPlaylist);
     }
-    final index = playlist.indexOf(trackPath);
+    final index = service.findTrackIndex(playlist, trackPath);
     if (index < 0 || !mounted) return;
+    await _scrollToTrackIndex(index);
+    if (!mounted) return;
     setState(() {
-      _pulsingTrackPath = trackPath;
+      _pulsingTrackIndex = index;
       _trackPulse++;
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_playlistScrollController.hasClients) return;
-      final position = _playlistScrollController.position;
-      final target = (index * 72.0).clamp(position.minScrollExtent, position.maxScrollExtent);
-      _playlistScrollController.animateTo(
-        target,
-        duration: const Duration(milliseconds: 520),
-        curve: Curves.easeInOutCubic,
+  }
+
+  GlobalKey _trackItemKey(int index) =>
+      _trackItemKeys.putIfAbsent(index, () => GlobalKey(debugLabel: 'playlist-$activePlaylistNumber-track-$index'));
+
+  Future<void> _scrollToTrackIndex(int index) async {
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || !_playlistScrollController.hasClients) return;
+    final position = _playlistScrollController.position;
+    final centeredTarget =
+        TrackList.topPadding + index * TrackList.itemExtent - (position.viewportDimension - TrackList.itemExtent) / 2;
+    await _playlistScrollController.animateTo(
+      centeredTarget.clamp(position.minScrollExtent, position.maxScrollExtent),
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeInOutCubic,
+    );
+    await WidgetsBinding.instance.endOfFrame;
+    final targetContext = _trackItemKey(index).currentContext;
+    if (targetContext != null && targetContext.mounted) {
+      await Scrollable.ensureVisible(
+        targetContext,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
       );
-    });
+    }
   }
 
   void _handleReorder(int oldIndex, int newIndex) async {
@@ -555,6 +575,8 @@ class _MainAppState extends State<MainApp> {
     setState(() {
       final item = playlist.removeAt(oldIndex);
       playlist.insert(newIndex, item);
+      _trackItemKeys.clear();
+      _pulsingTrackIndex = null;
     });
     await FileService().reorderPlaylist(playlist);
   }
@@ -690,9 +712,10 @@ class _MainAppState extends State<MainApp> {
         : TrackList(
             tracks: playlist,
             controller: _playlistScrollController,
-            pulsingTrackPath: _pulsingTrackPath,
+            pulsingTrackIndex: _pulsingTrackIndex,
             pulse: _trackPulse,
             artworkRevision: _artworkRevision,
+            itemKeyForIndex: _trackItemKey,
             onTrackDeleted: (index, trackPath) async {
               setState(() => playlist.removeAt(index));
               await FileService().removeFromPlaylist(trackPath);
@@ -752,127 +775,197 @@ class _MainAppState extends State<MainApp> {
     final trackCount = playlist.length;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 8, 8),
-      child: Row(
-        children: [
-          Text(
-            '${playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber'} - ${trackCount == 0 ? 'No tracks' : '$trackCount ${trackCount == 1 ? 'track' : 'tracks'}'}',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
-              letterSpacing: 0.3,
-            ),
-          ),
-          const Spacer(),
-          IconButton(
-            onPressed: () => setState(() => _artworkRevision++),
-            icon: const Icon(Icons.refresh_rounded, size: 20),
-            tooltip: 'Refresh track covers',
-          ),
-          IconButton(
-            onPressed: () => _transferCurrentPlaylist(context),
-            icon: const Icon(Icons.qr_code_2_rounded, size: 21),
-            tooltip: 'Transfer current playlist',
-          ),
-          IconButton(
-            onPressed: () => _importTransferredPlaylist(context),
-            icon: const Icon(Icons.qr_code_scanner_rounded, size: 21),
-            tooltip: 'Import playlist from another device',
-          ),
-          PopupMenuButton<_PlaylistMenuAction>(
-            tooltip: 'Switch playlist',
-            icon: const Icon(Icons.queue_music_rounded),
-            onSelected: (action) {
-              switch (action.type) {
-                case _PlaylistActionType.select:
-                  _switchPlaylist(action.playlistNumber!);
-                  return;
-                case _PlaylistActionType.create:
-                  _createPlaylist();
-                  return;
-                case _PlaylistActionType.rename:
-                  _renameActivePlaylist();
-                  return;
-                case _PlaylistActionType.delete:
-                  _deleteActivePlaylist();
-                  return;
-              }
-            },
-            itemBuilder: (context) => [
-              for (final number in playlistNumbers)
-                PopupMenuItem<_PlaylistMenuAction>(
-                  value: _PlaylistMenuAction.select(number),
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onLongPress: () {
-                      Navigator.pop(context);
-                      Future.microtask(() => _showPlaylistActions(number));
-                    },
-                    child: Row(
-                      children: [
-                        Icon(
-                          number == activePlaylistNumber
-                              ? Icons.radio_button_checked_rounded
-                              : Icons.radio_button_unchecked_rounded,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(playlistNames[number] ?? 'Playlist $number', overflow: TextOverflow.ellipsis),
-                        ),
-                      ],
-                    ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 680;
+          return Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber'} - ${trackCount == 0 ? 'No tracks' : '$trackCount ${trackCount == 1 ? 'track' : 'tracks'}'}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                    letterSpacing: 0.3,
                   ),
                 ),
-              const PopupMenuDivider(),
-              const PopupMenuItem<_PlaylistMenuAction>(
-                value: _PlaylistMenuAction(_PlaylistActionType.create),
-                child: Row(children: [Icon(Icons.add_rounded, size: 18), SizedBox(width: 8), Text('New playlist')]),
               ),
-              const PopupMenuItem<_PlaylistMenuAction>(
-                value: _PlaylistMenuAction(_PlaylistActionType.rename),
-                child: Row(children: [Icon(Icons.edit_rounded, size: 18), SizedBox(width: 8), Text('Rename current')]),
-              ),
-              PopupMenuItem<_PlaylistMenuAction>(
-                value: const _PlaylistMenuAction(_PlaylistActionType.delete),
-                enabled: playlistNumbers.length > 1,
-                child: const Row(
-                  children: [Icon(Icons.delete_outline_rounded, size: 18), SizedBox(width: 8), Text('Delete current')],
-                ),
-              ),
+              if (!compact) ..._wideTransferActions(context),
+              _buildPlaylistMenu(),
+              if (!compact) ..._wideLibraryActions(context),
+              if (compact) _buildCompactActionsMenu(context),
             ],
-          ),
-          // Import button — renders its own IconButton; theme handles styling
-          ImportTrackButton(
-            onFileAdded: (String newPath) {
-              setState(() => playlist.add(newPath));
-            },
-          ),
-          // Download from YouTube
-          IconButton(
-            icon: const Icon(Icons.download_rounded),
-            tooltip: 'Download from YouTube',
-            onPressed: () {
-              showDialog(
-                context: context,
-                builder: (ctx) => _isDesktop
-                    ? WindowsYoutube(
-                        onFileAdded: (String newPath) {
-                          setState(() => playlist.add(newPath));
-                        },
-                      )
-                    : AndroidYoutube(
-                        onFileAdded: (String newPath) {
-                          setState(() => playlist.add(newPath));
-                        },
-                      ),
-              );
-            },
-          ),
-        ],
+          );
+        },
       ),
     );
   }
+
+  List<Widget> _wideTransferActions(BuildContext context) => [
+    IconButton(
+      onPressed: () => setState(() => _artworkRevision++),
+      icon: const Icon(Icons.refresh_rounded, size: 20),
+      tooltip: 'Refresh track covers',
+    ),
+    IconButton(
+      onPressed: () => _transferCurrentPlaylist(context),
+      icon: const Icon(Icons.qr_code_2_rounded, size: 21),
+      tooltip: 'Transfer current playlist',
+    ),
+    IconButton(
+      onPressed: () => _importTransferredPlaylist(context),
+      icon: const Icon(Icons.qr_code_scanner_rounded, size: 21),
+      tooltip: 'Import playlist from another device',
+    ),
+  ];
+
+  List<Widget> _wideLibraryActions(BuildContext context) => [
+    IconButton(
+      onPressed: () => _importLocalTracks(context),
+      icon: const Icon(Icons.add_rounded),
+      tooltip: 'Import local tracks',
+    ),
+    IconButton(
+      onPressed: () => _showYoutubeDownloader(context),
+      icon: const Icon(Icons.download_rounded),
+      tooltip: 'Download from YouTube',
+    ),
+  ];
+
+  Widget _buildCompactActionsMenu(BuildContext context) => PopupMenuButton<_ToolbarAction>(
+    tooltip: 'More playlist actions',
+    icon: const Icon(Icons.more_vert_rounded),
+    onSelected: (action) => _handleToolbarAction(context, action),
+    itemBuilder: (_) => const [
+      PopupMenuItem(
+        value: _ToolbarAction.refresh,
+        child: _ToolbarMenuLabel(icon: Icons.refresh_rounded, label: 'Refresh track covers'),
+      ),
+      PopupMenuItem(
+        value: _ToolbarAction.transfer,
+        child: _ToolbarMenuLabel(icon: Icons.qr_code_2_rounded, label: 'Transfer current playlist'),
+      ),
+      PopupMenuItem(
+        value: _ToolbarAction.importTransfer,
+        child: _ToolbarMenuLabel(icon: Icons.qr_code_scanner_rounded, label: 'Import playlist QR'),
+      ),
+      PopupMenuItem(
+        value: _ToolbarAction.importLocal,
+        child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: 'Import local tracks'),
+      ),
+      PopupMenuItem(
+        value: _ToolbarAction.download,
+        child: _ToolbarMenuLabel(icon: Icons.download_rounded, label: 'Download from YouTube'),
+      ),
+    ],
+  );
+
+  void _handleToolbarAction(BuildContext context, _ToolbarAction action) {
+    switch (action) {
+      case _ToolbarAction.refresh:
+        setState(() => _artworkRevision++);
+      case _ToolbarAction.transfer:
+        unawaited(_transferCurrentPlaylist(context));
+      case _ToolbarAction.importTransfer:
+        unawaited(_importTransferredPlaylist(context));
+      case _ToolbarAction.importLocal:
+        unawaited(_importLocalTracks(context));
+      case _ToolbarAction.download:
+        _showYoutubeDownloader(context);
+    }
+  }
+
+  Future<void> _importLocalTracks(BuildContext context) async {
+    await ImportTrackButton.selectFiles(context, (newPath) {
+      if (mounted) setState(() => playlist.add(newPath));
+    });
+  }
+
+  void _showYoutubeDownloader(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => _isDesktop
+          ? WindowsYoutube(onFileAdded: (newPath) => setState(() => playlist.add(newPath)))
+          : AndroidYoutube(onFileAdded: (newPath) => setState(() => playlist.add(newPath))),
+    );
+  }
+
+  Widget _buildPlaylistMenu() => PopupMenuButton<_PlaylistMenuAction>(
+    tooltip: 'Switch playlist',
+    icon: const Icon(Icons.queue_music_rounded),
+    onSelected: (action) {
+      switch (action.type) {
+        case _PlaylistActionType.select:
+          unawaited(_switchPlaylist(action.playlistNumber!));
+        case _PlaylistActionType.create:
+          unawaited(_createPlaylist());
+        case _PlaylistActionType.rename:
+          unawaited(_renameActivePlaylist());
+        case _PlaylistActionType.delete:
+          unawaited(_deleteActivePlaylist());
+      }
+    },
+    itemBuilder: (menuContext) => [
+      for (final number in playlistNumbers)
+        PopupMenuItem<_PlaylistMenuAction>(
+          value: _PlaylistMenuAction.select(number),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onLongPress: () {
+              Navigator.pop(menuContext);
+              Future.microtask(() => _showPlaylistActions(number));
+            },
+            child: Row(
+              children: [
+                Icon(
+                  number == activePlaylistNumber
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Flexible(child: Text(playlistNames[number] ?? 'Playlist $number', overflow: TextOverflow.ellipsis)),
+              ],
+            ),
+          ),
+        ),
+      const PopupMenuDivider(),
+      const PopupMenuItem(
+        value: _PlaylistMenuAction(_PlaylistActionType.create),
+        child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: 'New playlist'),
+      ),
+      const PopupMenuItem(
+        value: _PlaylistMenuAction(_PlaylistActionType.rename),
+        child: _ToolbarMenuLabel(icon: Icons.edit_rounded, label: 'Rename current'),
+      ),
+      PopupMenuItem(
+        value: const _PlaylistMenuAction(_PlaylistActionType.delete),
+        enabled: playlistNumbers.length > 1,
+        child: const _ToolbarMenuLabel(icon: Icons.delete_outline_rounded, label: 'Delete current'),
+      ),
+    ],
+  );
+}
+
+enum _ToolbarAction { refresh, transfer, importTransfer, importLocal, download }
+
+class _ToolbarMenuLabel extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _ToolbarMenuLabel({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Icon(icon, size: 18),
+      const SizedBox(width: 10),
+      Flexible(child: Text(label)),
+    ],
+  );
 }
 
 enum _PlaylistActionType { select, create, rename, delete }
