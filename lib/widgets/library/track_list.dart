@@ -113,7 +113,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Import tracks or download from YouTube',
+            'Import tracks or search YouTube',
             style: TextStyle(fontSize: 12, color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8)),
           ),
         ],

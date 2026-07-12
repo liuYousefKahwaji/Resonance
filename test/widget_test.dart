@@ -40,6 +40,20 @@ void main() {
     expect(await service.findPlaylistContaining(track, preferredPlaylistNumber: second), second);
   });
 
+  test('explicit playlist writes do not follow a later active-playlist change', () async {
+    SharedPreferences.setMockInitialValues({});
+    final directory = await Directory.systemTemp.createTemp('resonance-explicit-playlist-');
+    addTearDown(() => directory.delete(recursive: true));
+    final service = FileService(documentsPathOverride: directory.path);
+
+    final capturedPlaylist = await service.createNextPlaylist();
+    await service.setActivePlaylistNumber(1);
+    await service.addToPlaylist(capturedPlaylist, 'https://www.youtube.com/watch?v=aaaaaaaaaaa');
+
+    expect(await service.readTextFromPlaylist(1), isNot(contains('aaaaaaaaaaa')));
+    expect(await service.readTextFromPlaylist(capturedPlaylist), contains('aaaaaaaaaaa'));
+  });
+
   test('track index lookup uses normalized Windows paths', () async {
     SharedPreferences.setMockInitialValues({});
     final service = FileService(isWindowsOverride: true);

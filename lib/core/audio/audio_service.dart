@@ -35,6 +35,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   bool isShuffle = false;
   List<String> shuffledList = [];
   final ValueNotifier<int> playbackModeRevision = ValueNotifier<int>(0);
+  final ValueNotifier<bool> standaloneModeNotifier = ValueNotifier<bool>(false);
   MediaItem? _pendingRestoredTrack;
   final Map<String, Uri?> _artUriCache = {};
 
@@ -42,6 +43,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   // Tracks whether the current track is a stream (URL), for seek behaviour.
   bool _currentTrackIsStream = false;
+
+  bool get isStandaloneMode => standaloneModeNotifier.value || mediaItem.value?.extras?['resonanceStandalone'] == true;
 
   // Session-scoped cache: YouTube URL → resolved CDN/HLS URL.
   final Map<String, String> _streamUrlCache = {};
@@ -173,20 +176,20 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     String resolved;
 
     if (Platform.isWindows) {
-      final supportDir = await getApplicationSupportDirectory();
-      final binDir = p.join(supportDir.path, 'bin');
+      final binDir = p.join(p.dirname(Platform.resolvedExecutable), 'bin');
       final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
       final denoPath = p.join(binDir, 'deno.exe');
 
       final process = await Process.start(ytDlpPath, [
         '--js-runtimes',
         'deno:$denoPath',
+        '--force-ipv4',
         '--dump-single-json',
         '--no-warnings',
         '--no-playlist',
         '--skip-download',
         '--format',
-        'bestaudio[ext=m4a]/bestaudio/best',
+        'bestaudio[has_drm!=true]/best[has_drm!=true]',
         url,
       ]);
       final stderr = StringBuffer();
@@ -497,6 +500,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     _pendingRestoredTrack = null;
     _loadGeneration++;
     _streamUrlCache.clear();
+    standaloneModeNotifier.value = false;
 
     try {
       if (Platform.isWindows) {
@@ -567,8 +571,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   // ─── loadTrack ────────────────────────────────────────────────────
-  Future<void> loadTrack(String filePath, String title, String artist) async {
+  Future<void> loadTrack(
+    String filePath,
+    String title,
+    String artist, {
+    bool standalone = false,
+    Uri? artworkUri,
+  }) async {
     _pendingRestoredTrack = null;
+    standaloneModeNotifier.value = standalone;
     final myGen = ++_loadGeneration;
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
 
@@ -580,7 +591,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     final artUriFuture = _albumArtUri(filePath);
 
     // Optimistic UI update
-    mediaItem.add(MediaItem(id: filePath, title: title, artist: artist));
+    final extras = standalone ? const <String, dynamic>{'resonanceStandalone': true} : null;
+    mediaItem.add(MediaItem(id: filePath, title: title, artist: artist, artUri: artworkUri, extras: extras));
     playbackState.add(
       playbackState.value.copyWith(
         processingState: isStream ? AudioProcessingState.loading : AudioProcessingState.ready,
@@ -607,9 +619,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         } catch (e) {
           if (_loadGeneration != myGen) return;
           debugPrint('[PlayerHandler] Failed to build media_kit URI for "$filePath": $e');
-          _streamUrlCache.remove(filePath);
-          playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
-          return;
+          rethrow;
         }
 
         if (_loadGeneration != myGen) return;
@@ -639,9 +649,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         } catch (e) {
           if (_loadGeneration != myGen) return;
           debugPrint('[PlayerHandler] Failed to build audio source for "$filePath": $e');
-          _streamUrlCache.remove(filePath);
-          playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
-          return;
+          rethrow;
         }
 
         if (_loadGeneration != myGen) return;
@@ -654,12 +662,23 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (_loadGeneration != myGen) return;
 
       final dur = _currentDuration;
-      mediaItem.add(MediaItem(id: filePath, title: title, artist: artist, duration: dur, artUri: await artUriFuture));
+      mediaItem.add(
+        MediaItem(
+          id: filePath,
+          title: title,
+          artist: artist,
+          duration: dur,
+          artUri: artworkUri ?? await artUriFuture,
+          extras: extras,
+        ),
+      );
 
       // On non-Windows platforms, explicitly call play() since we didn't
-      // pass play: true to setAudioSource.
+      // pass play: true to setAudioSource. just_audio's play() future can
+      // remain pending for the lifetime of playback, so do not block callers
+      // (notably standalone-player navigation) on that future.
       if (!Platform.isWindows) {
-        await play();
+        unawaited(play());
       }
 
       _updatePlaybackState();
@@ -669,9 +688,26 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       if (_loadGeneration == myGen) {
         debugPrint('[PlayerHandler] Error loading track "$filePath": $e\n$st');
         _streamUrlCache.remove(filePath);
+        if (standalone) standaloneModeNotifier.value = false;
         playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
         _updatePlaybackState();
       }
+    }
+  }
+
+  Future<void> playStandaloneStream({
+    required String url,
+    required String title,
+    required String artist,
+    String? thumbnailUrl,
+  }) async {
+    final artworkUri = thumbnailUrl == null || thumbnailUrl.isEmpty ? null : Uri.tryParse(thumbnailUrl);
+    await MetadataCacheService.set(url, title, artist);
+    await loadTrack(url, title, artist, standalone: true, artworkUri: artworkUri);
+    if (!isStandaloneMode ||
+        mediaItem.value?.id != url ||
+        playbackState.value.processingState == AudioProcessingState.idle) {
+      throw StateError('The YouTube stream could not be loaded.');
     }
   }
 
@@ -809,6 +845,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   Future<void> next() async {
+    if (isStandaloneMode) return;
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
     final playlist = isShuffle ? shuffledList : await _getCleanPlaylist();
@@ -821,6 +858,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   Future<void> previous() async {
+    if (isStandaloneMode) return;
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
     final playlist = isShuffle ? shuffledList : await _getCleanPlaylist();
@@ -943,6 +981,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await _player.dispose();
     await DiscordPresenceService().clearPresence();
     await DiscordPresenceService().dispose();
+    standaloneModeNotifier.dispose();
   }
 
   AudioProcessingState _getProcessingState(ProcessingState state) {

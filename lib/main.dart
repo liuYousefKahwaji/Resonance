@@ -20,8 +20,9 @@ import 'package:resonance/widgets/library/track_list.dart';
 import 'package:resonance/widgets/player/album_cover.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
 import 'package:resonance/providers/theme_provider.dart';
-import 'package:resonance/widgets/youtube/android_youtube.dart';
-import 'package:resonance/widgets/youtube/windows_youtube.dart';
+import 'package:resonance/app/theme.dart';
+import 'package:resonance/app/now_playing_navigation.dart';
+import 'package:resonance/screens/youtube/youtube_search_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:metadata_god/metadata_god.dart';
 import 'package:media_kit/media_kit.dart';
@@ -617,8 +618,10 @@ class _MainAppState extends State<MainApp> {
           navigatorKey: _navigatorKey,
           debugShowCheckedModeBanner: false,
           themeMode: themeProvider.themeMode,
-          theme: _buildLightTheme(),
-          darkTheme: _buildDarkTheme(),
+          theme: buildResonanceTheme(themeProvider.themeStyle, Brightness.light),
+          darkTheme: buildResonanceTheme(themeProvider.themeStyle, Brightness.dark),
+          themeAnimationDuration: const Duration(milliseconds: 360),
+          themeAnimationCurve: Curves.easeInOutCubic,
           home: Builder(
             builder: (nestedContext) {
               return _showIntro
@@ -651,9 +654,13 @@ class _MainAppState extends State<MainApp> {
             height: 8,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF7C3AED),
+              color: Theme.of(context).colorScheme.primary,
               boxShadow: [
-                BoxShadow(color: const Color(0xFF7C3AED).withValues(alpha: 0.6), blurRadius: 8, spreadRadius: 1),
+                BoxShadow(
+                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                ),
               ],
             ),
           ),
@@ -699,7 +706,7 @@ class _MainAppState extends State<MainApp> {
                 SizedBox(
                   width: 32,
                   height: 32,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: const Color(0xFF7C3AED)),
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Theme.of(nestedContext).colorScheme.primary),
                 ),
                 const SizedBox(height: 16),
                 Text(
@@ -764,7 +771,7 @@ class _MainAppState extends State<MainApp> {
         ),
 
         // ── Player panel ──
-        AlbumCover(onTap: _revealCurrentTrack, artworkRevision: _artworkRevision),
+        AlbumCover(onTap: _handleNowPlayingTap, artworkRevision: _artworkRevision),
         PlayerControls(),
       ],
     );
@@ -795,6 +802,11 @@ class _MainAppState extends State<MainApp> {
               ),
               if (!compact) ..._wideTransferActions(context),
               _buildPlaylistMenu(),
+              IconButton(
+                onPressed: () => _openSearch(context),
+                icon: const Icon(Icons.search_rounded),
+                tooltip: 'Search YouTube',
+              ),
               if (!compact) ..._wideLibraryActions(context),
               if (compact) _buildCompactActionsMenu(context),
             ],
@@ -828,11 +840,6 @@ class _MainAppState extends State<MainApp> {
       icon: const Icon(Icons.add_rounded),
       tooltip: 'Import local tracks',
     ),
-    IconButton(
-      onPressed: () => _showYoutubeDownloader(context),
-      icon: const Icon(Icons.download_rounded),
-      tooltip: 'Download from YouTube',
-    ),
   ];
 
   Widget _buildCompactActionsMenu(BuildContext context) => PopupMenuButton<_ToolbarAction>(
@@ -856,10 +863,6 @@ class _MainAppState extends State<MainApp> {
         value: _ToolbarAction.importLocal,
         child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: 'Import local tracks'),
       ),
-      PopupMenuItem(
-        value: _ToolbarAction.download,
-        child: _ToolbarMenuLabel(icon: Icons.download_rounded, label: 'Download from YouTube'),
-      ),
     ],
   );
 
@@ -873,8 +876,6 @@ class _MainAppState extends State<MainApp> {
         unawaited(_importTransferredPlaylist(context));
       case _ToolbarAction.importLocal:
         unawaited(_importLocalTracks(context));
-      case _ToolbarAction.download:
-        _showYoutubeDownloader(context);
     }
   }
 
@@ -884,12 +885,29 @@ class _MainAppState extends State<MainApp> {
     });
   }
 
-  void _showYoutubeDownloader(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (_) => _isDesktop
-          ? WindowsYoutube(onFileAdded: (newPath) => setState(() => playlist.add(newPath)))
-          : AndroidYoutube(onFileAdded: (newPath) => setState(() => playlist.add(newPath))),
+  Future<void> _openSearch(BuildContext context) async {
+    final capturedNumber = activePlaylistNumber;
+    final capturedName = playlistNames[capturedNumber] ?? 'Playlist $capturedNumber';
+    final addedTrack = await Navigator.push<String?>(
+      context,
+      MaterialPageRoute<String?>(
+        builder: (_) => YoutubeSearchScreen(playlistNumber: capturedNumber, playlistName: capturedName),
+      ),
+    );
+    if (!mounted) return;
+    await _loadPlaylistFromDisk();
+    if (addedTrack != null && mounted) await _revealCurrentTrack(addedTrack);
+  }
+
+  Future<void> _handleNowPlayingTap(String trackPath) async {
+    final handler = Provider.of<PlayerHandler>(context, listen: false);
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) return;
+    await navigateFromNowPlaying(
+      navigator: navigator,
+      isStandalone: handler.isStandaloneMode,
+      trackPath: trackPath,
+      revealTrack: _revealCurrentTrack,
     );
   }
 
@@ -950,7 +968,7 @@ class _MainAppState extends State<MainApp> {
   );
 }
 
-enum _ToolbarAction { refresh, transfer, importTransfer, importLocal, download }
+enum _ToolbarAction { refresh, transfer, importTransfer, importLocal }
 
 class _ToolbarMenuLabel extends StatelessWidget {
   final IconData icon;
@@ -1120,6 +1138,7 @@ class _ResonancePainter extends CustomPainter {
 
 // ── Theme builders ─────────────────────────────────────────────────────────────
 
+// ignore: unused_element
 ThemeData _buildDarkTheme() {
   const primary = Color(0xFF7C3AED);
   const primaryGlow = Color(0xFFA855F7);
@@ -1239,6 +1258,7 @@ ThemeData _buildDarkTheme() {
   );
 }
 
+// ignore: unused_element
 ThemeData _buildLightTheme() {
   const primary = Color(0xFF6D28D9);
   const primaryGlow = Color(0xFF7C3AED);

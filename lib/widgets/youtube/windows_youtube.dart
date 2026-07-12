@@ -16,45 +16,10 @@ import 'package:resonance/services/import_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
+import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/services/track_source_repository.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
-
-// ─── Search result model ──────────────────────────────────────────────────────
-
-class YtSearchResult {
-  final String title;
-
-  final String uploader;
-
-  final String url;
-
-  final int? durationSeconds;
-
-  const YtSearchResult({required this.title, required this.uploader, required this.url, this.durationSeconds});
-
-  String get formattedDuration {
-    if (durationSeconds == null) return '';
-
-    final m = durationSeconds! ~/ 60;
-
-    final s = durationSeconds! % 60;
-
-    return '$m:${s.toString().padLeft(2, '0')}';
-  }
-
-  factory YtSearchResult.fromJson(Map<String, dynamic> json) {
-    return YtSearchResult(
-      title: json['title'] as String? ?? 'Unknown',
-
-      uploader: json['uploader'] as String? ?? json['channel'] as String? ?? 'Unknown',
-
-      url: json['webpage_url'] as String? ?? json['url'] as String? ?? '',
-
-      durationSeconds: (json['duration'] as num?)?.toInt(),
-    );
-  }
-}
 
 // ─── Binary / downloader logic ────────────────────────────────────────────────
 
@@ -76,7 +41,7 @@ class MediaDownloader {
     }
   }
 
-  Future<List<YtSearchResult>> search(String query) async {
+  Future<List<YoutubeTrack>> search(String query) async {
     final binDir = await binDirPath;
 
     final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
@@ -87,13 +52,15 @@ class MediaDownloader {
       '--js-runtimes',
       'deno:$denoPath',
 
+      '--force-ipv4',
+
       '--flat-playlist',
 
       '--dump-json',
 
       '--no-download',
 
-      'ytsearch5:$query',
+      'ytsearch10:$query',
     ]);
 
     // Drain stderr to prevent pipe deadlock
@@ -106,7 +73,7 @@ class MediaDownloader {
 
     await process.exitCode;
 
-    final results = <YtSearchResult>[];
+    final results = <YoutubeTrack>[];
 
     for (final line in lines) {
       final trimmed = line.trim();
@@ -116,11 +83,32 @@ class MediaDownloader {
       try {
         final json = jsonDecode(trimmed) as Map<String, dynamic>;
 
-        results.add(YtSearchResult.fromJson(json));
+        results.add(YoutubeTrack.fromJson(json));
       } catch (_) {}
     }
 
     return results;
+  }
+
+  Future<YoutubeTrack> lookup(String url) async {
+    final binDir = await binDirPath;
+    final process = await Process.start(p.join(binDir, 'yt-dlp.exe'), [
+      '--js-runtimes',
+      'deno:${p.join(binDir, 'deno.exe')}',
+      '--force-ipv4',
+      '--dump-single-json',
+      '--no-download',
+      '--no-playlist',
+      url,
+    ]);
+    final stderrFuture = process.stderr.transform(utf8.decoder).join();
+    final stdout = await process.stdout.transform(utf8.decoder).join();
+    final exitCode = await process.exitCode;
+    final stderr = await stderrFuture;
+    if (exitCode != 0 || stdout.trim().isEmpty) {
+      throw StateError(stderr.trim().isEmpty ? 'Could not read this link' : stderr.trim());
+    }
+    return YoutubeTrack.fromJson(jsonDecode(stdout) as Map<String, dynamic>);
   }
 
   /// Downloads audio for [url], reporting progress via callbacks.
@@ -181,12 +169,7 @@ class MediaDownloader {
     final outputTemplate = p.join(targetDir, '%(title)s.%(ext)s');
     final targetDirectory = Directory(targetDir);
     await targetDirectory.create(recursive: true);
-    final pathsBeforeDownload = <String>{};
-    await for (final entity in targetDirectory.list()) {
-      if (entity is File && _looksLikeAudioPath(entity.path)) {
-        pathsBeforeDownload.add(p.normalize(entity.path));
-      }
-    }
+    final downloadStartedAt = DateTime.now().subtract(const Duration(seconds: 2));
 
     const int maxAttempts = 3;
 
@@ -206,12 +189,18 @@ class MediaDownloader {
           '--ffmpeg-location',
           ffmpegPath,
 
-          '--windows-filenames',
+          '--js-runtimes',
+          'deno:${p.join(binDir, 'deno.exe')}',
 
-          // NOTE: --js-runtimes deno is intentionally NOT passed here.
-          // Deno's subprocess model swallows yt-dlp's piped stderr progress
-          // lines (leaving the bar stuck at 0%) and adds cold-start latency.
-          // yt-dlp's built-in jsinterp handles decryption fine for downloads.
+          '--force-ipv4',
+
+          '--format',
+          'bestaudio[has_drm!=true]/best[has_drm!=true]',
+
+          '--concurrent-fragments',
+          '4',
+
+          '--windows-filenames',
           '-x',
 
           '--audio-format',
@@ -231,6 +220,14 @@ class MediaDownloader {
 
           '--newline',
 
+          '--no-colors',
+
+          '--progress-delta',
+          '0.2',
+
+          '--progress-template',
+          'download:resonance_progress:%(progress._percent_str)s',
+
           '--yes-playlist',
 
           '--print',
@@ -243,6 +240,7 @@ class MediaDownloader {
         ]);
 
         final progressRegex = RegExp(r'\[download\]\s+(\d+(?:\.\d+)?)%');
+        final templateProgressRegex = RegExp(r'resonance_progress:\s*(\d+(?:\.\d+)?)%');
         final fragRegex = RegExp(r'\(frag\s+(\d+)/(\d+)\)');
         final playlistItemRegex = RegExp(r'\[download\]\s+Downloading item\s+(\d+)\s+of\s+(\d+)');
         final alreadyDownloadedRegex = RegExp(r'\[download\]\s+(.+?)\s+has already been downloaded');
@@ -256,6 +254,14 @@ class MediaDownloader {
           final trimmed = line.trim();
           if (trimmed.isEmpty) return;
           outputLines.add(trimmed);
+
+          final templateMatch = templateProgressRegex.firstMatch(trimmed);
+          if (templateMatch != null) {
+            final percent = double.tryParse(templateMatch.group(1) ?? '0') ?? 0.0;
+            final prefix = totalItems > 1 ? '($currentItem/$totalItems) ' : '';
+            onProgress(percent.clamp(0.0, 100.0), '${prefix}Downloading... ${percent.toStringAsFixed(1)}%');
+            return;
+          }
 
           final itemMatch = playlistItemRegex.firstMatch(trimmed);
           if (itemMatch != null) {
@@ -294,7 +300,16 @@ class MediaDownloader {
 
         final stdoutDone = process.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
           final trimmed = line.trim();
-          if (trimmed.isNotEmpty) printedPaths.add(trimmed);
+          if (trimmed.isEmpty) return;
+          if (trimmed.contains('resonance_progress:') ||
+              trimmed.contains('[download]') ||
+              trimmed.contains('[ExtractAudio]') ||
+              trimmed.contains('[Merger]') ||
+              trimmed.contains('[MoveFiles]')) {
+            handleLine(trimmed);
+          } else {
+            printedPaths.add(trimmed);
+          }
         }).asFuture<void>();
         final stderrDone = process.stderr
             .transform(utf8.decoder)
@@ -367,14 +382,16 @@ class MediaDownloader {
           throw Exception('yt-dlp exited with code $exitCode');
         }
 
-        // yt-dlp can render Unicode punctuation differently in its console
-        // output than in the actual Windows filename. Import any newly-created
-        // audio files as the authoritative fallback.
-        await for (final entity in targetDirectory.list()) {
-          if (entity is! File || !_looksLikeAudioPath(entity.path)) continue;
-          final normalized = p.normalize(entity.path);
-          if (!pathsBeforeDownload.contains(normalized)) {
-            await importPath(normalized, youtubeVideoId: TrackSourceRepository.videoIdFromUrlOrId(url));
+        // The printed after_move path is authoritative and avoids scanning a
+        // potentially huge Downloads folder twice. Only scan when the console
+        // path could not be imported (for example due to a code-page mismatch).
+        if (importedCount == 0) {
+          await for (final entity in targetDirectory.list()) {
+            if (entity is! File || !_looksLikeAudioPath(entity.path)) continue;
+            final modified = await entity.lastModified();
+            if (!modified.isBefore(downloadStartedAt)) {
+              await importPath(entity.path, youtubeVideoId: TrackSourceRepository.videoIdFromUrlOrId(url));
+            }
           }
         }
         if (importedCount == 0) {
@@ -420,7 +437,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
   bool _isUrlMode = true;
 
-  List<YtSearchResult> _searchResults = [];
+  List<YoutubeTrack> _searchResults = [];
 
   double _downloadPercentage = 0.0;
 
@@ -572,6 +589,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
       final process = await Process.start(ytDlpPath, [
         '--js-runtimes',
         'deno:$denoPath',
+        '--force-ipv4',
         '--dump-json',
         '--no-download',
         url,
@@ -930,7 +948,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                 ),
 
                 subtitle: Text(
-                  [result.uploader, if (result.formattedDuration.isNotEmpty) result.formattedDuration].join(' · '),
+                  [result.artist, if (result.formattedDuration.isNotEmpty) result.formattedDuration].join(' · '),
 
                   style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant),
                 ),
@@ -942,7 +960,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                     IconButton(
                       icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary),
                       tooltip: 'Stream Now',
-                      onPressed: () => _startStream(result.url, title: result.title, artist: result.uploader),
+                      onPressed: () => _startStream(result.url, title: result.title, artist: result.artist),
                     ),
                     // ── Download button ────────────────────────────────
                     IconButton(
@@ -953,7 +971,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                   ],
                 ),
 
-                onTap: () => _startStream(result.url, title: result.title, artist: result.uploader),
+                onTap: () => _startStream(result.url, title: result.title, artist: result.artist),
               );
             },
           ),

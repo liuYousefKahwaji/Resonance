@@ -55,7 +55,7 @@ class _VolumeBarState extends State<VolumeBar> {
           icon = Icons.volume_up_rounded;
         }
 
-        // Track color: violet up to 100%, amber/orange in boost range
+        // Track color: active theme accent up to 100%, amber/orange in boost range
         final boostColor = isDark
             ? const Color(0xFFD97706) // amber-600
             : const Color(0xFFB45309);
@@ -96,7 +96,7 @@ class _VolumeBarState extends State<VolumeBar> {
                           data: SliderTheme.of(context).copyWith(
                             showValueIndicator: ShowValueIndicator.never,
                             activeTrackColor: activeTrackColor,
-                            inactiveTrackColor: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3),
+                            inactiveTrackColor: Theme.of(context).colorScheme.outline,
                             thumbColor: activeTrackColor,
                             tickMarkShape: SliderTickMarkShape.noTickMark,
                             trackHeight: _isHovering ? 4.0 : 3.0,

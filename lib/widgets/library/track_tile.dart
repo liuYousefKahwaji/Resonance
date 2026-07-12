@@ -26,6 +26,7 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/widgets/common/artwork_thumbnail.dart';
 import 'package:metadata_god/metadata_god.dart';
 
 class TrackTile extends StatefulWidget {
@@ -477,12 +478,10 @@ class _TrackTileContent extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: isCurrentTrack
                       ? (isDark ? primary.withValues(alpha: 0.12) : primary.withValues(alpha: 0.06))
-                      : (isDark ? const Color(0xFF1A1A2A) : Colors.white),
+                      : Theme.of(context).colorScheme.surface,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: isCurrentTrack
-                        ? primary.withValues(alpha: 0.45)
-                        : (isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3)),
+                    color: isCurrentTrack ? primary.withValues(alpha: 0.45) : Theme.of(context).colorScheme.outline,
                     width: isCurrentTrack ? 1.5 : 1,
                   ),
                   boxShadow: isCurrentTrack
@@ -524,7 +523,7 @@ class _TrackTileContent extends StatelessWidget {
                                           ? primary.withValues(alpha: isCurrentTrack ? 0.85 : 0.55)
                                           : isCurrentTrack
                                           ? primary.withValues(alpha: 0.5)
-                                          : (isDark ? const Color(0xFF3D3D55) : const Color(0xFFBDB8E0)),
+                                          : Theme.of(context).colorScheme.outline,
                                     ),
                                   );
                                 },
@@ -612,9 +611,9 @@ class _SkeletonTile extends StatelessWidget {
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1A1A2A) : Colors.white,
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3), width: 1),
+        border: Border.all(color: Theme.of(context).colorScheme.outline, width: 1),
       ),
       child: Row(
         children: [
@@ -622,7 +621,7 @@ class _SkeletonTile extends StatelessWidget {
             width: 32,
             height: 32,
             decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF242436) : const Color(0xFFEEECF8),
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(8),
             ),
           ),
@@ -636,7 +635,7 @@ class _SkeletonTile extends StatelessWidget {
                   height: 12,
                   width: 140,
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF242436) : const Color(0xFFEEECF8),
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
@@ -645,7 +644,7 @@ class _SkeletonTile extends StatelessWidget {
                   height: 10,
                   width: 80,
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF1E1E30) : const Color(0xFFF5F3FF),
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
@@ -681,7 +680,7 @@ class _TrackIcon extends StatelessWidget {
       decoration: BoxDecoration(
         color: isActive
             ? primary.withValues(alpha: isDark ? 0.2 : 0.12)
-            : (isDark ? const Color(0xFF242436) : const Color(0xFFEEECF8)),
+            : Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
       ),
       child: AnimatedSwitcher(
@@ -693,19 +692,7 @@ class _TrackIcon extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 2, color: primary),
               )
             : coverArt != null
-            ? ClipRRect(
-                key: ValueKey('cover-${coverArt!.length}'),
-                borderRadius: BorderRadius.circular(8),
-                child: Image.memory(
-                  coverArt!,
-                  width: 34,
-                  height: 34,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                  cacheWidth: 96,
-                  cacheHeight: 96,
-                ),
-              )
+            ? ArtworkThumbnail(key: ValueKey('cover-${coverArt!.length}'), bytes: coverArt!, size: 34, borderRadius: 8)
             : Icon(
                 isPlaying ? Icons.graphic_eq_rounded : (isStream ? Icons.sensors_rounded : Icons.music_note_rounded),
                 key: ValueKey(

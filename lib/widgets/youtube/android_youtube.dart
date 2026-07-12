@@ -23,41 +23,25 @@ import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_download_result.dart';
+import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/services/track_source_repository.dart';
-
-class YtSearchResult {
-  final String title;
-  final String uploader;
-  final String url;
-  final int? durationSeconds;
-
-  const YtSearchResult({required this.title, required this.uploader, required this.url, this.durationSeconds});
-
-  String get formattedDuration {
-    if (durationSeconds == null) return '';
-    final m = durationSeconds! ~/ 60;
-    final s = durationSeconds! % 60;
-    return '$m:${s.toString().padLeft(2, '0')}';
-  }
-
-  factory YtSearchResult.fromMap(Map map) {
-    return YtSearchResult(
-      title: map['title'] as String? ?? 'Unknown',
-      uploader: map['uploader'] as String? ?? 'Unknown',
-      url: map['url'] as String? ?? '',
-      durationSeconds: map['duration_seconds'] as int?,
-    );
-  }
-}
 
 class AndroidYoutubeDownloader {
   static const _method = MethodChannel('resonance/android_youtube');
   static const _event = EventChannel('resonance/android_youtube/events');
 
-  Future<List<YtSearchResult>> search(String query) async {
+  Future<List<YoutubeTrack>> search(String query) async {
     final raw = await _method.invokeMethod<String>('search', {'query': query});
     final decoded = jsonDecode(raw ?? '[]') as List;
-    return decoded.map((e) => YtSearchResult.fromMap(e as Map)).toList();
+    return decoded.map((e) => YoutubeTrack.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+  }
+
+  Future<YoutubeTrack> lookup(String url) async {
+    final raw = await _method.invokeMethod<String>('getMetadata', {'url': url});
+    if (raw == null || raw.isEmpty) throw StateError('Could not read this link');
+    final data = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    data['url'] ??= url;
+    return YoutubeTrack.fromJson(data);
   }
 
   Stream<String> download(String url, String outputDir) {
@@ -214,7 +198,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
 
   _DialogMode _mode = _DialogMode.input;
   bool _isUrlMode = true;
-  List<YtSearchResult> _searchResults = [];
+  List<YoutubeTrack> _searchResults = [];
   double _downloadPercentage = 0.0;
   String _statusMessage = '';
 
@@ -616,7 +600,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
                   ),
                   subtitle: Text(
-                    [result.uploader, if (result.formattedDuration.isNotEmpty) result.formattedDuration].join(' · '),
+                    [result.artist, if (result.formattedDuration.isNotEmpty) result.formattedDuration].join(' · '),
                     style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant),
                   ),
                   trailing: Row(
@@ -630,7 +614,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                           padding: EdgeInsets.zero,
                           icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary, size: 20),
                           tooltip: 'Stream',
-                          onPressed: () => _startStream(result.url, title: result.title, artist: result.uploader),
+                          onPressed: () => _startStream(result.url, title: result.title, artist: result.artist),
                         ),
                       ),
                       const SizedBox(width: 2),
@@ -646,7 +630,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                       ),
                     ],
                   ),
-                  onTap: () => _startStream(result.url, title: result.title, artist: result.uploader),
+                  onTap: () => _startStream(result.url, title: result.title, artist: result.artist),
                 );
               },
             ),

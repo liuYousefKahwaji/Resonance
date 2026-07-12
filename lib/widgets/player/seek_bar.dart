@@ -246,7 +246,7 @@ class _SeekBarState extends State<SeekBar> {
                       data: SliderTheme.of(context).copyWith(
                         showValueIndicator: ShowValueIndicator.never,
                         activeTrackColor: activeTrackColor,
-                        inactiveTrackColor: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3),
+                        inactiveTrackColor: Theme.of(context).colorScheme.outline,
                         thumbColor: isDimmed ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8)) : primary,
                         tickMarkShape: SliderTickMarkShape.noTickMark,
                         trackHeight: _isHovering ? 4.0 : 3.0,

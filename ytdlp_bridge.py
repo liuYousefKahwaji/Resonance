@@ -16,6 +16,23 @@ import json
 import os
 import yt_dlp
 
+_YOUTUBE_FALLBACK_EXTRACTOR_ARGS = {
+    "youtube": {"player_client": ["android_vr", "web_embedded"]},
+}
+
+
+def _extract_info(target, options, download=False):
+    """Use yt-dlp's maintained defaults before an Android-safe fallback."""
+    attempts = [dict(options), {**options, "extractor_args": _YOUTUBE_FALLBACK_EXTRACTOR_ARGS}]
+    last_error = None
+    for attempt in attempts:
+        try:
+            with yt_dlp.YoutubeDL(attempt) as ydl:
+                return ydl.extract_info(target, download=download), ydl
+        except Exception as error:
+            last_error = error
+    raise last_error or RuntimeError(f"Could not extract: {target}")
+
 
 def search(query: str) -> str:
     """
@@ -32,26 +49,26 @@ def search(query: str) -> str:
         "default_search": "ytsearch",
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(f"ytsearch5:{query}", download=False)
-        if info and "entries" in info:
-            for entry in info["entries"]:
-                if entry is None:
-                    continue
-                # duration may be None for some entries — keep it as None,
-                # Kotlin handles None → null via Integer boxing.
-                duration = entry.get("duration")
-                video_id = entry.get("id") or entry.get("url") or ""
-                webpage_url = entry.get("webpage_url")
-                if not webpage_url and video_id and not str(video_id).startswith("http"):
-                    webpage_url = f"https://www.youtube.com/watch?v={video_id}"
+    info, _ = _extract_info(f"ytsearch10:{query}", ydl_opts)
+    if info and "entries" in info:
+        for entry in info["entries"]:
+            if entry is None:
+                continue
+            # duration may be None for some entries — keep it as None,
+            # Kotlin handles None → null via Integer boxing.
+            duration = entry.get("duration")
+            video_id = entry.get("id") or entry.get("url") or ""
+            webpage_url = entry.get("webpage_url")
+            if not webpage_url and video_id and not str(video_id).startswith("http"):
+                webpage_url = f"https://www.youtube.com/watch?v={video_id}"
 
-                results.append({
-                    "title":            entry.get("title") or "Unknown",
-                    "uploader":         entry.get("uploader") or entry.get("channel") or "Unknown",
-                    "url":              webpage_url or entry.get("url") or "",
-                    "duration_seconds": int(duration) if duration is not None else None,
-                })
+            results.append({
+                "title":            entry.get("title") or "Unknown",
+                "uploader":         entry.get("uploader") or entry.get("channel") or "Unknown",
+                "url":              webpage_url or entry.get("url") or "",
+                "duration_seconds": int(duration) if duration is not None else None,
+                "thumbnail": entry.get("thumbnail") or "",
+            })
 
     return json.dumps(results)
 
@@ -118,6 +135,7 @@ def download(url: str, output_dir: str, event_sink) -> None:
         # Embed available metadata without ffmpeg (only works for some containers)
         "writethumbnail": False,
         "postprocessors": [],   # explicitly empty — no ffmpeg steps
+        "format": "bestaudio[has_drm!=true]/best[has_drm!=true]",
     }
 
     attempts = [
@@ -126,16 +144,7 @@ def download(url: str, output_dir: str, event_sink) -> None:
             # Let yt-dlp choose. This avoids Android/Web client format bugs
             # where even "best" is reported unavailable.
         },
-        {
-            **base_opts,
-            "format": "bestaudio/best",
-            "extractor_args": {"youtube": {"player_client": ["ios"]}},
-        },
-        {
-            **base_opts,
-            "format": "bestaudio/best",
-            "extractor_args": {"youtube": {"player_client": ["android"]}},
-        },
+        {**base_opts},
     ]
 
     try:
@@ -145,10 +154,8 @@ def download(url: str, output_dir: str, event_sink) -> None:
 
         for ydl_opts in attempts:
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    active_ydl = ydl
-                    break
+                info, active_ydl = _extract_info(url, ydl_opts, download=True)
+                break
             except Exception as e:
                 last_error = e
 
@@ -191,13 +198,12 @@ def get_stream_url(url: str) -> str:
     Extract the direct media stream URL for the given video/audio link.
     """
     ydl_opts = {
-        "format": "bestaudio/best",
+        "format": "bestaudio[has_drm!=true]/best[has_drm!=true]",
         "quiet": True,
         "no_warnings": True,
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        return info.get("url") or ""
+    info, _ = _extract_info(url, ydl_opts)
+    return info.get("url") or ""
 
 
 def get_metadata(url: str) -> str:
@@ -209,10 +215,8 @@ def get_metadata(url: str) -> str:
         "no_warnings": True,
         "skip_download": True,
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        return json.dumps({
-            "title": info.get("title") or "Streaming Track",
-            "artist": info.get("uploader") or info.get("channel") or "YouTube"
-        })
-
+    info, _ = _extract_info(url, ydl_opts)
+    return json.dumps({
+        "title": info.get("title") or "Streaming Track",
+        "artist": info.get("uploader") or info.get("channel") or "YouTube"
+    })

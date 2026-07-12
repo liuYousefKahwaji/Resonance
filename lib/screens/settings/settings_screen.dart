@@ -19,6 +19,7 @@ import 'package:resonance/services/discord_presence_service.dart';
 import 'package:restart_app/restart_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/providers/theme_provider.dart';
+import 'package:resonance/app/theme.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -381,6 +382,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 _Divider(),
+                Consumer<ThemeProvider>(
+                  builder: (context, themeProvider, child) {
+                    return _SettingsTile(
+                      icon: Icons.palette_rounded,
+                      title: 'Theme',
+                      subtitle: 'Changes accent and supporting colors without restarting',
+                      trailing: DropdownButtonHideUnderline(
+                        child: DropdownButton<ResonanceThemeStyle>(
+                          value: themeProvider.themeStyle,
+                          onChanged: (style) {
+                            if (style != null) themeProvider.setThemeStyle(style);
+                          },
+                          items: [
+                            for (final style in ResonanceThemeStyle.values)
+                              DropdownMenuItem(value: style, child: Text(style.label)),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                _Divider(),
                 _SettingsTile(
                   icon: Icons.auto_awesome_rounded,
                   title: 'Startup Intro',
@@ -604,12 +627,11 @@ class _SettingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1A1A2A) : Colors.white,
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3), width: 1),
+        border: Border.all(color: Theme.of(context).colorScheme.outline, width: 1),
       ),
       child: Column(children: children),
     );

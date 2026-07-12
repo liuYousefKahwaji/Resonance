@@ -26,6 +26,14 @@ _BASE_OPTS = {
     "socket_timeout": 20,
 }
 
+# Let yt-dlp choose its maintained default clients first. Hard-coding
+# web_embedded,tv_simply caused ordinary public videos to return no formats as
+# YouTube changed its PO-token policy. android_vr remains a useful no-JavaScript
+# fallback, while web_embedded covers videos which explicitly allow embedding.
+_FALLBACK_EXTRACTOR_ARGS = {
+    "youtube": {"player_client": ["android_vr", "web_embedded"]},
+}
+
 
 def _make_ydl(extra=None):
     opts = dict(_BASE_OPTS)
@@ -34,17 +42,31 @@ def _make_ydl(extra=None):
     return yt_dlp.YoutubeDL(opts)
 
 
+def _extract_info(target, extra=None, download=False):
+    """Extract with yt-dlp defaults, then one Android-safe client fallback."""
+    attempts = [dict(extra or {})]
+    fallback = dict(extra or {})
+    fallback["extractor_args"] = _FALLBACK_EXTRACTOR_ARGS
+    attempts.append(fallback)
+    last_error = None
+    for opts in attempts:
+        try:
+            with _make_ydl(opts) as ydl:
+                return ydl.extract_info(target, download=download), ydl
+        except Exception as error:
+            last_error = error
+    raise last_error or RuntimeError(f"Could not extract: {target}")
+
+
 # ── search ─────────────────────────────────────────────────────────────────────
 
 def search(query: str) -> str:
-    """Return JSON array of up to 5 search results."""
+    """Return JSON array of up to 10 search results."""
     opts = {
-        **_BASE_OPTS,
         "extract_flat": True,
         "skip_download": True,
     }
-    with _make_ydl(opts) as ydl:
-        info = ydl.extract_info(f"ytsearch5:{query}", download=False)
+    info, _ = _extract_info(f"ytsearch10:{query}", opts)
 
     results = []
     for entry in (info.get("entries") or []):
@@ -57,11 +79,16 @@ def search(query: str) -> str:
         )
         url = entry.get("webpage_url") or entry.get("url") or ""
         duration = entry.get("duration")
+        thumbnail = entry.get("thumbnail") or ""
+        thumbnails = entry.get("thumbnails") or []
+        if thumbnails:
+            thumbnail = (thumbnails[-1] or {}).get("url") or thumbnail
         results.append({
             "title": title,
             "uploader": uploader,
             "url": url,
             "duration_seconds": int(duration) if duration else None,
+            "thumbnail": thumbnail,
         })
 
     return json.dumps(results, ensure_ascii=False)
@@ -72,12 +99,10 @@ def search(query: str) -> str:
 def get_metadata(url: str) -> str:
     """Return JSON object with title and artist for a single video."""
     opts = {
-        **_BASE_OPTS,
         "skip_download": True,
         "extract_flat": False,
     }
-    with _make_ydl(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    info, _ = _extract_info(url, opts)
 
     title = info.get("title") or "Streaming Track"
     artist = (
@@ -86,18 +111,26 @@ def get_metadata(url: str) -> str:
         or info.get("uploader_id")
         or "YouTube"
     )
-    return json.dumps({"title": title, "artist": artist}, ensure_ascii=False)
+    thumbnail = info.get("thumbnail") or ""
+    thumbnails = info.get("thumbnails") or []
+    if thumbnails:
+        thumbnail = (thumbnails[-1] or {}).get("url") or thumbnail
+    return json.dumps({
+        "title": title,
+        "artist": artist,
+        "url": info.get("webpage_url") or url,
+        "duration_seconds": int(info["duration"]) if info.get("duration") else None,
+        "thumbnail": thumbnail,
+    }, ensure_ascii=False)
 
 
 def get_first_thumbnail(query: str) -> str:
     """Search YouTube and return the first result's thumbnail URL."""
     opts = {
-        **_BASE_OPTS,
         "extract_flat": False,
         "skip_download": True,
     }
-    with _make_ydl(opts) as ydl:
-        info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+    info, _ = _extract_info(f"ytsearch1:{query}", opts)
 
     entries = info.get("entries") or []
     first = entries[0] if entries else info
@@ -132,21 +165,20 @@ def get_stream_url(url: str) -> str:
 
     We request the URL only (no download) using yt-dlp's get_url option.
     """
-    # Try HLS first
+    # Prefer a single non-DRM audio stream. This may be a direct HTTPS URL or
+    # HLS manifest; ExoPlayer handles both. Do not filter to protocol^=http,
+    # because that rejects valid m3u8_native streams before ExoPlayer sees them.
     for fmt in [
-        "hls/bestaudio[ext=m4a]/bestaudio/best",
-        "bestaudio[ext=m4a]/bestaudio/best",
+        "bestaudio[has_drm!=true]/best[has_drm!=true]",
+        "bestaudio/best",
     ]:
         opts = {
-            **_BASE_OPTS,
             "skip_download": True,
             "format": fmt,
-            "get_url": True,          # print URL only, very fast
             "no_playlist": True,
         }
         try:
-            with _make_ydl(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+            info, _ = _extract_info(url, opts)
 
             # When get_url=True, the url is in info["url"] or the first format
             stream_url = None
@@ -254,11 +286,10 @@ def download(url: str, output_dir: str, event_sink) -> None:
             current_item[0] += 1
 
     opts = {
-        **_BASE_OPTS,
         # Prefer a directly downloadable audio file. HLS/DASH merging would
         # make yt-dlp look for an external ffmpeg binary, which does not exist
         # in the Android Python runtime; Flutter converts the result afterward.
-        "format": "bestaudio[protocol^=http][vcodec=none]/bestaudio[protocol^=http]/best[protocol^=http]",
+        "format": "bestaudio[has_drm!=true]/best[has_drm!=true]",
         "outtmpl": output_template,
         "progress_hooks": [progress_hook],
         # Conversion is handled by the app's bundled FFmpegKit library.
@@ -267,11 +298,10 @@ def download(url: str, output_dir: str, event_sink) -> None:
     }
 
     try:
-        with _make_ydl(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            entries = info.get("entries") if info else None
-            if entries:
-                total_items[0] = len(list(entries))
+        info, _ = _extract_info(url, opts, download=True)
+        entries = info.get("entries") if info else None
+        if entries:
+            total_items[0] = len(list(entries))
         event_sink.success("done")
     except Exception as e:
         event_sink.success(f"error:{e}")

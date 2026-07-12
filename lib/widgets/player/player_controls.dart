@@ -23,11 +23,9 @@ class PlayerControls extends StatelessWidget {
     final handler = Provider.of<PlayerHandler>(context);
     final screenWidth = MediaQuery.of(context).size.width;
     final isMobile = Platform.isAndroid;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
     // Panel surface colors
-    final panelColor = isDark ? const Color(0xFF15151F) : Colors.white;
-    final panelBorder = isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3);
+    final panelColor = Theme.of(context).colorScheme.surface;
+    final panelBorder = Theme.of(context).colorScheme.outline;
 
     return StreamBuilder<PlaybackState>(
       stream: handler.playbackState,

@@ -28,6 +28,13 @@ class FileService {
     return File('$path/r_playlist_$number.m3u8');
   }
 
+  Future<File> _ensurePlaylistFile(int number) async {
+    final safeNumber = number < 1 ? defaultPlaylistNumber : number;
+    final file = await _playlistFile(safeNumber);
+    if (!await file.exists()) await file.writeAsString('#\n');
+    return file;
+  }
+
   Future<File> get _legacyFile async {
     final path = await _localPath;
     return File('$path/playlist.m3u8');
@@ -227,6 +234,33 @@ class FileService {
     } else {
       return file.writeAsString(text);
     }
+  }
+
+  Future<File> writeTextToPlaylist(int playlistNumber, String text, {bool append = false}) async {
+    final file = await _ensurePlaylistFile(playlistNumber);
+    return file.writeAsString(text, mode: append ? FileMode.append : FileMode.write);
+  }
+
+  Future<String> readTextFromPlaylist(int playlistNumber) async {
+    final file = await _ensurePlaylistFile(playlistNumber);
+    var contents = await file.readAsString();
+    if (!contents.startsWith('#')) {
+      contents = '#\n$contents';
+      await file.writeAsString(contents);
+    }
+    return contents;
+  }
+
+  Future<void> addToPlaylist(int playlistNumber, String trackPath) async {
+    final clean = trackPath.trim();
+    if (clean.isEmpty) return;
+    final content = await readTextFromPlaylist(playlistNumber);
+    final existing = content
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty && !line.startsWith('#'));
+    if (existing.any((candidate) => sameTrackPath(candidate, clean))) return;
+    await writeTextToPlaylist(playlistNumber, '$clean\n', append: true);
   }
 
   // 4. Read data from the file safely

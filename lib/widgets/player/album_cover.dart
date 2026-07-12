@@ -6,9 +6,10 @@ import 'dart:typed_data';
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:metadata_god/metadata_god.dart';
-import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/screens/player/standalone_player_screen.dart';
+import 'package:resonance/widgets/common/artwork_thumbnail.dart';
 
 class AlbumCover extends StatefulWidget {
   final ValueChanged<String>? onTap;
@@ -53,9 +54,7 @@ class _AlbumCoverState extends State<AlbumCover> with SingleTickerProviderStateM
         final item = mediaSnapshot.data;
         final path = item?.id ?? '';
         final rawTitle = item?.title ?? '';
-        final title = rawTitle.isNotEmpty
-            ? (path.isNotEmpty ? p.basenameWithoutExtension(rawTitle) : rawTitle)
-            : 'Nothing playing';
+        final title = rawTitle.isNotEmpty ? rawTitle : 'Nothing playing';
         final artist = item?.artist ?? '';
 
         return StreamBuilder<PlaybackState>(
@@ -112,6 +111,7 @@ class _AlbumCoverState extends State<AlbumCover> with SingleTickerProviderStateM
                     title: title,
                     artist: artist,
                     path: path,
+                    artworkUri: item?.artUri,
                     isPlaying: isPlaying,
                     isLoading: isLoading,
                     hasTrack: item != null,
@@ -133,6 +133,7 @@ class _NowPlayingCard extends StatelessWidget {
   final String title;
   final String artist;
   final String path;
+  final Uri? artworkUri;
   final bool isPlaying;
   final bool isLoading;
   final bool hasTrack;
@@ -144,6 +145,7 @@ class _NowPlayingCard extends StatelessWidget {
     required this.title,
     required this.artist,
     required this.path,
+    required this.artworkUri,
     required this.isPlaying,
     required this.isLoading,
     required this.hasTrack,
@@ -155,8 +157,8 @@ class _NowPlayingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
-    final surface = isDark ? const Color(0xFF1A1A2A) : Colors.white;
-    final border = isDark ? const Color(0xFF2D2D42) : const Color(0xFFDDD9F3);
+    final surface = Theme.of(context).colorScheme.surface;
+    final border = Theme.of(context).colorScheme.outline;
     final textPrimary = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A);
     const textMuted = Color(0xFF64748B);
 
@@ -180,12 +182,16 @@ class _NowPlayingCard extends StatelessWidget {
             // Prevent the Row from overflowing — each child must be sized.
             mainAxisSize: MainAxisSize.max,
             children: [
-              _AlbumIcon(
-                isPlaying: isPlaying,
-                hasTrack: hasTrack,
-                isLoading: isLoading,
-                path: path,
-                artworkRevision: artworkRevision,
+              Hero(
+                tag: nowPlayingArtworkHeroTag,
+                child: _AlbumIcon(
+                  isPlaying: isPlaying,
+                  hasTrack: hasTrack,
+                  isLoading: isLoading,
+                  path: path,
+                  artworkUri: artworkUri,
+                  artworkRevision: artworkRevision,
+                ),
               ),
               const SizedBox(width: 14),
               // Expanded forces the text column to take remaining space and
@@ -240,12 +246,14 @@ class _AlbumIcon extends StatefulWidget {
   final bool isLoading;
   final bool hasTrack;
   final String path;
+  final Uri? artworkUri;
   final int artworkRevision;
 
   const _AlbumIcon({
     required this.isPlaying,
     required this.hasTrack,
     required this.path,
+    required this.artworkUri,
     required this.isLoading,
     required this.artworkRevision,
   });
@@ -270,7 +278,9 @@ class _AlbumIconState extends State<_AlbumIcon> with SingleTickerProviderStateMi
   @override
   void didUpdateWidget(covariant _AlbumIcon old) {
     super.didUpdateWidget(old);
-    if (old.path != widget.path || old.artworkRevision != widget.artworkRevision) {
+    if (old.path != widget.path ||
+        old.artworkUri != widget.artworkUri ||
+        old.artworkRevision != widget.artworkRevision) {
       _albumArt = null;
       _loadedPath = null;
       _loadAlbumArt();
@@ -322,15 +332,19 @@ class _AlbumIconState extends State<_AlbumIcon> with SingleTickerProviderStateMi
         child: Center(
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 200),
-            child: _albumArt != null
-                ? Image.memory(
-                    _albumArt!,
-                    key: ValueKey('art-${widget.path}'),
+            child:
+                widget.artworkUri != null &&
+                    (widget.artworkUri!.scheme == 'http' || widget.artworkUri!.scheme == 'https')
+                ? Image.network(
+                    widget.artworkUri.toString(),
+                    key: ValueKey('remote-art-${widget.artworkUri}'),
                     width: 42,
                     height: 42,
                     fit: BoxFit.cover,
-                    gaplessPlayback: true,
+                    errorBuilder: (_, __, ___) => Icon(Icons.music_note_rounded, color: primary),
                   )
+                : _albumArt != null
+                ? ArtworkThumbnail(key: ValueKey('art-${widget.path}'), bytes: _albumArt!, size: 42, borderRadius: 10)
                 : widget.isLoading
                 ? Padding(
                     key: const ValueKey('loading'),
