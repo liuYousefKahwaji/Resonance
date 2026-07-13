@@ -24,6 +24,8 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 - Create, switch, rename, delete, and reorder playlists; names, order, and the active playlist persist between sessions.
 - Drag files into the Windows app or use the file picker on either platform.
 - Edit a track's title, artist, and embedded cover art from its long-press/right-click menu.
+- Open the track-actions menu from the three-dot button for metadata editing, standalone playback, and permanent deletion.
+- Permanent deletion removes the file and all of its references from Resonance; the regular remove action only removes a track from the current playlist.
 - Preview artwork throughout the library and fill missing covers from the first matching YouTube result.
 - Tap **Currently Playing** to reveal the active track, even if it belongs to another playlist.
 
@@ -34,6 +36,7 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 - Playback speed and pitch from 0.5× to 2.0×, plus a clearly marked volume boost up to 200%.
 - Restores the last track and remembers volume, speed, pitch, loop, and shuffle settings.
 - Responsive player layouts, embedded artwork, loading feedback, and an optional startup pulse.
+- Opening a playlist track in the standalone player continues the current song instead of starting a second playback instance.
 
 ### YouTube
 
@@ -51,6 +54,13 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 - Existing local matches are reused. Missing tracks are shown for review and downloaded only after confirmation; failures can be retried or skipped.
 - Android scans continuously with the camera; Windows imports QR images. Both platforms can save generated codes as PNG files.
 
+### Spotify and Audiomack playlists
+
+- Import a **public** Spotify or Audiomack playlist from its link.
+- Resonance scans the playlist for track metadata, finds the top matching YouTube result, and lets you review the matches before creating a new playlist.
+- Choose whether imported tracks should be downloaded locally or streamed from the playlist.
+- Duplicate entries and their original order are preserved, and repeated YouTube sources are downloaded only once.
+
 ### Desktop and mobile integration
 
 | Windows | Android |
@@ -62,18 +72,24 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 
 ## Themes
 
-Every style has light and dark variants and can be changed without restarting:
+Every style has light and dark variants and can be changed without restarting. The theme style setting switches between the original accent-only appearance and the newer full palette treatment:
 
 $\color{#9827F5}{\textsf{\textbf{Obsidian}}}$ · $\color{#1DB954}{\textsf{\textbf{Jade}}}$ · $\color{#2563EB}{\textsf{\textbf{Cobalt}}}$ · $\color{#FF1744}{\textsf{\textbf{Magma}}}$ · $\color{#B8BDC7}{\textsf{\textbf{Void}}}$
 
 Void uses a true black base in dark mode for an OLED-style look.
 
+The full style changes backgrounds and surfaces as well as the accent. The default style keeps the older, more restrained theme treatment.
+
+## Performance
+
+Playback and interface updates are kept lighter during normal use and when Resonance is minimized to the tray. Track menus and playlist scrolling also use smoother transitions, with a subtle blur effect while scrolling.
+
 ## Download
 
-The current release is **v1.9.0**:
+The current release is **v2.0.0**:
 
-- [Android ARM64 APK](https://github.com/liuYousefKahwaji/Resonance/releases/download/1.9.0/Resonance-Android-v1.9.0.apk) — Android 7.0 (API 24) or newer.
-- [Windows x64 package](https://github.com/liuYousefKahwaji/Resonance/releases/download/1.9.0/Resonance-Windows-v1.9.0.rar) — extract the entire archive, then run `resonance.exe`.
+- [Android ARM64 APK](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.0.0/Resonance-Android-v2.0.0.apk) — Android 7.0 (API 24) or newer.
+- [Windows x64 package](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.0.0/Resonance-Windows-v2.0.0.rar) — extract the entire archive, then run `resonance.exe`.
 
 All versions and their notes are on the [Releases page](https://github.com/liuYousefKahwaji/Resonance/releases). Keep the Windows package together after extraction; its `bin` folder contains the tools used for YouTube features.
 
@@ -82,8 +98,8 @@ All versions and their notes are on the [Releases page](https://github.com/liuYo
 1. Open the playlist menu to create or name a playlist.
 2. Press **+** to import local audio. On Windows, you can also drag files or an M3U/M3U8 playlist into the track list.
 3. Press the search icon for YouTube. Choose **Play**, **Stream**, or **Download** on a result.
-4. Long-press or right-click a track to edit its metadata. Drag its handle to change playlist order.
-5. Use the QR buttons to transfer the current playlist or import one from another device.
+4. Long-press or right-click a track to edit its metadata, or open its three-dot menu for playback and permanent deletion. Drag its handle to change playlist order.
+5. Use the QR buttons to transfer the current playlist or import one from another device. You can also import a public Spotify or Audiomack playlist from the playlist menu.
 
 On Android, grant audio/storage access for local imports, notifications for background controls, and camera access only if you use QR scanning. Local playback works offline; YouTube search, streaming, downloads, cover lookup, and source matching require an internet connection.
 
@@ -140,6 +156,7 @@ The table condenses every published changelog; each version links to its full re
 
 | Release | What changed |
 | --- | --- |
+| [v2.0.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.0.0) | Spotify and Audiomack playlist importing, download-or-stream transfers, track actions and permanent deletion, full theme styling, smoother menus and scrolling, and improved standalone playback. |
 | [v1.9.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.9.0) | Dedicated YouTube search and standalone player, five theme styles, better artwork, responsive layouts, and more reliable streams/downloads. |
 | [v1.8.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.8.0) | Local QR playlist transfer, persistent YouTube source matching, reuse of local tracks, and narrow-screen toolbar improvements. |
 | [v1.7.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.7.0) | Long-press playlist actions, cover editing and previews, automatic missing-cover lookup, smoother switching, and proper Android notification exit. |
