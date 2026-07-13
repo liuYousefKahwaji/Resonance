@@ -52,6 +52,8 @@ class _SeekBarState extends State<SeekBar> {
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<Duration?>? _durationSub;
   StreamSubscription<PlaybackState>? _playbackSub;
+  PlayerHandler? _handler;
+  DateTime _lastPositionPaint = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
   void initState() {
@@ -64,7 +66,7 @@ class _SeekBarState extends State<SeekBar> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() => _seekStepSeconds = (prefs.getInt('seek_step_seconds') ?? 5).clamp(1, 15));
-    final handler = Provider.of<PlayerHandler>(context, listen: false);
+    final handler = _handler ?? Provider.of<PlayerHandler>(context, listen: false);
     handler.seekStepNotifier.value = _seekStepSeconds;
     handler.seekStepNotifier.addListener(_onSeekStepChanged);
   }
@@ -77,6 +79,13 @@ class _SeekBarState extends State<SeekBar> {
 
   void _listenToPlayer() {
     final handler = Provider.of<PlayerHandler>(context, listen: false);
+    _handler = handler;
+    _position = handler.currentPosition;
+    _duration = handler.currentDuration ?? handler.mediaItem.value?.duration ?? Duration.zero;
+    if (_duration.inMilliseconds > 0) {
+      _sliderValue = _position.inMilliseconds / _duration.inMilliseconds;
+    }
+    handler.uiVisibleNotifier.addListener(_onUiVisibilityChanged);
 
     _positionSub = handler.positionStream.listen((position) {
       if (!mounted || _isScrubbing) return;
@@ -92,17 +101,22 @@ class _SeekBarState extends State<SeekBar> {
         _pendingSeekPosition = null;
       }
 
-      setState(() {
-        _position = position;
-        if (_duration.inMilliseconds > 0) {
-          _sliderValue = _position.inMilliseconds / _duration.inMilliseconds;
-        }
-      });
+      _position = position;
+      if (_duration.inMilliseconds > 0) {
+        _sliderValue = _position.inMilliseconds / _duration.inMilliseconds;
+      }
+      final now = DateTime.now();
+      if (!handler.uiVisibleNotifier.value || now.difference(_lastPositionPaint) < const Duration(milliseconds: 100)) {
+        return;
+      }
+      _lastPositionPaint = now;
+      setState(() {});
     });
 
     _durationSub = handler.durationStream.listen((duration) {
       if (duration != null && mounted) {
-        setState(() => _duration = duration);
+        _duration = duration;
+        if (handler.uiVisibleNotifier.value) setState(() {});
       }
     });
 
@@ -118,27 +132,39 @@ class _SeekBarState extends State<SeekBar> {
       final isBuffering = state.processingState == AudioProcessingState.buffering;
       final isIdle = state.processingState == AudioProcessingState.idle;
 
-      setState(() {
-        _isLoadingNewTrack = isLoading;
-        // Only show buffering indicator for streamed tracks.
-        _isBuffering = isBuffering && _currentTrackIsStream;
+      _isLoadingNewTrack = isLoading;
+      // Only show buffering indicator for streamed tracks.
+      _isBuffering = isBuffering && _currentTrackIsStream;
 
-        if (isIdle) {
-          _pendingSeekPosition = null;
-          _position = Duration.zero;
-          _sliderValue = 0.0;
-        }
-        // When a new track starts loading, clear stale pending seek.
-        if (isLoading) {
-          _pendingSeekPosition = null;
-        }
-      });
+      if (isIdle) {
+        _pendingSeekPosition = null;
+        _position = Duration.zero;
+        _sliderValue = 0.0;
+      }
+      // When a new track starts loading, clear stale pending seek.
+      if (isLoading) {
+        _pendingSeekPosition = null;
+      }
+      if (handler.uiVisibleNotifier.value) setState(() {});
     });
+  }
+
+  void _onUiVisibilityChanged() {
+    final handler = _handler;
+    if (!mounted || handler == null || !handler.uiVisibleNotifier.value) return;
+    _lastPositionPaint = DateTime.fromMillisecondsSinceEpoch(0);
+    _position = handler.currentPosition;
+    _duration = handler.currentDuration ?? _duration;
+    if (_duration.inMilliseconds > 0) {
+      _sliderValue = _position.inMilliseconds / _duration.inMilliseconds;
+    }
+    setState(() {});
   }
 
   @override
   void dispose() {
-    Provider.of<PlayerHandler>(context, listen: false).seekStepNotifier.removeListener(_onSeekStepChanged);
+    _handler?.seekStepNotifier.removeListener(_onSeekStepChanged);
+    _handler?.uiVisibleNotifier.removeListener(_onUiVisibilityChanged);
     _positionSub?.cancel();
     _durationSub?.cancel();
     _playbackSub?.cancel();

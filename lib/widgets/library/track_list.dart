@@ -8,15 +8,18 @@
 //     when off-screen; metadata is cached in MetadataCacheService and reloads
 //     from the in-memory map instantly, so re-init is effectively free.
 
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:resonance/widgets/library/track_tile.dart';
 
-class TrackList extends StatelessWidget {
+class TrackList extends StatefulWidget {
   static const double itemExtent = 70;
   static const double topPadding = 4;
 
   final List<String> tracks;
   final Function(int index, String path) onTrackDeleted;
+  final Function(String path) onTrackDeletedEverywhere;
   final Function(int oldIndex, int newIndex) onReorder;
   final ScrollController controller;
   final int? pulsingTrackIndex;
@@ -28,6 +31,7 @@ class TrackList extends StatelessWidget {
     super.key,
     required this.tracks,
     required this.onTrackDeleted,
+    required this.onTrackDeletedEverywhere,
     required this.onReorder,
     required this.controller,
     required this.pulsingTrackIndex,
@@ -37,46 +41,73 @@ class TrackList extends StatelessWidget {
   });
 
   @override
+  State<TrackList> createState() => _TrackListState();
+}
+
+class _TrackListState extends State<TrackList> {
+  bool _isScrolling = false;
+
+  bool _handleScroll(ScrollNotification notification) {
+    final scrolling = notification is ScrollStartNotification || notification is ScrollUpdateNotification;
+    final stopped = notification is ScrollEndNotification;
+    if (scrolling && !_isScrolling) {
+      setState(() => _isScrolling = true);
+    } else if (stopped && _isScrolling) {
+      setState(() => _isScrolling = false);
+    }
+    return false;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (tracks.isEmpty) {
+    if (widget.tracks.isEmpty) {
       return const _EmptyState();
     }
 
-    return ReorderableListView.builder(
-      scrollController: controller,
-      buildDefaultDragHandles: false,
-      padding: const EdgeInsets.only(top: topPadding, bottom: 8),
-      cacheExtent: 400,
-      itemExtent: itemExtent,
-      itemCount: tracks.length,
-      itemBuilder: (context, index) {
-        return TrackTile(
-          key: itemKeyForIndex(index),
-          trackPath: tracks[index],
-          index: index,
-          onDelete: () => onTrackDeleted(index, tracks[index]),
-          pulse: pulsingTrackIndex == index ? pulse : 0,
-          artworkRevision: artworkRevision,
-        );
-      },
-      onReorder: onReorder,
-      proxyDecorator: (child, index, animation) {
-        return AnimatedBuilder(
-          animation: animation,
-          builder: (context, child) {
-            final primary = Theme.of(context).colorScheme.primary;
-            final elevation = (animation.value * 12).clamp(0.0, 12.0);
-            return Material(
-              elevation: elevation,
-              borderRadius: BorderRadius.circular(12),
-              color: Colors.transparent,
-              shadowColor: primary.withValues(alpha: 0.25),
+    return NotificationListener<ScrollNotification>(
+      onNotification: _handleScroll,
+      child: ImageFiltered(
+        enabled: _isScrolling,
+        imageFilter: ui.ImageFilter.blur(sigmaX: 0.28, sigmaY: 0.28),
+        child: ReorderableListView.builder(
+          scrollController: widget.controller,
+          buildDefaultDragHandles: false,
+          padding: const EdgeInsets.only(top: TrackList.topPadding, bottom: 8),
+          cacheExtent: 400,
+          itemExtent: TrackList.itemExtent,
+          itemCount: widget.tracks.length,
+          itemBuilder: (context, index) {
+            final trackPath = widget.tracks[index];
+            return TrackTile(
+              key: widget.itemKeyForIndex(index),
+              trackPath: trackPath,
+              index: index,
+              onDelete: () => widget.onTrackDeleted(index, trackPath),
+              onDeleteEverywhere: () => widget.onTrackDeletedEverywhere(trackPath),
+              pulse: widget.pulsingTrackIndex == index ? widget.pulse : 0,
+              artworkRevision: widget.artworkRevision,
+            );
+          },
+          onReorder: widget.onReorder,
+          proxyDecorator: (child, index, animation) {
+            return AnimatedBuilder(
+              animation: animation,
+              builder: (context, child) {
+                final primary = Theme.of(context).colorScheme.primary;
+                final elevation = (animation.value * 12).clamp(0.0, 12.0);
+                return Material(
+                  elevation: elevation,
+                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.transparent,
+                  shadowColor: primary.withValues(alpha: 0.25),
+                  child: child,
+                );
+              },
               child: child,
             );
           },
-          child: child,
-        );
-      },
+        ),
+      ),
     );
   }
 }

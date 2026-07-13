@@ -34,12 +34,15 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
   final Map<String, String> _resolvedById = {};
   final Map<String, String> _downloadFailures = {};
   List<String> _missingIds = const [];
+  List<String> _operationIds = const [];
   var _processingInput = false;
   var _currentDownloadIndex = 0;
   var _downloadPercentage = 0.0;
   var _downloadStatus = '';
   String? _currentVideoId;
   var _downloadedCount = 0;
+  var _streamedCount = 0;
+  var _isStreaming = false;
   var _stopRequested = false;
   bool _cancelledDuringDownload = false;
   String? _createdPlaylistName;
@@ -167,6 +170,8 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
 
   Future<void> _startImport({List<String>? onlyIds}) async {
     final ids = onlyIds ?? _missingIds;
+    _operationIds = ids;
+    _isStreaming = false;
     _downloadFailures.clear();
     _stopRequested = false;
     _cancelledDuringDownload = false;
@@ -207,6 +212,57 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
     }
     if (!mounted) return;
     if (_downloadFailures.isNotEmpty || _cancelledDuringDownload) {
+      setState(() => _stage = _ImportStage.failures);
+    } else {
+      await _createPlaylist();
+    }
+  }
+
+  Future<void> _startStreaming() async {
+    final ids = _manifest!.youtubeVideoIds.toSet().toList(growable: false);
+    _operationIds = ids;
+    _isStreaming = true;
+    _resolvedById.clear();
+    _downloadFailures.clear();
+    _stopRequested = false;
+    _cancelledDuringDownload = false;
+    _streamedCount = 0;
+    setState(() {
+      _stage = _ImportStage.downloading;
+      _currentDownloadIndex = 0;
+      _downloadPercentage = 0;
+    });
+    for (var index = 0; index < ids.length; index++) {
+      if (_stopRequested) {
+        _cancelledDuringDownload = true;
+        break;
+      }
+      final videoId = ids[index];
+      setState(() {
+        _currentDownloadIndex = index + 1;
+        _currentVideoId = videoId;
+        _downloadPercentage = 0;
+        _downloadStatus = 'Reading stream metadata…';
+      });
+      final url = TrackSourceRepository.canonicalUrlFor(videoId);
+      try {
+        final candidate = await _youtube.lookup(videoId);
+        await _youtube.rememberStream(candidate);
+      } catch (_) {
+        // Metadata improves the display name but is not required for a valid
+        // YouTube playlist entry.
+      }
+      _resolvedById[videoId] = url;
+      _streamedCount++;
+      if (mounted) {
+        setState(() {
+          _downloadPercentage = 100;
+          _downloadStatus = 'Stream ready';
+        });
+      }
+    }
+    if (!mounted) return;
+    if (_cancelledDuringDownload) {
       setState(() => _stage = _ImportStage.failures);
     } else {
       await _createPlaylist();
@@ -306,7 +362,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Decoding is fully local. Downloads will not begin until you review and confirm the playlist.',
+                'Decoding is fully local. Downloads or stream lookups will not begin until you review the playlist.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
@@ -390,7 +446,19 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
         FilledButton.icon(
           onPressed: _startImport,
           icon: const Icon(Icons.download_for_offline_rounded),
-          label: Text(_missingIds.isEmpty ? 'Create Playlist' : 'Start Import'),
+          label: Text(_missingIds.isEmpty ? 'Create With Local Tracks' : 'Download Tracks'),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: _startStreaming,
+          icon: const Icon(Icons.sensors_rounded),
+          label: const Text('Stream From Playlist'),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Streaming adds YouTube links in the transferred order without downloading audio.',
+          style: Theme.of(context).textTheme.bodySmall,
+          textAlign: TextAlign.center,
         ),
         TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
       ],
@@ -399,9 +467,9 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
 
   Widget _buildDownloading() {
     return _scrollingCard(
-      title: 'Downloading missing tracks',
+      title: _isStreaming ? 'Preparing playlist streams' : 'Downloading missing tracks',
       children: [
-        Text('Track $_currentDownloadIndex of ${_missingIds.length}', textAlign: TextAlign.center),
+        Text('Track $_currentDownloadIndex of ${_operationIds.length}', textAlign: TextAlign.center),
         const SizedBox(height: 6),
         SelectableText(_currentVideoId ?? '', textAlign: TextAlign.center),
         const SizedBox(height: 20),
@@ -415,7 +483,12 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
           label: Text(_stopRequested ? 'Stopping after current track…' : 'Stop after current track'),
         ),
         const SizedBox(height: 8),
-        const Text('Completed downloads are kept and their source records are saved.', textAlign: TextAlign.center),
+        Text(
+          _isStreaming
+              ? 'Prepared links stay in their original playlist order.'
+              : 'Completed downloads are kept and their source records are saved.',
+          textAlign: TextAlign.center,
+        ),
       ],
     );
   }
@@ -426,7 +499,11 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
       title: _cancelledDuringDownload ? 'Import stopped' : 'Some tracks could not be downloaded',
       children: [
         _metric('Downloaded', _downloadedCount.toString()),
-        _metric('Reused locally', (_resolvedById.length - _downloadedCount).clamp(0, _resolvedById.length).toString()),
+        _metric('Streams added', _streamedCount.toString()),
+        _metric(
+          'Reused locally',
+          (_resolvedById.length - _downloadedCount - _streamedCount).clamp(0, _resolvedById.length).toString(),
+        ),
         _metric('Failed', failedIds.length.toString()),
         _metric(
           'Skipped if playlist is created now',
@@ -441,11 +518,12 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
               title: Text(id),
               subtitle: Text(_downloadFailures[id]!, maxLines: 2, overflow: TextOverflow.ellipsis),
             ),
-          FilledButton.icon(
-            onPressed: _retryFailures,
-            icon: const Icon(Icons.refresh_rounded),
-            label: const Text('Retry failed tracks'),
-          ),
+          if (!_isStreaming)
+            FilledButton.icon(
+              onPressed: _retryFailures,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Retry failed tracks'),
+            ),
           const SizedBox(height: 8),
         ],
         OutlinedButton.icon(
@@ -471,7 +549,11 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
         Text('“$_createdPlaylistName” was created with $resolvedEntries entries.', textAlign: TextAlign.center),
         const SizedBox(height: 12),
         _metric('Downloaded', _downloadedCount.toString()),
-        _metric('Reused locally', (_resolvedById.length - _downloadedCount).clamp(0, _resolvedById.length).toString()),
+        _metric('Streams added', _streamedCount.toString()),
+        _metric(
+          'Reused locally',
+          (_resolvedById.length - _downloadedCount - _streamedCount).clamp(0, _resolvedById.length).toString(),
+        ),
         _metric('Failed', _downloadFailures.length.toString()),
         _metric('Skipped entries', (_manifest!.youtubeVideoIds.length - resolvedEntries).toString()),
         const SizedBox(height: 18),

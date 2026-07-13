@@ -26,6 +26,47 @@ void main() {
     expect(await service.listPlaylistNumbers(), [1]);
   });
 
+  test('deleting playlist 1 promotes the next playlist instead of creating an empty replacement', () async {
+    SharedPreferences.setMockInitialValues({});
+    final directory = await Directory.systemTemp.createTemp('resonance-promote-playlist-');
+    addTearDown(() => directory.delete(recursive: true));
+    final service = FileService(documentsPathOverride: directory.path);
+
+    await service.renamePlaylist(1, 'Old Main');
+    final second = await service.createNextPlaylist();
+    await service.renamePlaylist(second, 'Keep Me');
+    await service.writeTextToPlaylist(second, '#\nsecond-track.mp3\n');
+    final third = await service.createNextPlaylist();
+    await service.renamePlaylist(third, 'Later');
+    await service.setActivePlaylistNumber(1);
+
+    final active = await service.deletePlaylist(1);
+
+    expect(active, 1);
+    expect(await service.listPlaylistNumbers(), [1, 3]);
+    expect((await service.getPlaylistNames())[1], 'Keep Me');
+    expect(await service.readTextFromPlaylist(1), contains('second-track.mp3'));
+    expect(await service.readTextFromPlaylist(1), isNot(contains('Old Main')));
+  });
+
+  test('a track can be removed from every playlist while preserving other entries', () async {
+    SharedPreferences.setMockInitialValues({});
+    final directory = await Directory.systemTemp.createTemp('resonance-remove-everywhere-');
+    addTearDown(() => directory.delete(recursive: true));
+    final service = FileService(documentsPathOverride: directory.path, isWindowsOverride: true);
+    const target = r'C:\Music\Target.mp3';
+    const alternateTarget = r'c:\music\.\TARGET.mp3';
+
+    await service.writeTextToPlaylist(1, '#\n$target\nkeep-one.mp3\n$target\n');
+    final second = await service.createNextPlaylist();
+    await service.writeTextToPlaylist(second, '#\n$alternateTarget\nkeep-two.mp3\n');
+
+    await service.removeTrackFromAllPlaylists(target);
+
+    expect(await service.readTextFromPlaylist(1), '#\nkeep-one.mp3\n');
+    expect(await service.readTextFromPlaylist(second), '#\nkeep-two.mp3\n');
+  });
+
   test('track lookup prefers the active playlist when a track is duplicated', () async {
     SharedPreferences.setMockInitialValues({});
     final directory = await Directory.systemTemp.createTemp('resonance-track-lookup-');

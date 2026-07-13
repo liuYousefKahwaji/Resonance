@@ -57,17 +57,11 @@ class _AlbumCoverState extends State<AlbumCover> with SingleTickerProviderStateM
         final title = rawTitle.isNotEmpty ? rawTitle : 'Nothing playing';
         final artist = item?.artist ?? '';
 
-        return StreamBuilder<PlaybackState>(
-          stream: handler.playbackState,
-          initialData: handler.playbackState.value,
-          builder: (context, playbackSnapshot) {
-            final isPlaying = playbackSnapshot.data?.playing ?? false;
-            final processingState = playbackSnapshot.data?.processingState ?? AudioProcessingState.idle;
-            final currentId = item?.id ?? '';
-            final isStream = currentId.startsWith('http://') || currentId.startsWith('https://');
-            final isLoading =
-                processingState == AudioProcessingState.loading ||
-                (isStream && processingState == AudioProcessingState.buffering);
+        return ValueListenableBuilder<PlaybackVisualState>(
+          valueListenable: handler.playbackVisualNotifier,
+          builder: (context, playback, _) {
+            final isPlaying = playback.playing;
+            final isLoading = playback.loading;
 
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted) return;
@@ -374,53 +368,41 @@ class _WaveformIcon extends StatefulWidget {
   State<_WaveformIcon> createState() => _WaveformIconState();
 }
 
-class _WaveformIconState extends State<_WaveformIcon> {
-  final _random = math.Random();
-  late final List<double> _heights;
-  late final List<int> _durations;
+class _WaveformIconState extends State<_WaveformIcon> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
 
   @override
   void initState() {
     super.initState();
-    _heights = List.generate(4, (_) => _nextHeight());
-    _durations = List.generate(4, (_) => _nextDuration());
-    for (int i = 0; i < 4; i++) {
-      _animateBar(i);
-    }
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat();
   }
 
-  double _nextHeight() => 4 + _random.nextDouble() * 12;
-  int _nextDuration() => 250 + _random.nextInt(450);
-
-  Future<void> _animateBar(int index) async {
-    while (mounted) {
-      await Future.delayed(Duration(milliseconds: _durations[index]));
-      if (!mounted) return;
-      setState(() {
-        _heights[index] = _nextHeight();
-        _durations[index] = _nextDuration();
-      });
-    }
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 20,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(4, (i) {
-          return Padding(
-            padding: EdgeInsets.only(right: i == 3 ? 0 : 2),
-            child: AnimatedContainer(
-              duration: Duration(milliseconds: _durations[i]),
-              curve: Curves.easeInOutCubic,
-              width: 2.8,
-              height: _heights[i],
-              decoration: BoxDecoration(color: widget.color, borderRadius: BorderRadius.circular(2)),
-            ),
-          );
-        }),
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) => SizedBox(
+        height: 20,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(4, (index) {
+            final wave = (math.sin((_controller.value * math.pi * 2) + index * 1.35) + 1) / 2;
+            return Padding(
+              padding: EdgeInsets.only(right: index == 3 ? 0 : 2),
+              child: Container(
+                width: 2.8,
+                height: 4 + wave * 12,
+                decoration: BoxDecoration(color: widget.color, borderRadius: BorderRadius.circular(2)),
+              ),
+            );
+          }),
+        ),
       ),
     );
   }

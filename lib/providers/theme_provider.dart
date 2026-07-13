@@ -5,10 +5,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ThemeProvider extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.system;
   ResonanceThemeStyle _themeStyle = ResonanceThemeStyle.obsidian;
+  bool _fullThemePalette = true;
 
   ThemeMode get themeMode => _themeMode;
   bool get isDarkMode => _themeMode == ThemeMode.dark;
   ResonanceThemeStyle get themeStyle => _themeStyle;
+  bool get fullThemePalette => _fullThemePalette;
 
   ThemeProvider() {
     _loadTheme();
@@ -18,6 +20,7 @@ class ThemeProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final isDark = prefs.getBool('is_dark_mode') ?? false;
     _themeStyle = ResonanceThemeStyleLabel.fromStorage(prefs.getString('theme_style'));
+    _fullThemePalette = prefs.getBool('theme_full_palette') ?? true;
     _themeMode = isDark ? ThemeMode.dark : ThemeMode.light;
     notifyListeners();
   }
@@ -35,5 +38,13 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('theme_style', style.storageName);
+  }
+
+  Future<void> setFullThemePalette(bool enabled) async {
+    if (_fullThemePalette == enabled) return;
+    _fullThemePalette = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('theme_full_palette', enabled);
   }
 }

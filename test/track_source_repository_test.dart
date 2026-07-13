@@ -63,6 +63,22 @@ void main() {
     expect(await repository.findLocalTrackByYoutubeId('ccccccccccc'), newFile.path);
   });
 
+  test('source references can be removed when a track is permanently deleted', () async {
+    SharedPreferences.setMockInitialValues({});
+    const repository = TrackSourceRepository(isWindowsOverride: true);
+    const path = r'C:\Music\Delete Me.mp3';
+    await repository.saveSource(
+      localPath: path,
+      youtubeVideoId: 'aaaaaaaaaaa',
+      method: TrackSourceMethod.downloadedByResonance,
+    );
+
+    await repository.removeSourceForTrack(r'c:\music\DELETE ME.mp3');
+
+    expect(await repository.getSourceForTrack(path), isNull);
+    expect(await repository.getSourceForYoutubeId('aaaaaaaaaaa'), isNull);
+  });
+
   test('YouTube URL parser accepts canonical variants and rejects other hosts', () {
     expect(TrackSourceRepository.videoIdFromUrlOrId('aaaaaaaaaaa'), 'aaaaaaaaaaa');
     expect(TrackSourceRepository.videoIdFromUrlOrId('https://youtu.be/aaaaaaaaaaa?t=2'), 'aaaaaaaaaaa');

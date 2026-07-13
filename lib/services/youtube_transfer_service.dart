@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_download_result.dart';
+import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/widgets/youtube/android_youtube.dart' as android_youtube;
 import 'package:resonance/widgets/youtube/windows_youtube.dart' as windows_youtube;
@@ -70,9 +71,38 @@ class YoutubeTransferService {
     throw UnsupportedError('Playlist transfer downloads are supported on Windows and Android.');
   }
 
+  Future<YoutubeSearchCandidate> lookup(String urlOrVideoId) async {
+    final videoId = TrackSourceRepository.videoIdFromUrlOrId(urlOrVideoId);
+    if (videoId == null) throw ArgumentError.value(urlOrVideoId, 'urlOrVideoId', 'Invalid YouTube URL or video ID');
+    final url = TrackSourceRepository.canonicalUrlFor(videoId);
+    final track = Platform.isWindows
+        ? await (() async {
+            final downloader = windows_youtube.MediaDownloader();
+            await downloader.initBinaries();
+            return downloader.lookup(url);
+          })()
+        : Platform.isAndroid
+        ? await android_youtube.AndroidYoutubeDownloader().lookup(url)
+        : throw UnsupportedError('YouTube lookup is supported on Windows and Android.');
+    return YoutubeSearchCandidate(
+      title: track.title,
+      uploader: track.artist,
+      url: url,
+      videoId: videoId,
+      durationSeconds: track.durationSeconds,
+    );
+  }
+
+  Future<String> rememberStream(YoutubeSearchCandidate candidate) async {
+    final url = TrackSourceRepository.canonicalUrlFor(candidate.videoId);
+    await MetadataCacheService.set(url, candidate.title, candidate.uploader);
+    return url;
+  }
+
   Future<YoutubeDownloadResult> downloadVideo(
     String videoId, {
     required void Function(double percentage, String status) onProgress,
+    TrackSourceMethod sourceMethod = TrackSourceMethod.importedFromQrTransfer,
   }) async {
     if (!TrackSourceRepository.isValidYoutubeVideoId(videoId)) {
       throw ArgumentError.value(videoId, 'videoId', 'Invalid YouTube video ID');
@@ -102,7 +132,7 @@ class YoutubeTransferService {
     await sourceRepository.saveSource(
       localPath: result.localPath,
       youtubeVideoId: videoId,
-      method: TrackSourceMethod.importedFromQrTransfer,
+      method: sourceMethod,
       lastVerifiedAt: DateTime.now().toUtc(),
     );
     return YoutubeDownloadResult(

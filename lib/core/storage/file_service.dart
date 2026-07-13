@@ -146,23 +146,51 @@ class FileService {
   }
 
   /// Deletes the numbered storage file while keeping filenames stable for all
-  /// other playlists. Returns the playlist which should become active.
+  /// other playlists. When playlist 1 is deleted, the next playlist is
+  /// promoted to number 1 so the primary slot never becomes a new empty list.
+  /// Returns the playlist which should become active.
   Future<int> deletePlaylist(int number) async {
     final numbers = await listPlaylistNumbers();
     if (numbers.length <= 1 || !numbers.contains(number)) {
       return getActivePlaylistNumber();
     }
+    final names = await getPlaylistNames();
+    final active = await getActivePlaylistNumber();
     final file = await _playlistFile(number);
     if (await file.exists()) await file.delete();
-    final names = await getPlaylistNames();
     names.remove(number);
-    await _savePlaylistNames(names);
 
     final remaining = numbers.where((value) => value != number).toList()..sort();
-    final active = await getActivePlaylistNumber();
-    final nextActive = active == number ? remaining.first : active;
+    var nextActive = active == number ? remaining.first : active;
+    if (number == defaultPlaylistNumber) {
+      final promotedNumber = remaining.first;
+      final promotedFile = await _playlistFile(promotedNumber);
+      final primaryFile = await _playlistFile(defaultPlaylistNumber);
+      await promotedFile.rename(primaryFile.path);
+      final promotedName = names.remove(promotedNumber) ?? 'Playlist $promotedNumber';
+      names[defaultPlaylistNumber] = promotedName;
+      if (nextActive == promotedNumber) nextActive = defaultPlaylistNumber;
+    }
+    await _savePlaylistNames(names);
     await setActivePlaylistNumber(nextActive);
     return nextActive;
+  }
+
+  /// Removes every occurrence of [trackPath] from every Resonance playlist.
+  Future<void> removeTrackFromAllPlaylists(String trackPath) async {
+    final numbers = await listPlaylistNumbers();
+    for (final number in numbers) {
+      final file = await _playlistFile(number);
+      if (!await file.exists()) continue;
+      final lines = await file.readAsLines();
+      final kept = <String>['#'];
+      for (final line in lines) {
+        final clean = line.trim();
+        if (clean.isEmpty || clean.startsWith('#')) continue;
+        if (!sameTrackPath(clean, trackPath)) kept.add(clean);
+      }
+      await file.writeAsString('${kept.join('\n')}\n');
+    }
   }
 
   Future<int?> findPlaylistContaining(String trackPath, {int? preferredPlaylistNumber}) async {

@@ -13,15 +13,28 @@ class UnresolvedPlaylistTrack {
   final String title;
   final String artist;
   final int occurrenceCount;
+  final int? durationSeconds;
 
   const UnresolvedPlaylistTrack({
     required this.localPath,
     required this.title,
     required this.artist,
     required this.occurrenceCount,
+    this.durationSeconds,
   });
 
   String get searchQuery => artist == 'Unknown Artist' ? title : '$artist $title';
+
+  String get formattedDuration {
+    final duration = durationSeconds;
+    if (duration == null || duration < 0) return '';
+    final hours = duration ~/ 3600;
+    final minutes = (duration % 3600) ~/ 60;
+    final seconds = duration % 60;
+    return hours > 0
+        ? '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}'
+        : '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
 }
 
 class PlaylistSourceScan {

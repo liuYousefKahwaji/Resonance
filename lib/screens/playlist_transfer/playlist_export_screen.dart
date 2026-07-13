@@ -9,8 +9,21 @@ import 'package:resonance/services/youtube_transfer_service.dart';
 
 class PlaylistSourceResolutionScreen extends StatefulWidget {
   final PlaylistSourceScan scan;
+  final Future<void> Function(List<PlaylistSourceMatch> matches)? onConfirmed;
+  final String matchingTitle;
+  final String reviewTitle;
+  final String cancelLabel;
+  final String finishLabel;
 
-  const PlaylistSourceResolutionScreen({super.key, required this.scan});
+  const PlaylistSourceResolutionScreen({
+    super.key,
+    required this.scan,
+    this.onConfirmed,
+    this.matchingTitle = 'Finding Playlist Sources',
+    this.reviewTitle = 'Review Source Matches',
+    this.cancelLabel = 'Cancel export',
+    this.finishLabel = 'Finish matching',
+  });
 
   @override
   State<PlaylistSourceResolutionScreen> createState() => _PlaylistSourceResolutionScreenState();
@@ -95,12 +108,17 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
   Future<void> _finish() async {
     setState(() => _saving = true);
     try {
-      await _export.commitMatches(widget.scan, _matches);
+      final onConfirmed = widget.onConfirmed;
+      if (onConfirmed == null) {
+        await _export.commitMatches(widget.scan, _matches);
+      } else {
+        await onConfirmed(List.unmodifiable(_matches));
+      }
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save source matches: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not confirm source matches: $error')));
       }
     }
   }
@@ -110,8 +128,8 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text(_matching ? 'Finding Playlist Sources' : 'Review Source Matches'),
-        leading: IconButton(icon: const Icon(Icons.close_rounded), tooltip: 'Cancel transfer', onPressed: _cancel),
+        title: Text(_matching ? widget.matchingTitle : widget.reviewTitle),
+        leading: IconButton(icon: const Icon(Icons.close_rounded), tooltip: widget.cancelLabel, onPressed: _cancel),
       ),
       body: SafeArea(
         child: Center(
@@ -151,7 +169,7 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
         const SizedBox(height: 14),
         Text(_currentTrack, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 24),
-        TextButton.icon(onPressed: _cancel, icon: const Icon(Icons.close_rounded), label: const Text('Cancel export')),
+        TextButton.icon(onPressed: _cancel, icon: const Icon(Icons.close_rounded), label: Text(widget.cancelLabel)),
       ],
     );
   }
@@ -203,14 +221,14 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
           spacing: 12,
           runSpacing: 8,
           children: [
-            TextButton(onPressed: _saving ? null : _cancel, child: const Text('Cancel export')),
+            TextButton(onPressed: _saving ? null : _cancel, child: Text(widget.cancelLabel)),
             Text('$unresolvedCount unresolved'),
             FilledButton.icon(
               onPressed: _saving ? null : _finish,
               icon: _saving
                   ? const SizedBox(width: 17, height: 17, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.check_rounded),
-              label: Text(_saving ? 'Saving…' : 'Finish matching'),
+              label: Text(_saving ? 'Saving…' : widget.finishLabel),
             ),
           ],
         ),
@@ -247,6 +265,8 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
+                      if (match.track.formattedDuration.isNotEmpty)
+                        Text('Source duration ${match.track.formattedDuration}', style: theme.textTheme.bodySmall),
                       if (match.track.occurrenceCount > 1)
                         Text(
                           'Appears ${match.track.occurrenceCount} times in the playlist',

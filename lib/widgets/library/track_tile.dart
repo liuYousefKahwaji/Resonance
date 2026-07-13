@@ -19,12 +19,12 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
-import 'package:audio_service/audio_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/widgets/common/artwork_thumbnail.dart';
 import 'package:metadata_god/metadata_god.dart';
@@ -33,6 +33,7 @@ class TrackTile extends StatefulWidget {
   final String trackPath;
   final int index;
   final VoidCallback onDelete;
+  final VoidCallback onDeleteEverywhere;
   final int pulse;
   final int artworkRevision;
 
@@ -41,6 +42,7 @@ class TrackTile extends StatefulWidget {
     required this.trackPath,
     required this.index,
     required this.onDelete,
+    required this.onDeleteEverywhere,
     this.pulse = 0,
     this.artworkRevision = 0,
   });
@@ -402,6 +404,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
           trackPath: widget.trackPath,
           index: widget.index,
           onDelete: widget.onDelete,
+          onDeleteEverywhere: widget.onDeleteEverywhere,
           loading: _loading,
           title: _title,
           artist: _artist,
@@ -419,6 +422,7 @@ class _TrackTileContent extends StatelessWidget {
   final String trackPath;
   final int index;
   final VoidCallback onDelete;
+  final VoidCallback onDeleteEverywhere;
   final bool loading;
   final String? title;
   final String? artist;
@@ -429,12 +433,26 @@ class _TrackTileContent extends StatelessWidget {
     required this.trackPath,
     required this.index,
     required this.onDelete,
+    required this.onDeleteEverywhere,
     required this.loading,
     required this.title,
     required this.artist,
     required this.coverArt,
     required this.onEditMetadata,
   });
+
+  Future<void> _openStandalone(
+    BuildContext context,
+    PlayerHandler handler,
+    String resolvedTitle,
+    String resolvedArtist,
+  ) async {
+    final ready = await handler.preparePlaylistTrackForStandalone(trackPath, resolvedTitle, resolvedArtist);
+    if (!context.mounted || !ready) return;
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const StandalonePlayerScreen(playlistTrack: true)));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -454,146 +472,172 @@ class _TrackTileContent extends StatelessWidget {
     final resolvedTitle = title ?? fileName;
     final resolvedArtist = artist ?? 'Unknown Artist';
 
-    return StreamBuilder<MediaItem?>(
-      stream: handler.mediaItem,
-      builder: (context, mediaSnapshot) {
-        // Check both id match AND processing state for stream loading
-        final isCurrentTrack = mediaSnapshot.data?.id == trackPath;
-        // Also listen to playback state to show loading on stream
-        return StreamBuilder<PlaybackState>(
-          stream: handler.playbackState,
-          builder: (context, playbackSnapshot) {
-            final isLoading =
-                isCurrentTrack &&
-                (playbackSnapshot.data?.processingState == AudioProcessingState.loading ||
-                    playbackSnapshot.data?.processingState == AudioProcessingState.buffering);
-            // "playing" = is current track AND actually playing (not loading)
-            final isPlaying = isCurrentTrack && !isLoading;
+    return ValueListenableBuilder<PlaybackVisualState>(
+      valueListenable: handler.playbackVisualNotifier,
+      builder: (context, playback, _) {
+        final isCurrentTrack = playback.trackId == trackPath;
+        final isLoading = isCurrentTrack && playback.loading;
+        final isPlaying = isCurrentTrack && playback.playing && !isLoading;
 
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                curve: Curves.easeOut,
-                decoration: BoxDecoration(
-                  color: isCurrentTrack
-                      ? (isDark ? primary.withValues(alpha: 0.12) : primary.withValues(alpha: 0.06))
-                      : Theme.of(context).colorScheme.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: isCurrentTrack ? primary.withValues(alpha: 0.45) : Theme.of(context).colorScheme.outline,
-                    width: isCurrentTrack ? 1.5 : 1,
-                  ),
-                  boxShadow: isCurrentTrack
-                      ? [
-                          BoxShadow(
-                            color: primary.withValues(alpha: isDark ? 0.12 : 0.08),
-                            blurRadius: 12,
-                            offset: const Offset(0, 2),
-                          ),
-                        ]
-                      : const [],
-                ),
-                child: Material(
-                  type: MaterialType.transparency,
-                  child: InkWell(
-                    onTap: () => handler.loadTrack(trackPath, resolvedTitle, resolvedArtist),
-                    onLongPress: isStream ? null : () => onEditMetadata(context, resolvedTitle, resolvedArtist),
-                    borderRadius: BorderRadius.circular(12),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      child: Row(
-                        children: [
-                          // ── Drag handle / shuffle cue ─────────────
-                          ReorderableDragStartListener(
-                            index: index,
-                            child: Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: ValueListenableBuilder<int>(
-                                valueListenable: handler.playbackModeRevision,
-                                builder: (context, _, __) {
-                                  final shuffle = handler.getShuffleMode();
-                                  return AnimatedSwitcher(
-                                    duration: const Duration(milliseconds: 180),
-                                    child: Icon(
-                                      shuffle ? Icons.shuffle_rounded : Icons.drag_handle_rounded,
-                                      key: ValueKey(shuffle),
-                                      size: 18,
-                                      color: shuffle
-                                          ? primary.withValues(alpha: isCurrentTrack ? 0.85 : 0.55)
-                                          : isCurrentTrack
-                                          ? primary.withValues(alpha: 0.5)
-                                          : Theme.of(context).colorScheme.outline,
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-
-                          // ── Icon ─────────────────────────────────
-                          _TrackIcon(
-                            isPlaying: isPlaying,
-                            isStream: isStream,
-                            isLoading: isLoading,
-                            coverArt: coverArt,
-                          ),
-                          const SizedBox(width: 12),
-
-                          // ── Title + artist ────────────────────────
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  resolvedTitle,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontWeight: isCurrentTrack ? FontWeight.w700 : FontWeight.w500,
-                                    fontSize: 13,
-                                    color: isCurrentTrack
-                                        ? primary
-                                        : (isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A)),
-                                    letterSpacing: -0.1,
-                                  ),
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+            decoration: BoxDecoration(
+              color: isCurrentTrack
+                  ? (isDark ? primary.withValues(alpha: 0.12) : primary.withValues(alpha: 0.06))
+                  : Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isCurrentTrack ? primary.withValues(alpha: 0.45) : Theme.of(context).colorScheme.outline,
+                width: isCurrentTrack ? 1.5 : 1,
+              ),
+              boxShadow: isCurrentTrack
+                  ? [
+                      BoxShadow(
+                        color: primary.withValues(alpha: isDark ? 0.12 : 0.08),
+                        blurRadius: 12,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : const [],
+            ),
+            child: Material(
+              type: MaterialType.transparency,
+              child: InkWell(
+                onTap: () => handler.loadTrack(trackPath, resolvedTitle, resolvedArtist),
+                onDoubleTap: () => _openStandalone(context, handler, resolvedTitle, resolvedArtist),
+                onLongPress: isStream ? null : () => onEditMetadata(context, resolvedTitle, resolvedArtist),
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Row(
+                    children: [
+                      // ── Drag handle / shuffle cue ─────────────
+                      ReorderableDragStartListener(
+                        index: index,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ValueListenableBuilder<int>(
+                            valueListenable: handler.playbackModeRevision,
+                            builder: (context, _, __) {
+                              final shuffle = handler.getShuffleMode();
+                              return AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 180),
+                                child: Icon(
+                                  shuffle ? Icons.shuffle_rounded : Icons.drag_handle_rounded,
+                                  key: ValueKey(shuffle),
+                                  size: 18,
+                                  color: shuffle
+                                      ? primary.withValues(alpha: isCurrentTrack ? 0.85 : 0.55)
+                                      : isCurrentTrack
+                                      ? primary.withValues(alpha: 0.5)
+                                      : Theme.of(context).colorScheme.outline,
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  resolvedArtist,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Color(0xFF64748B),
-                                    fontWeight: FontWeight.w400,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          // ── Delete button ─────────────────────────
-                          IconButton(
-                            icon: const Icon(Icons.close_rounded, size: 16),
-                            tooltip: 'Remove',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                            color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
-                            onPressed: () {
-                              MetadataCacheService.remove(trackPath);
-                              onDelete();
+                              );
                             },
                           ),
-                        ],
+                        ),
                       ),
-                    ),
+
+                      // ── Icon ─────────────────────────────────
+                      _TrackIcon(isPlaying: isPlaying, isStream: isStream, isLoading: isLoading, coverArt: coverArt),
+                      const SizedBox(width: 12),
+
+                      // ── Title + artist ────────────────────────
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              resolvedTitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontWeight: isCurrentTrack ? FontWeight.w700 : FontWeight.w500,
+                                fontSize: 13,
+                                color: isCurrentTrack
+                                    ? primary
+                                    : (isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A)),
+                                letterSpacing: -0.1,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              resolvedArtist,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF64748B),
+                                fontWeight: FontWeight.w400,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      MenuAnchor(
+                        alignmentOffset: const Offset(-196, 4),
+                        style: MenuStyle(
+                          elevation: const WidgetStatePropertyAll(10),
+                          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+                          shape: WidgetStatePropertyAll(
+                            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          ),
+                          padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
+                        ),
+                        menuChildren: [
+                          MenuItemButton(
+                            leadingIcon: const Icon(Icons.open_in_new_rounded, size: 19),
+                            onPressed: () =>
+                                unawaited(_openStandalone(context, handler, resolvedTitle, resolvedArtist)),
+                            child: const Text('Open standalone player'),
+                          ),
+                          if (!isStream)
+                            MenuItemButton(
+                              leadingIcon: const Icon(Icons.edit_rounded, size: 19),
+                              onPressed: () => onEditMetadata(context, resolvedTitle, resolvedArtist),
+                              child: const Text('Edit metadata'),
+                            ),
+                          if (!isStream)
+                            MenuItemButton(
+                              style: ButtonStyle(
+                                foregroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.error),
+                              ),
+                              leadingIcon: const Icon(Icons.delete_forever_rounded, size: 19),
+                              onPressed: onDeleteEverywhere,
+                              child: const Text('Delete file everywhere'),
+                            ),
+                        ],
+                        builder: (context, controller, _) => IconButton(
+                          tooltip: 'Track actions',
+                          onPressed: () => controller.isOpen ? controller.close() : controller.open(),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                          icon: Icon(
+                            Icons.more_vert_rounded,
+                            size: 18,
+                            color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded, size: 16),
+                        tooltip: 'Remove from playlist',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                        color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
+                        onPressed: onDelete,
+                      ),
+                    ],
                   ),
                 ),
               ),
-            );
-          },
+            ),
+          ),
         );
       },
     );

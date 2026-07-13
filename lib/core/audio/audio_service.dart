@@ -18,6 +18,23 @@ import 'package:path/path.dart' as p;
 import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
 import 'package:metadata_god/metadata_god.dart';
 
+@immutable
+class PlaybackVisualState {
+  final String? trackId;
+  final bool playing;
+  final bool loading;
+
+  const PlaybackVisualState({this.trackId, this.playing = false, this.loading = false});
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PlaybackVisualState && trackId == other.trackId && playing == other.playing && loading == other.loading;
+
+  @override
+  int get hashCode => Object.hash(trackId, playing, loading);
+}
+
 class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final _loudnessEnhancer = AndroidLoudnessEnhancer();
   late final AudioPlayer _player = AudioPlayer(audioPipeline: AudioPipeline(androidAudioEffects: [_loudnessEnhancer]));
@@ -36,6 +53,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   List<String> shuffledList = [];
   final ValueNotifier<int> playbackModeRevision = ValueNotifier<int>(0);
   final ValueNotifier<bool> standaloneModeNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<PlaybackVisualState> playbackVisualNotifier = ValueNotifier<PlaybackVisualState>(
+    const PlaybackVisualState(),
+  );
+  final ValueNotifier<bool> uiVisibleNotifier = ValueNotifier<bool>(true);
   MediaItem? _pendingRestoredTrack;
   final Map<String, Uri?> _artUriCache = {};
 
@@ -46,6 +67,52 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   bool get isStandaloneMode => standaloneModeNotifier.value || mediaItem.value?.extras?['resonanceStandalone'] == true;
 
+  bool _sameTrackId(String first, String second) {
+    if (first == second) return true;
+    if (first.startsWith('http://') ||
+        first.startsWith('https://') ||
+        second.startsWith('http://') ||
+        second.startsWith('https://')) {
+      return false;
+    }
+    final normalizedFirst = p.normalize(p.absolute(first));
+    final normalizedSecond = p.normalize(p.absolute(second));
+    return Platform.isWindows
+        ? normalizedFirst.toLowerCase() == normalizedSecond.toLowerCase()
+        : normalizedFirst == normalizedSecond;
+  }
+
+  void setStandalonePresentation(bool enabled) {
+    standaloneModeNotifier.value = enabled;
+    final current = mediaItem.value;
+    if (current == null) return;
+    final extras = <String, dynamic>{...?current.extras};
+    if (enabled) {
+      extras['resonanceStandalone'] = true;
+    } else {
+      extras.remove('resonanceStandalone');
+    }
+    mediaItem.add(current.copyWith(extras: extras));
+  }
+
+  /// Opens the existing player session in the large playlist view. The audio
+  /// is loaded only when [filePath] is not already the active track.
+  Future<bool> preparePlaylistTrackForStandalone(String filePath, String title, String artist) async {
+    final current = mediaItem.value;
+    if (current != null &&
+        _pendingRestoredTrack == null &&
+        _sameTrackId(current.id, filePath) &&
+        playbackState.value.processingState != AudioProcessingState.idle) {
+      setStandalonePresentation(true);
+      return true;
+    }
+    await loadTrack(filePath, title, artist, standalone: true);
+    return isStandaloneMode &&
+        mediaItem.value != null &&
+        _sameTrackId(mediaItem.value!.id, filePath) &&
+        playbackState.value.processingState != AudioProcessingState.idle;
+  }
+
   // Session-scoped cache: YouTube URL → resolved CDN/HLS URL.
   final Map<String, String> _streamUrlCache = {};
   final _windowsStreamProxy = _WindowsStreamProxy();
@@ -54,6 +121,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Duration _windowsPosition = Duration.zero;
   Duration _windowsDuration = Duration.zero;
   Duration _windowsBufferedPosition = Duration.zero;
+  DateTime _lastPlaybackBroadcast = DateTime.fromMillisecondsSinceEpoch(0);
 
   PlayerHandler() {
     if (Platform.isWindows) {
@@ -213,6 +281,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
 
     if (resolved.isEmpty) throw Exception('Resolved stream URL is empty');
+    if (!_streamUrlCache.containsKey(url) && _streamUrlCache.length >= 32) {
+      _streamUrlCache.remove(_streamUrlCache.keys.first);
+    }
     _streamUrlCache[url] = resolved;
     debugPrint('[PlayerHandler] Resolved stream URL: ${resolved.substring(0, resolved.length.clamp(0, 80))}...');
     return resolved;
@@ -245,6 +316,16 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Duration get _currentPosition => Platform.isWindows ? _windowsPosition : _player.position;
 
   Duration? get _currentDuration => Platform.isWindows ? _windowsDuration : _player.duration;
+
+  Duration get currentPosition => _currentPosition;
+
+  Duration? get currentDuration => _currentDuration;
+
+  void setUiVisible(bool visible) {
+    if (uiVisibleNotifier.value == visible) return;
+    uiVisibleNotifier.value = visible;
+    if (visible) _updatePlaybackState(force: true);
+  }
 
   /// Windows media backends keep the current audio file open while it is
   /// paused. Release that handle for an in-place metadata update, then restore
@@ -280,46 +361,33 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
   }
 
-  void _updatePlaybackState() {
-    if (Platform.isWindows) {
-      final playing = _isWindowsPlaying;
-      playbackState.add(
-        playbackState.value.copyWith(
-          controls: [
-            MediaControl.skipToPrevious,
-            playing ? MediaControl.pause : MediaControl.play,
-            MediaControl.skipToNext,
-            MediaControl.stop,
-          ],
-          systemActions: const {
-            MediaAction.seek,
-            MediaAction.seekForward,
-            MediaAction.seekBackward,
-            MediaAction.skipToNext,
-            MediaAction.skipToPrevious,
-            MediaAction.play,
-            MediaAction.pause,
-          },
-          processingState: _windowsIsCompleted
+  void _updatePlaybackState({bool force = false}) {
+    final playing = Platform.isWindows ? _isWindowsPlaying : _player.playing;
+    final processingState = Platform.isWindows
+        ? _windowsIsCompleted
               ? AudioProcessingState.completed
               : _windowsIsBuffering
               ? AudioProcessingState.buffering
-              : AudioProcessingState.ready,
-          playing: playing,
-          updatePosition: _windowsPosition,
-          bufferedPosition: _windowsBufferedPosition,
-          speed: speedNotifier.value,
-          queueIndex: 0,
-        ),
-      );
-      return;
-    }
+              : AudioProcessingState.ready
+        : _getProcessingState(_player.processingState);
+    final visual = PlaybackVisualState(
+      trackId: mediaItem.value?.id,
+      playing: playing,
+      loading: processingState == AudioProcessingState.loading || processingState == AudioProcessingState.buffering,
+    );
+    final visualChanged = playbackVisualNotifier.value != visual;
+    if (visualChanged) playbackVisualNotifier.value = visual;
+
+    final now = DateTime.now();
+    final minimumInterval = uiVisibleNotifier.value ? const Duration(milliseconds: 200) : const Duration(seconds: 1);
+    if (!force && !visualChanged && now.difference(_lastPlaybackBroadcast) < minimumInterval) return;
+    _lastPlaybackBroadcast = now;
 
     playbackState.add(
       playbackState.value.copyWith(
         controls: [
           MediaControl.skipToPrevious,
-          _player.playing ? MediaControl.pause : MediaControl.play,
+          playing ? MediaControl.pause : MediaControl.play,
           MediaControl.skipToNext,
           MediaControl.stop,
         ],
@@ -332,12 +400,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
           MediaAction.play,
           MediaAction.pause,
         },
-        processingState: _getProcessingState(_player.processingState),
-        playing: _player.playing,
-        updatePosition: _player.position,
-        bufferedPosition: _player.bufferedPosition,
-        speed: _player.speed,
-        queueIndex: _player.currentIndex,
+        processingState: processingState,
+        playing: playing,
+        updatePosition: Platform.isWindows ? _windowsPosition : _player.position,
+        bufferedPosition: Platform.isWindows ? _windowsBufferedPosition : _player.bufferedPosition,
+        speed: Platform.isWindows ? speedNotifier.value : _player.speed,
+        queueIndex: Platform.isWindows ? 0 : _player.currentIndex,
       ),
     );
   }
@@ -518,6 +586,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
 
     mediaItem.add(null);
+    playbackVisualNotifier.value = const PlaybackVisualState();
     playbackState.add(
       playbackState.value.copyWith(
         controls: const [],
@@ -599,6 +668,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         playing: false,
       ),
     );
+    playbackVisualNotifier.value = PlaybackVisualState(trackId: filePath, loading: isStream);
 
     try {
       if (Platform.isWindows) {
@@ -711,6 +781,75 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
   }
 
+  /// Releases a local file if it is active and forgets all player-side state
+  /// that could retain it. Unlike [stop], this never exits the Android app.
+  Future<void> forgetTrack(String filePath) async {
+    final current = mediaItem.value;
+    final pending = _pendingRestoredTrack;
+    final isCurrent = current != null && _sameTrackId(current.id, filePath);
+    final isPending = pending != null && _sameTrackId(pending.id, filePath);
+    if (isCurrent || isPending) {
+      _pendingRestoredTrack = null;
+      _loadGeneration++;
+      if (Platform.isWindows) {
+        await _windowsPlayer!.stop();
+        _windowsPosition = Duration.zero;
+        _windowsDuration = Duration.zero;
+        _windowsBufferedPosition = Duration.zero;
+        _windowsIsBuffering = false;
+        _windowsIsCompleted = false;
+      } else {
+        await _player.stop();
+      }
+      standaloneModeNotifier.value = false;
+      mediaItem.add(null);
+      playbackVisualNotifier.value = const PlaybackVisualState();
+      playbackState.add(
+        playbackState.value.copyWith(
+          controls: const [],
+          systemActions: const {},
+          processingState: AudioProcessingState.idle,
+          playing: false,
+          updatePosition: Duration.zero,
+          bufferedPosition: Duration.zero,
+          queueIndex: null,
+        ),
+      );
+      await DiscordPresenceService().setIdle();
+    }
+
+    _streamUrlCache.remove(filePath);
+    shuffledList.removeWhere((path) => _sameTrackId(path, filePath));
+    final retainedQueue = queue.value.where((item) => !_sameTrackId(item.id, filePath)).toList(growable: false);
+    if (retainedQueue.length != queue.value.length) await updateQueue(retainedQueue);
+    final artworkUri = _artUriCache.remove(filePath);
+    if (artworkUri?.scheme == 'file') {
+      try {
+        final artworkFile = File.fromUri(artworkUri!);
+        if (await artworkFile.exists()) await artworkFile.delete();
+      } catch (_) {}
+    }
+    if (filePath.runes.any((rune) => rune > 127)) {
+      try {
+        final tempDir = await getTemporaryDirectory();
+        final tempCopy = File(
+          p.join(tempDir.path, 'resonance_track_${filePath.hashCode.abs()}${p.extension(filePath)}'),
+        );
+        if (await tempCopy.exists()) await tempCopy.delete();
+      } catch (_) {}
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedPath = prefs.getString('last_track_path');
+      if (savedPath != null && _sameTrackId(savedPath, filePath)) {
+        await prefs.remove('last_track_path');
+        await prefs.remove('last_track_title');
+        await prefs.remove('last_track_artist');
+      }
+    } catch (_) {}
+  }
+
   // ─── Volume ───────────────────────────────────────────────────────
   Future<void> changeVolume(double rawVolume) async {
     final clamped = rawVolume.clamp(0.0, 2.0);
@@ -793,14 +932,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   Future<Uri?> _albumArtUri(String path) async {
-    if (!Platform.isAndroid || path.startsWith('http://') || path.startsWith('https://')) {
+    if (path.startsWith('http://') || path.startsWith('https://')) {
       return null;
     }
     if (_artUriCache.containsKey(path)) return _artUriCache[path];
 
     try {
       final source = File(path);
-      if (!await source.exists()) return _artUriCache[path] = null;
+      if (!await source.exists()) return _cacheArtworkUri(path, null);
       final modified = await source.lastModified();
       final cacheDir = Directory(p.join((await getTemporaryDirectory()).path, 'notification_art'));
       await cacheDir.create(recursive: true);
@@ -809,21 +948,29 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       for (final extension in const ['jpg', 'png', 'webp']) {
         final cached = File(p.join(cacheDir.path, '$cacheKey.$extension'));
         if (await cached.exists() && await cached.length() > 0) {
-          return _artUriCache[path] = Uri.file(cached.path);
+          return _cacheArtworkUri(path, Uri.file(cached.path));
         }
       }
 
       final metadata = await MetadataGod.readMetadata(file: path);
       final bytes = metadata.picture?.data;
-      if (bytes == null || bytes.isEmpty) return _artUriCache[path] = null;
+      if (bytes == null || bytes.isEmpty) return _cacheArtworkUri(path, null);
       final extension = _imageExtension(bytes);
       final artwork = File(p.join(cacheDir.path, '$cacheKey.$extension'));
       await artwork.writeAsBytes(bytes, flush: true);
-      return _artUriCache[path] = Uri.file(artwork.path);
+      return _cacheArtworkUri(path, Uri.file(artwork.path));
     } catch (e) {
       debugPrint('[PlayerHandler] Could not extract notification artwork: $e');
-      return _artUriCache[path] = null;
+      return _cacheArtworkUri(path, null);
     }
+  }
+
+  Uri? _cacheArtworkUri(String path, Uri? uri) {
+    if (!_artUriCache.containsKey(path) && _artUriCache.length >= 64) {
+      _artUriCache.remove(_artUriCache.keys.first);
+    }
+    _artUriCache[path] = uri;
+    return uri;
   }
 
   String _imageExtension(List<int> bytes) {
@@ -982,6 +1129,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await DiscordPresenceService().clearPresence();
     await DiscordPresenceService().dispose();
     standaloneModeNotifier.dispose();
+    playbackVisualNotifier.dispose();
+    uiVisibleNotifier.dispose();
   }
 
   AudioProcessingState _getProcessingState(ProcessingState state) {

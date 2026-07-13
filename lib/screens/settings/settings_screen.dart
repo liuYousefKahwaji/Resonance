@@ -404,6 +404,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 _Divider(),
+                Consumer<ThemeProvider>(
+                  builder: (context, themeProvider, child) {
+                    return _SettingsTile(
+                      icon: Icons.layers_rounded,
+                      title: 'Full Theme Styling',
+                      subtitle: themeProvider.fullThemePalette
+                          ? 'Accent, backgrounds, surfaces, and borders'
+                          : 'Accent colors only — classic Resonance styling',
+                      trailing: Switch(
+                        value: themeProvider.fullThemePalette,
+                        onChanged: themeProvider.setFullThemePalette,
+                      ),
+                    );
+                  },
+                ),
+                _Divider(),
                 _SettingsTile(
                   icon: Icons.auto_awesome_rounded,
                   title: 'Startup Intro',

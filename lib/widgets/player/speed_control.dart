@@ -2,7 +2,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
-import 'package:audio_service/audio_service.dart';
 
 class SpeedControl extends StatelessWidget {
   const SpeedControl({super.key});
@@ -10,12 +9,10 @@ class SpeedControl extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
-    
-    return StreamBuilder<PlaybackState>(
-      stream: handler.playbackState,
-      builder: (context, snapshot) {
-        final currentSpeed = snapshot.data?.speed ?? 1.0;
-        
+
+    return ValueListenableBuilder<double>(
+      valueListenable: handler.speedNotifier,
+      builder: (context, currentSpeed, _) {
         return IconButton(
           icon: const Icon(Icons.speed),
           tooltip: 'Playback Speed',
@@ -33,11 +30,12 @@ class SpeedControl extends StatelessWidget {
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text('${speed.toStringAsFixed(1)}x', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                            Text(
+                              '${speed.toStringAsFixed(1)}x',
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
                             SliderTheme(
-                              data: SliderTheme.of(context).copyWith(
-                                tickMarkShape: SliderTickMarkShape.noTickMark,
-                              ),
+                              data: SliderTheme.of(context).copyWith(tickMarkShape: SliderTickMarkShape.noTickMark),
                               child: Slider(
                                 value: speed,
                                 min: 0.5,
@@ -55,20 +53,15 @@ class SpeedControl extends StatelessWidget {
                           ],
                         ),
                       );
-                    }
+                    },
                   ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Close'),
-                    ),
-                  ],
+                  actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
                 );
               },
             );
           },
         );
-      }
+      },
     );
   }
 }

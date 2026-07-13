@@ -5,7 +5,6 @@
 // Logic: UNCHANGED. Only visual presentation changed.
 
 import 'dart:io';
-import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
@@ -27,11 +26,10 @@ class PlayerControls extends StatelessWidget {
     final panelColor = Theme.of(context).colorScheme.surface;
     final panelBorder = Theme.of(context).colorScheme.outline;
 
-    return StreamBuilder<PlaybackState>(
-      stream: handler.playbackState,
-      initialData: handler.playbackState.value,
-      builder: (context, snapshot) {
-        final isPlaying = snapshot.data?.playing ?? false;
+    return ValueListenableBuilder<PlaybackVisualState>(
+      valueListenable: handler.playbackVisualNotifier,
+      builder: (context, playback, _) {
+        final isPlaying = playback.playing;
 
         return Container(
           decoration: BoxDecoration(

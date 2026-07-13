@@ -1,4 +1,10 @@
-enum TrackSourceMethod { downloadedByResonance, matchedDuringTransfer, manuallySelected, importedFromQrTransfer }
+enum TrackSourceMethod {
+  downloadedByResonance,
+  matchedDuringTransfer,
+  manuallySelected,
+  importedFromQrTransfer,
+  importedFromExternalPlaylist,
+}
 
 class TrackSourceRecord {
   final String localTrackKey;

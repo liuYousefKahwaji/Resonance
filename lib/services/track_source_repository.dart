@@ -108,6 +108,10 @@ class TrackSourceRepository {
   }
 
   Future<void> removeInvalidMapping(String localPath) async {
+    await removeSourceForTrack(localPath);
+  }
+
+  Future<void> removeSourceForTrack(String localPath) async {
     final records = await _loadRecords();
     if (records.remove(_trackKey(localPath)) != null) await _saveRecords(records);
   }

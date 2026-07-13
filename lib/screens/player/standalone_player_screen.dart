@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:audio_service/audio_service.dart';
@@ -9,82 +10,88 @@ import 'package:resonance/widgets/player/player_controls.dart';
 const nowPlayingArtworkHeroTag = 'resonance-now-playing-artwork';
 
 class StandalonePlayerScreen extends StatelessWidget {
-  const StandalonePlayerScreen({super.key});
+  final bool playlistTrack;
+
+  const StandalonePlayerScreen({super.key, this.playlistTrack = false});
 
   @override
   Widget build(BuildContext context) {
     final handler = context.read<PlayerHandler>();
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          tooltip: 'Back to playlist',
-          onPressed: () => Navigator.pop(context),
+    return PopScope(
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop && playlistTrack) handler.setStandalonePresentation(false);
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: 'Back to playlist',
+            onPressed: () => Navigator.pop(context),
+          ),
+          title: const Text('Now Playing'),
         ),
-        title: const Text('Now Playing'),
-      ),
-      body: StreamBuilder<MediaItem?>(
-        stream: handler.mediaItem,
-        initialData: handler.mediaItem.value,
-        builder: (context, snapshot) {
-          final item = snapshot.data;
-          return StreamBuilder<PlaybackState>(
-            stream: handler.playbackState,
-            initialData: handler.playbackState.value,
-            builder: (context, playbackSnapshot) => Column(
-              children: [
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final compact = constraints.maxWidth < 760;
-                      final isPlaying = playbackSnapshot.data?.playing ?? false;
-                      if (compact) {
-                        return SingleChildScrollView(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
+        body: StreamBuilder<MediaItem?>(
+          stream: handler.mediaItem,
+          initialData: handler.mediaItem.value,
+          builder: (context, snapshot) {
+            final item = snapshot.data;
+            return ValueListenableBuilder<PlaybackVisualState>(
+              valueListenable: handler.playbackVisualNotifier,
+              builder: (context, playback, _) => Column(
+                children: [
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final compact = constraints.maxWidth < 760;
+                        final isPlaying = playback.playing;
+                        if (compact) {
+                          return SingleChildScrollView(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              children: [
+                                _ArtworkBox(item: item, isPlaying: isPlaying, size: constraints.maxWidth - 40),
+                                const SizedBox(height: 28),
+                                _TrackDetails(item: item, centered: true),
+                              ],
+                            ),
+                          );
+                        }
+
+                        return Padding(
+                          padding: const EdgeInsets.all(28),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              _ArtworkBox(item: item, isPlaying: isPlaying, size: constraints.maxWidth - 40),
-                              const SizedBox(height: 28),
-                              _TrackDetails(item: item, centered: true),
+                              Expanded(
+                                flex: 6,
+                                child: Center(
+                                  child: _ArtworkBox(
+                                    item: item,
+                                    isPlaying: isPlaying,
+                                    size: math.min(constraints.maxHeight - 56, constraints.maxWidth * 0.55),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 36),
+                              Expanded(
+                                flex: 5,
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: _TrackDetails(item: item, centered: false),
+                                ),
+                              ),
                             ],
                           ),
                         );
-                      }
-
-                      return Padding(
-                        padding: const EdgeInsets.all(28),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Expanded(
-                              flex: 6,
-                              child: Center(
-                                child: _ArtworkBox(
-                                  item: item,
-                                  isPlaying: isPlaying,
-                                  size: math.min(constraints.maxHeight - 56, constraints.maxWidth * 0.55),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 36),
-                            Expanded(
-                              flex: 5,
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: _TrackDetails(item: item, centered: false),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
+                      },
+                    ),
                   ),
-                ),
-                const PlayerControls(),
-              ],
-            ),
-          );
-        },
+                  const PlayerControls(),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -210,7 +217,13 @@ class _LargeArtwork extends StatelessWidget {
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
     final uri = item?.artUri;
-    final image = uri != null && (uri.scheme == 'http' || uri.scheme == 'https')
+    final image = uri != null && uri.scheme == 'file'
+        ? Image.file(
+            File.fromUri(uri),
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _ArtworkFallback(primary: primary),
+          )
+        : uri != null && (uri.scheme == 'http' || uri.scheme == 'https')
         ? Image.network(
             uri.toString(),
             fit: BoxFit.cover,

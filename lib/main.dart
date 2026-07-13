@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/screens/settings/settings_screen.dart';
+import 'package:resonance/screens/external_playlist/external_playlist_import_screen.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_export_screen.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_import_screen.dart';
 import 'package:resonance/services/playlist_transfer_codec.dart';
@@ -27,6 +28,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:metadata_god/metadata_god.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:just_audio/just_audio.dart' as ja;
+import 'package:path/path.dart' as p;
+import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/services/track_source_repository.dart';
 
 // Desktop-only imports — guarded at runtime with Platform checks
 import 'package:resonance/platform/desktop/hotkey_service.dart'
@@ -119,8 +123,8 @@ Future<void> main() async {
       ).timeout(const Duration(seconds: 5), onTimeout: () => false),
     );
     unawaited(MediaKeysService.setupTaskbarButtons());
-    handler.playbackState.listen((state) {
-      unawaited(MediaKeysService.updateTaskbarPlaying(state.playing));
+    handler.playbackVisualNotifier.addListener(() {
+      unawaited(MediaKeysService.updateTaskbarPlaying(handler.playbackVisualNotifier.value.playing));
     });
   }
 }
@@ -137,9 +141,17 @@ class MainApp extends StatefulWidget {
 class _DesktopWindowHandler with WindowListener, TrayListener {
   final VoidCallback onShow;
   final VoidCallback onExit;
+  final VoidCallback onSuspend;
+  final VoidCallback onResume;
   final TrayMode trayMode;
 
-  _DesktopWindowHandler({required this.onShow, required this.onExit, required this.trayMode}) {
+  _DesktopWindowHandler({
+    required this.onShow,
+    required this.onExit,
+    required this.onSuspend,
+    required this.onResume,
+    required this.trayMode,
+  }) {
     windowManager.addListener(this);
     trayManager.addListener(this);
   }
@@ -153,6 +165,7 @@ class _DesktopWindowHandler with WindowListener, TrayListener {
   void onWindowClose() {
     switch (trayMode) {
       case TrayMode.closeToTray:
+        onSuspend();
         unawaited(windowManager.hide());
         break;
       case TrayMode.minimizeToTray:
@@ -164,12 +177,16 @@ class _DesktopWindowHandler with WindowListener, TrayListener {
 
   @override
   void onWindowMinimize() {
+    onSuspend();
     if (trayMode == TrayMode.minimizeToTray) {
       unawaited(windowManager.hide());
     } else {
       unawaited(windowManager.minimize());
     }
   }
+
+  @override
+  void onWindowRestore() => onResume();
 
   @override
   void onTrayIconMouseDown() => onShow();
@@ -204,6 +221,7 @@ class _MainAppState extends State<MainApp> {
   int? _pulsingTrackIndex;
   final Map<int, GlobalKey> _trackItemKeys = {};
   bool _exitInProgress = false;
+  bool _uiVisible = true;
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
 
   final SettingsService _settingsService = SettingsService();
@@ -240,7 +258,13 @@ class _MainAppState extends State<MainApp> {
   Future<void> _initDesktop() async {
     final mode = await _settingsService.getTrayMode();
     if (!mounted) return;
-    _desktopHandler = _DesktopWindowHandler(onShow: _showWindow, onExit: _exitApp, trayMode: mode);
+    _desktopHandler = _DesktopWindowHandler(
+      onShow: _showWindow,
+      onExit: _exitApp,
+      onSuspend: _suspendUi,
+      onResume: _resumeUi,
+      trayMode: mode,
+    );
     if (mode == TrayMode.noTray) {
       trayManager.removeListener(_desktopHandler!);
     }
@@ -370,6 +394,14 @@ class _MainAppState extends State<MainApp> {
     final imported = await Navigator.push<bool>(
       navigatorContext,
       MaterialPageRoute(builder: (_) => const PlaylistImportScreen()),
+    );
+    if (imported == true && mounted) await _loadPlaylistFromDisk();
+  }
+
+  Future<void> _importExternalPlaylist(BuildContext navigatorContext) async {
+    final imported = await Navigator.push<bool>(
+      navigatorContext,
+      MaterialPageRoute(builder: (_) => const ExternalPlaylistImportScreen()),
     );
     if (imported == true && mounted) await _loadPlaylistFromDisk();
   }
@@ -582,9 +614,70 @@ class _MainAppState extends State<MainApp> {
     await FileService().reorderPlaylist(playlist);
   }
 
+  Future<void> _deleteTrackEverywhere(String trackPath) async {
+    if (trackPath.startsWith('http://') || trackPath.startsWith('https://')) return;
+    final navigatorContext = _navigatorKey.currentState?.overlay?.context;
+    if (navigatorContext == null) return;
+    final cached = await MetadataCacheService.get(trackPath);
+    if (!mounted) return;
+    final displayName = cached?.title ?? p.basenameWithoutExtension(trackPath);
+    final confirmed = await showDialog<bool>(
+      context: navigatorContext,
+      builder: (dialogContext) => AlertDialog(
+        icon: Icon(Icons.delete_forever_rounded, color: Theme.of(dialogContext).colorScheme.error),
+        title: const Text('Delete track everywhere?'),
+        content: Text(
+          '“$displayName” will be deleted from this device and removed from every Resonance playlist, metadata cache, and saved source reference.\n\nThis cannot be undone.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(dialogContext).colorScheme.error),
+            child: const Text('Delete Permanently'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await widget.handler.forgetTrack(trackPath);
+      final file = File(trackPath);
+      if (await file.exists()) await file.delete();
+      await FileService().removeTrackFromAllPlaylists(trackPath);
+      await MetadataCacheService.remove(trackPath);
+      await const TrackSourceRepository().removeSourceForTrack(trackPath);
+      await _loadPlaylistFromDisk();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Deleted “$displayName” everywhere.')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not delete the track: $error'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
   void _showWindow() async {
+    _resumeUi();
     await windowManager.show();
     await windowManager.focus();
+  }
+
+  void _suspendUi() {
+    widget.handler.setUiVisible(false);
+    if (mounted && _uiVisible) setState(() => _uiVisible = false);
+  }
+
+  void _resumeUi() {
+    widget.handler.setUiVisible(true);
+    if (mounted && !_uiVisible) setState(() => _uiVisible = true);
   }
 
   void _exitApp() {
@@ -618,18 +711,29 @@ class _MainAppState extends State<MainApp> {
           navigatorKey: _navigatorKey,
           debugShowCheckedModeBanner: false,
           themeMode: themeProvider.themeMode,
-          theme: buildResonanceTheme(themeProvider.themeStyle, Brightness.light),
-          darkTheme: buildResonanceTheme(themeProvider.themeStyle, Brightness.dark),
+          theme: buildResonanceTheme(
+            themeProvider.themeStyle,
+            Brightness.light,
+            fullPalette: themeProvider.fullThemePalette,
+          ),
+          darkTheme: buildResonanceTheme(
+            themeProvider.themeStyle,
+            Brightness.dark,
+            fullPalette: themeProvider.fullThemePalette,
+          ),
           themeAnimationDuration: const Duration(milliseconds: 360),
           themeAnimationCurve: Curves.easeInOutCubic,
           home: Builder(
             builder: (nestedContext) {
               return _showIntro
                   ? const _IntroOverlay()
-                  : Scaffold(
-                      backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
-                      appBar: _buildAppBar(nestedContext),
-                      body: _buildBody(nestedContext),
+                  : TickerMode(
+                      enabled: _uiVisible,
+                      child: Scaffold(
+                        backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
+                        appBar: _buildAppBar(nestedContext),
+                        body: _buildBody(nestedContext),
+                      ),
                     );
             },
           ),
@@ -727,6 +831,7 @@ class _MainAppState extends State<MainApp> {
               setState(() => playlist.removeAt(index));
               await FileService().removeFromPlaylist(trackPath);
             },
+            onTrackDeletedEverywhere: (trackPath) => unawaited(_deleteTrackEverywhere(trackPath)),
             onReorder: _handleReorder,
           );
     final animatedTrackList = AnimatedSwitcher(
@@ -832,6 +937,11 @@ class _MainAppState extends State<MainApp> {
       icon: const Icon(Icons.qr_code_scanner_rounded, size: 21),
       tooltip: 'Import playlist from another device',
     ),
+    IconButton(
+      onPressed: () => _importExternalPlaylist(context),
+      icon: const Icon(Icons.playlist_add_rounded, size: 22),
+      tooltip: 'Import Spotify or Audiomack playlist',
+    ),
   ];
 
   List<Widget> _wideLibraryActions(BuildContext context) => [
@@ -860,6 +970,10 @@ class _MainAppState extends State<MainApp> {
         child: _ToolbarMenuLabel(icon: Icons.qr_code_scanner_rounded, label: 'Import playlist QR'),
       ),
       PopupMenuItem(
+        value: _ToolbarAction.importExternal,
+        child: _ToolbarMenuLabel(icon: Icons.playlist_add_rounded, label: 'Import Spotify or Audiomack'),
+      ),
+      PopupMenuItem(
         value: _ToolbarAction.importLocal,
         child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: 'Import local tracks'),
       ),
@@ -874,6 +988,8 @@ class _MainAppState extends State<MainApp> {
         unawaited(_transferCurrentPlaylist(context));
       case _ToolbarAction.importTransfer:
         unawaited(_importTransferredPlaylist(context));
+      case _ToolbarAction.importExternal:
+        unawaited(_importExternalPlaylist(context));
       case _ToolbarAction.importLocal:
         unawaited(_importLocalTracks(context));
     }
@@ -968,7 +1084,7 @@ class _MainAppState extends State<MainApp> {
   );
 }
 
-enum _ToolbarAction { refresh, transfer, importTransfer, importLocal }
+enum _ToolbarAction { refresh, transfer, importTransfer, importExternal, importLocal }
 
 class _ToolbarMenuLabel extends StatelessWidget {
   final IconData icon;
