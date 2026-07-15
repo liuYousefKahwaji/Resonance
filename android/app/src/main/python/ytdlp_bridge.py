@@ -124,6 +124,45 @@ def get_metadata(url: str) -> str:
     }, ensure_ascii=False)
 
 
+# ── get_playlist_metadata ────────────────────────────────────────────────────
+
+def get_playlist_metadata(url: str) -> str:
+    """Return compact, ordered metadata for a public YouTube playlist."""
+    opts = {
+        "skip_download": True,
+        "extract_flat": "in_playlist",
+        "noplaylist": False,
+        "playlistend": 1000,
+    }
+    info, _ = _extract_info(url, opts)
+    if not isinstance(info, dict) or not info.get("entries"):
+        raise RuntimeError("YouTube did not return readable playlist metadata")
+
+    entries = []
+    for entry in info.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        entries.append({
+            "id": entry.get("id") or "",
+            "title": entry.get("title") or "",
+            "uploader": (
+                entry.get("uploader")
+                or entry.get("channel")
+                or entry.get("artist")
+                or ""
+            ),
+            "url": entry.get("webpage_url") or entry.get("url") or "",
+            "duration_seconds": (
+                int(entry["duration"]) if entry.get("duration") is not None else None
+            ),
+        })
+
+    return json.dumps({
+        "title": info.get("title") or info.get("playlist_title") or "YouTube Playlist",
+        "entries": entries,
+    }, ensure_ascii=False)
+
+
 def get_first_thumbnail(query: str) -> str:
     """Search YouTube and return the first result's thumbnail URL."""
     opts = {

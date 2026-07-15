@@ -1,7 +1,8 @@
-enum ExternalPlaylistKind { spotify, audiomack }
+enum ExternalPlaylistKind { youtube, spotify, audiomack }
 
 extension ExternalPlaylistKindLabel on ExternalPlaylistKind {
   String get label => switch (this) {
+    ExternalPlaylistKind.youtube => 'YouTube',
     ExternalPlaylistKind.spotify => 'Spotify',
     ExternalPlaylistKind.audiomack => 'Audiomack',
   };

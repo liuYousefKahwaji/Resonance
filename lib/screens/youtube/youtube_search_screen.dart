@@ -6,7 +6,9 @@ import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/screens/external_playlist/external_playlist_import_screen.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
+import 'package:resonance/services/external_playlist_service.dart';
 import 'package:resonance/services/import_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
@@ -75,6 +77,15 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       _results = const [];
     });
     try {
+      final uri = Uri.tryParse(input);
+      if (uri != null && YoutubePlaylistProvider.isPlaylistUri(uri)) {
+        final imported = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(builder: (_) => ExternalPlaylistImportScreen(initialUrl: input, autoFetch: true)),
+        );
+        if (imported == true && mounted) Navigator.pop(context);
+        return;
+      }
       if (Platform.isWindows) await _windows.initBinaries();
       final results = _isLink(input)
           ? [await (Platform.isWindows ? _windows.lookup(input) : _android.lookup(input))]

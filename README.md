@@ -54,10 +54,11 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 - Existing local matches are reused. Missing tracks are shown for review and downloaded only after confirmation; failures can be retried or skipped.
 - Android scans continuously with the camera; Windows imports QR images. Both platforms can save generated codes as PNG files.
 
-### Spotify and Audiomack playlists
+### Cross-website playlist import
 
-- Import a **public** Spotify or Audiomack playlist from its link.
-- Resonance scans the playlist for track metadata, finds the top matching YouTube result, and lets you review the matches before creating a new playlist.
+- Import a **public** YouTube, YouTube Music, Spotify, or Audiomack playlist from its link.
+- YouTube playlists preserve the exact videos, original order, and duplicates without searching for replacements. Playlist links pasted into Search open the cross-website importer automatically.
+- For Spotify and Audiomack, Resonance scans track metadata, finds the top matching YouTube result, and lets you review the matches before creating a new playlist.
 - Choose whether imported tracks should be downloaded locally or streamed from the playlist.
 - Duplicate entries and their original order are preserved, and repeated YouTube sources are downloaded only once.
 
@@ -99,7 +100,7 @@ All versions and their notes are on the [Releases page](https://github.com/liuYo
 2. Press **+** to import local audio. On Windows, you can also drag files or an M3U/M3U8 playlist into the track list.
 3. Press the search icon for YouTube. Choose **Play**, **Stream**, or **Download** on a result.
 4. Long-press or right-click a track to edit its metadata, or open its three-dot menu for playback and permanent deletion. Drag its handle to change playlist order.
-5. Use the QR buttons to transfer the current playlist or import one from another device. You can also import a public Spotify or Audiomack playlist from the playlist menu.
+5. Use the QR buttons to transfer the current playlist or import one from another device. You can also use **Cross-website playlist import** for public YouTube, YouTube Music, Spotify, or Audiomack playlists.
 
 On Android, grant audio/storage access for local imports, notifications for background controls, and camera access only if you use QR scanning. Local playback works offline; YouTube search, streaming, downloads, cover lookup, and source matching require an internet connection.
 

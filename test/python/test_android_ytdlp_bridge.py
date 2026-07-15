@@ -93,6 +93,46 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         self.assertEqual(result[0]["title"], "Me at the zoo")
         self.assertNotIn("extractor_args", FakeYoutubeDL.calls[0])
 
+    def test_playlist_metadata_preserves_order_and_uses_flat_extraction(self):
+        FakeYoutubeDL.responder = lambda *_: {
+            "title": "Road Trip",
+            "entries": [
+                {
+                    "id": "aaaaaaaaaaa",
+                    "title": "First",
+                    "uploader": "Artist A",
+                    "duration": 61,
+                },
+                {
+                    "id": "aaaaaaaaaaa",
+                    "title": "First",
+                    "uploader": "Artist A",
+                    "duration": 61,
+                },
+                {
+                    "id": "bbbbbbbbbbb",
+                    "title": "Last",
+                    "channel": "Artist B",
+                    "duration": 125,
+                },
+            ],
+        }
+
+        result = json.loads(
+            bridge.get_playlist_metadata(
+                "https://music.youtube.com/playlist?list=PLtest"
+            )
+        )
+
+        self.assertEqual(result["title"], "Road Trip")
+        self.assertEqual(
+            [entry["id"] for entry in result["entries"]],
+            ["aaaaaaaaaaa", "aaaaaaaaaaa", "bbbbbbbbbbb"],
+        )
+        self.assertEqual(FakeYoutubeDL.calls[0]["extract_flat"], "in_playlist")
+        self.assertFalse(FakeYoutubeDL.calls[0]["noplaylist"])
+        self.assertEqual(FakeYoutubeDL.calls[0]["playlistend"], 1000)
+
     def test_download_emits_track_and_done_without_desktop_ffmpeg(self):
         sink = EventSink()
         with tempfile.TemporaryDirectory() as directory:

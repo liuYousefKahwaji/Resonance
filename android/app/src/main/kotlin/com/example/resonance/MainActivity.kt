@@ -127,6 +127,21 @@ class MainActivity : FlutterFragmentActivity() {
                         }
                     }
 
+                    // ── getPlaylistMetadata ─────────────────────────────────
+                    "getPlaylistMetadata" -> {
+                        val url = call.argument<String>("url") ?: ""
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = bridge.callAttr("get_playlist_metadata", url).toString()
+                                withContext(Dispatchers.Main) { result.success(json) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("PLAYLIST_METADATA_ERROR", e.message, null)
+                                }
+                            }
+                        }
+                    }
+
                     // ── getFirstThumbnail ───────────────────────────────────
                     "getFirstThumbnail" -> {
                         val query = call.argument<String>("query") ?: ""

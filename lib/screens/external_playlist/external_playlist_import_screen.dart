@@ -5,15 +5,25 @@ import 'package:resonance/models/external_playlist.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_export_screen.dart';
 import 'package:resonance/services/external_playlist_service.dart';
 import 'package:resonance/services/playlist_transfer_export_service.dart';
+import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/youtube_playlist_import_service.dart';
+import 'package:resonance/services/youtube_transfer_service.dart';
 
 enum _ExternalImportStage { input, fetching, choosing, importing, complete, error }
 
 class ExternalPlaylistImportScreen extends StatefulWidget {
   final ExternalPlaylistService? playlistService;
   final YoutubePlaylistImportService? importService;
+  final String? initialUrl;
+  final bool autoFetch;
 
-  const ExternalPlaylistImportScreen({super.key, this.playlistService, this.importService});
+  const ExternalPlaylistImportScreen({
+    super.key,
+    this.playlistService,
+    this.importService,
+    this.initialUrl,
+    this.autoFetch = false,
+  });
 
   @override
   State<ExternalPlaylistImportScreen> createState() => _ExternalPlaylistImportScreenState();
@@ -40,6 +50,12 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
     super.initState();
     _playlists = widget.playlistService ?? ExternalPlaylistService();
     _importer = widget.importService ?? YoutubePlaylistImportService();
+    _urlController.text = widget.initialUrl?.trim() ?? '';
+    if (widget.autoFetch && _urlController.text.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _fetchAndReview();
+      });
+    }
   }
 
   @override
@@ -53,6 +69,8 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
     setState(() {
       _stage = _ExternalImportStage.fetching;
       _error = null;
+      _playlist = null;
+      _matches = const [];
     });
     try {
       final playlist = await _playlists.fetch(_urlController.text);
@@ -78,6 +96,39 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
             ),
         ],
       );
+
+      if (playlist.kind == ExternalPlaylistKind.youtube) {
+        final matches = <PlaylistSourceMatch>[];
+        for (var index = 0; index < playlist.tracks.length; index++) {
+          final track = playlist.tracks[index];
+          final videoId = track.sourceId;
+          if (videoId == null || !TrackSourceRepository.isValidYoutubeVideoId(videoId)) continue;
+          final unresolvedTrack = scan.unresolved[index];
+          final candidate = YoutubeSearchCandidate(
+            title: track.title,
+            uploader: track.artistLabel,
+            url: TrackSourceRepository.canonicalUrlFor(videoId),
+            videoId: videoId,
+            durationSeconds: track.duration?.inSeconds,
+          );
+          matches.add(
+            PlaylistSourceMatch(
+              track: unresolvedTrack,
+              query: unresolvedTrack.searchQuery,
+              candidates: [candidate],
+              selected: candidate,
+            ),
+          );
+        }
+        if (matches.isEmpty) {
+          throw const ExternalPlaylistException('This YouTube playlist has no importable public videos.');
+        }
+        setState(() {
+          _matches = List.unmodifiable(matches);
+          _stage = _ExternalImportStage.choosing;
+        });
+        return;
+      }
 
       List<PlaylistSourceMatch>? confirmedMatches;
       final confirmed = await Navigator.push<bool>(
@@ -173,7 +224,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
       canPop: !busy,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Import External Playlist'),
+          title: const Text('Cross-Website Playlist Import'),
           leading: IconButton(
             icon: const Icon(Icons.close_rounded),
             onPressed: busy ? null : () => Navigator.pop(context, _stage == _ExternalImportStage.complete),
@@ -189,7 +240,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
     _ExternalImportStage.fetching => _progressCard(
       icon: Icons.cloud_download_outlined,
       title: 'Reading playlist metadata',
-      status: 'Connecting to Spotify or Audiomack…',
+      status: 'Connecting to the playlist website…',
     ),
     _ExternalImportStage.choosing => _buildChoice(),
     _ExternalImportStage.importing => _buildImportProgress(),
@@ -198,12 +249,12 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
   };
 
   Widget _buildInput() => _card(
-    title: 'Spotify or Audiomack',
+    title: 'YouTube, Spotify, or Audiomack',
     children: [
       const Icon(Icons.library_music_rounded, size: 62),
       const SizedBox(height: 16),
       const Text(
-        'Paste a public playlist link. Resonance reads only its name and ordered track metadata, then finds each track on YouTube for your review.',
+        'Paste a public playlist link. YouTube and YouTube Music playlists keep their exact videos and order. Spotify and Audiomack tracks are matched on YouTube for your review.',
         textAlign: TextAlign.center,
       ),
       const SizedBox(height: 20),
@@ -215,7 +266,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
         onSubmitted: (_) => _fetchAndReview(),
         decoration: const InputDecoration(
           labelText: 'Playlist link',
-          hintText: 'https://open.spotify.com/playlist/…',
+          hintText: 'https://music.youtube.com/playlist?list=…',
           prefixIcon: Icon(Icons.link_rounded),
         ),
       ),

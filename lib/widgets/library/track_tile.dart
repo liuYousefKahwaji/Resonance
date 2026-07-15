@@ -37,6 +37,8 @@ class TrackTile extends StatefulWidget {
   final VoidCallback onDeleteEverywhere;
   final int pulse;
   final int artworkRevision;
+  @visibleForTesting
+  final Future<CachedTrackMetadata?> Function(String path)? metadataLoader;
 
   const TrackTile({
     super.key,
@@ -47,6 +49,7 @@ class TrackTile extends StatefulWidget {
     required this.onDeleteEverywhere,
     this.pulse = 0,
     this.artworkRevision = 0,
+    this.metadataLoader,
   });
 
   @override
@@ -120,11 +123,12 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
   }
 
   Future<void> _loadMetadata() async {
-    final isStream = widget.trackPath.startsWith('http://') || widget.trackPath.startsWith('https://');
-    final fileName = isStream ? widget.trackPath : p.basenameWithoutExtension(widget.trackPath);
+    final path = widget.trackPath;
+    final isStream = path.startsWith('http://') || path.startsWith('https://');
+    final fileName = isStream ? path : p.basenameWithoutExtension(path);
 
-    final cached = await MetadataCacheService.get(widget.trackPath);
-    if (!mounted) return;
+    final cached = await (widget.metadataLoader?.call(path) ?? MetadataCacheService.get(path));
+    if (!mounted || widget.trackPath != path) return;
     if (cached != null) {
       setState(() {
         _title = cached.title;
@@ -146,14 +150,14 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
     }
 
     try {
-      final metadata = await AudioMetadata.extract(File(widget.trackPath));
-      if (!mounted) return;
+      final metadata = await AudioMetadata.extract(File(path));
+      if (!mounted || widget.trackPath != path) return;
       final title = (metadata?.trackName?.trim().isNotEmpty ?? false) ? metadata!.trackName! : fileName;
       final artist = (metadata?.firstArtists?.trim().isNotEmpty ?? false) ? metadata!.firstArtists! : 'Unknown Artist';
 
-      unawaited(MetadataCacheService.set(widget.trackPath, title, artist));
+      unawaited(MetadataCacheService.set(path, title, artist));
 
-      if (mounted) {
+      if (mounted && widget.trackPath == path) {
         setState(() {
           _title = title;
           _artist = artist;
@@ -161,7 +165,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
         });
       }
     } catch (_) {
-      if (mounted) {
+      if (mounted && widget.trackPath == path) {
         setState(() {
           _title = fileName;
           _artist = 'Unknown Artist';

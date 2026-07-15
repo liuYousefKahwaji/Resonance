@@ -221,7 +221,7 @@ class _MainAppState extends State<MainApp> {
   int _trackPulse = 0;
   int _artworkRevision = 0;
   int? _pulsingTrackIndex;
-  final Map<int, GlobalKey> _trackItemKeys = {};
+  final Map<({int playlistNumber, int index}), GlobalKey> _trackItemKeys = {};
   bool _exitInProgress = false;
   bool _uiVisible = true;
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
@@ -579,8 +579,10 @@ class _MainAppState extends State<MainApp> {
     });
   }
 
-  GlobalKey _trackItemKey(int index) =>
-      _trackItemKeys.putIfAbsent(index, () => GlobalKey(debugLabel: 'playlist-$activePlaylistNumber-track-$index'));
+  GlobalKey _trackItemKey(int playlistNumber, int index) => _trackItemKeys.putIfAbsent((
+    playlistNumber: playlistNumber,
+    index: index,
+  ), () => GlobalKey(debugLabel: 'playlist-$playlistNumber-track-$index'));
 
   Future<void> _scrollToTrackIndex(int index) async {
     await WidgetsBinding.instance.endOfFrame;
@@ -594,7 +596,7 @@ class _MainAppState extends State<MainApp> {
       curve: Curves.easeInOutCubic,
     );
     await WidgetsBinding.instance.endOfFrame;
-    final targetContext = _trackItemKey(index).currentContext;
+    final targetContext = _trackItemKey(activePlaylistNumber, index).currentContext;
     if (targetContext != null && targetContext.mounted) {
       await Scrollable.ensureVisible(
         targetContext,
@@ -953,7 +955,7 @@ class _MainAppState extends State<MainApp> {
     IconButton(
       onPressed: () => _importExternalPlaylist(context),
       icon: const Icon(Icons.playlist_add_rounded, size: 22),
-      tooltip: 'Import Spotify or Audiomack playlist',
+      tooltip: 'Cross-website playlist import',
     ),
   ];
 
@@ -984,7 +986,7 @@ class _MainAppState extends State<MainApp> {
       ),
       PopupMenuItem(
         value: _ToolbarAction.importExternal,
-        child: _ToolbarMenuLabel(icon: Icons.playlist_add_rounded, label: 'Import Spotify or Audiomack'),
+        child: _ToolbarMenuLabel(icon: Icons.playlist_add_rounded, label: 'Cross-website playlist import'),
       ),
       PopupMenuItem(
         value: _ToolbarAction.importLocal,

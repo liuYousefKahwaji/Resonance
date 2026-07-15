@@ -5,6 +5,50 @@ import 'package:resonance/models/external_playlist.dart';
 import 'package:resonance/services/external_playlist_service.dart';
 
 void main() {
+  test('YouTube metadata preserves exact video IDs, order, duplicates, artists, and durations', () {
+    final playlist = YoutubePlaylistProvider.parseJson(
+      jsonEncode({
+        'title': 'YouTube Mix',
+        'entries': [
+          {
+            'id': 'aaaaaaaaaaa',
+            'title': 'First Video',
+            'uploader': 'Channel A',
+            'duration': 61,
+          },
+          {
+            'id': 'aaaaaaaaaaa',
+            'title': 'First Video',
+            'uploader': 'Channel A',
+            'duration': 61,
+          },
+          {
+            'webpage_url': 'https://www.youtube.com/watch?v=bbbbbbbbbbb',
+            'title': 'Last Video',
+            'channel': 'Channel B',
+            'duration_seconds': 125,
+          },
+        ],
+      }),
+      sourceUri: Uri.parse('https://music.youtube.com/playlist?list=PLtest'),
+    );
+
+    expect(playlist.kind, ExternalPlaylistKind.youtube);
+    expect(playlist.name, 'YouTube Mix');
+    expect(playlist.tracks.map((track) => track.sourceId), ['aaaaaaaaaaa', 'aaaaaaaaaaa', 'bbbbbbbbbbb']);
+    expect(playlist.tracks.first.artists, ['Channel A']);
+    expect(playlist.tracks.last.duration, const Duration(minutes: 2, seconds: 5));
+  });
+
+  test('YouTube provider accepts playlist links from both YouTube websites but not single videos', () {
+    final provider = YoutubePlaylistProvider(fetchJson: (_) async => '{}');
+
+    expect(provider.supports(Uri.parse('https://www.youtube.com/playlist?list=PLtest')), isTrue);
+    expect(provider.supports(Uri.parse('https://music.youtube.com/watch?v=aaaaaaaaaaa&list=PLtest')), isTrue);
+    expect(provider.supports(Uri.parse('https://youtu.be/aaaaaaaaaaa?list=PLtest')), isTrue);
+    expect(provider.supports(Uri.parse('https://www.youtube.com/watch?v=aaaaaaaaaaa')), isFalse);
+  });
+
   test('Spotify embed metadata preserves playlist order, artists, duplicates, and duration', () {
     final nextData = jsonEncode({
       'props': {

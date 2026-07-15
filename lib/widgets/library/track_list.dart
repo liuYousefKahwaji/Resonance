@@ -26,7 +26,7 @@ class TrackList extends StatefulWidget {
   final int? pulsingTrackIndex;
   final int pulse;
   final int artworkRevision;
-  final GlobalKey Function(int index) itemKeyForIndex;
+  final GlobalKey Function(int playlistNumber, int index) itemKeyForIndex;
 
   const TrackList({
     super.key,
@@ -81,7 +81,7 @@ class _TrackListState extends State<TrackList> {
           itemBuilder: (context, index) {
             final trackPath = widget.tracks[index];
             return TrackTile(
-              key: widget.itemKeyForIndex(index),
+              key: widget.itemKeyForIndex(widget.playlistNumber, index),
               trackPath: trackPath,
               playlistNumber: widget.playlistNumber,
               index: index,

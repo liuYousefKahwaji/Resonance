@@ -23,7 +23,12 @@ class CachedTrackMetadata {
 /// Storage: a single JSON blob in SharedPreferences. Simple, and plenty
 /// fast for a personal library (hundreds to a few thousand tracks).
 class MetadataCacheService {
-  static const String _prefsKey = 'track_metadata_cache_v1';
+  // v1 could associate a completed asynchronous metadata read with a local
+  // file row which had already switched to a different playlist/track. Local
+  // entries are rebuilt from file tags under v2. Stream entries are retained
+  // because they have no local tags and were populated directly from YouTube.
+  static const String _prefsKey = 'track_metadata_cache_v2';
+  static const List<String> _discardedPrefsKeys = ['track_metadata_cache_v1'];
 
   // In-memory mirror so repeated lookups during a scroll session don't
   // even need to touch SharedPreferences.
@@ -44,10 +49,36 @@ class MetadataCacheService {
         if (raw != null) {
           final decoded = jsonDecode(raw);
           if (decoded is Map<String, dynamic>) {
+            for (final key in _discardedPrefsKeys) {
+              if (prefs.containsKey(key)) await prefs.remove(key);
+            }
             _cache = decoded;
             return;
           }
         }
+
+        final retainedStreams = <String, dynamic>{};
+        for (final key in _discardedPrefsKeys) {
+          final legacyRaw = prefs.getString(key);
+          if (legacyRaw != null) {
+            try {
+              final legacy = jsonDecode(legacyRaw);
+              if (legacy is Map<String, dynamic>) {
+                for (final entry in legacy.entries) {
+                  if (_isStreamUrl(entry.key) && entry.value is Map) {
+                    retainedStreams[entry.key] = entry.value;
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+          if (prefs.containsKey(key)) await prefs.remove(key);
+        }
+        _cache = retainedStreams;
+        if (retainedStreams.isNotEmpty) {
+          await prefs.setString(_prefsKey, jsonEncode(retainedStreams));
+        }
+        return;
       } catch (_) {
         // Corrupted cache - start fresh rather than crashing.
       }
@@ -67,8 +98,7 @@ class MetadataCacheService {
     }
   }
 
-  static bool _isStreamUrl(String path) =>
-      path.startsWith('http://') || path.startsWith('https://');
+  static bool _isStreamUrl(String path) => path.startsWith('http://') || path.startsWith('https://');
 
   /// Returns cached metadata for [filePath] if present and still valid
   /// (i.e. the file's last-modified time hasn't changed since caching).
@@ -113,12 +143,7 @@ class MetadataCacheService {
       }
     }
 
-    _cache![filePath] = {
-      'title': title,
-      'artist': artist,
-      'mtime': mtime,
-      'isStream': _isStreamUrl(filePath),
-    };
+    _cache![filePath] = {'title': title, 'artist': artist, 'mtime': mtime, 'isStream': _isStreamUrl(filePath)};
 
     await _persist();
   }
@@ -137,6 +162,9 @@ class MetadataCacheService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_prefsKey);
+      for (final key in _discardedPrefsKeys) {
+        await prefs.remove(key);
+      }
     } catch (_) {}
   }
 }

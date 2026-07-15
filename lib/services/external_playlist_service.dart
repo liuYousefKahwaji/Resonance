@@ -2,9 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:resonance/models/external_playlist.dart';
+import 'package:resonance/services/track_source_repository.dart';
 
 typedef ExternalPlaylistTextFetcher = Future<String> Function(Uri uri);
+typedef YoutubePlaylistJsonFetcher = Future<String> Function(Uri uri);
 
 class ExternalPlaylistException implements Exception {
   final String message;
@@ -24,22 +28,103 @@ abstract interface class ExternalPlaylistProvider {
 }
 
 class ExternalPlaylistService {
+  static const fetchTimeout = Duration(seconds: 75);
   final List<ExternalPlaylistProvider> providers;
 
   ExternalPlaylistService({List<ExternalPlaylistProvider>? providers})
-    : providers = providers ?? [SpotifyPlaylistProvider(), AudiomackPlaylistProvider()];
+    : providers = providers ?? [YoutubePlaylistProvider(), SpotifyPlaylistProvider(), AudiomackPlaylistProvider()];
 
   Future<ExternalPlaylist> fetch(String input) async {
     final trimmed = input.trim();
-    if (trimmed.isEmpty) throw const ExternalPlaylistException('Paste a Spotify or Audiomack playlist link.');
+    if (trimmed.isEmpty) {
+      throw const ExternalPlaylistException('Paste a YouTube, YouTube Music, Spotify, or Audiomack playlist link.');
+    }
     final uri = Uri.tryParse(trimmed);
     if (uri == null) throw const ExternalPlaylistException('The playlist link is not valid.');
     for (final provider in providers) {
-      if (provider.supports(uri)) return provider.fetch(uri);
+      if (!provider.supports(uri)) continue;
+      try {
+        return await provider.fetch(uri).timeout(fetchTimeout);
+      } on TimeoutException {
+        throw ExternalPlaylistException('${provider.kind.label} took too long to read this playlist.');
+      }
     }
     throw const ExternalPlaylistException(
-      'Unsupported playlist link. Use a Spotify playlist URL or an Audiomack /playlist/ URL.',
+      'Unsupported playlist link. Use a YouTube, YouTube Music, Spotify, or Audiomack playlist URL.',
     );
+  }
+}
+
+class YoutubePlaylistProvider implements ExternalPlaylistProvider {
+  static const maximumPlaylistEntries = 1000;
+  final YoutubePlaylistJsonFetcher _fetchJson;
+
+  YoutubePlaylistProvider({YoutubePlaylistJsonFetcher? fetchJson})
+    : _fetchJson = fetchJson ?? _fetchYoutubePlaylistJson;
+
+  @override
+  ExternalPlaylistKind get kind => ExternalPlaylistKind.youtube;
+
+  @override
+  bool supports(Uri uri) => isPlaylistUri(uri);
+
+  static bool isPlaylistUri(Uri uri) {
+    final host = uri.host.toLowerCase().replaceFirst(RegExp(r'^www\.'), '');
+    final isYoutube =
+        host == 'youtube.com' || host == 'music.youtube.com' || host == 'm.youtube.com' || host == 'youtu.be';
+    if (!isYoutube) return false;
+    final playlistId = uri.queryParameters['list']?.trim() ?? '';
+    return playlistId.isNotEmpty;
+  }
+
+  @override
+  Future<ExternalPlaylist> fetch(Uri uri) async {
+    final json = await _fetchJson(uri);
+    return parseJson(json, sourceUri: uri);
+  }
+
+  static ExternalPlaylist parseJson(String json, {required Uri sourceUri}) {
+    try {
+      final root = _asMap(jsonDecode(json));
+      final name = _cleanText(root['title'] ?? root['playlist_title']);
+      final rawEntries = root['entries'];
+      if (rawEntries is! List) throw const FormatException();
+
+      final tracks = <ExternalPlaylistTrack>[];
+      for (final raw in rawEntries.take(maximumPlaylistEntries)) {
+        final entry = _asMap(raw);
+        final title = _cleanText(entry['title']);
+        final videoId = _youtubeVideoId(entry);
+        if (title.isEmpty || videoId == null) continue;
+        final artist = _cleanText(entry['artist'] ?? entry['uploader'] ?? entry['channel']);
+        final durationSeconds = _asInt(entry['duration_seconds'] ?? entry['duration']);
+        tracks.add(
+          ExternalPlaylistTrack(
+            title: title,
+            artists: artist.isEmpty ? const [] : [artist],
+            duration: durationSeconds == null || durationSeconds < 0 ? null : Duration(seconds: durationSeconds),
+            sourceId: videoId,
+          ),
+        );
+      }
+      if (tracks.isEmpty) throw const ExternalPlaylistException('This YouTube playlist has no readable public videos.');
+      return ExternalPlaylist(
+        kind: ExternalPlaylistKind.youtube,
+        name: name.isEmpty ? 'YouTube Playlist' : name,
+        sourceUri: sourceUri,
+        tracks: List.unmodifiable(tracks),
+      );
+    } on ExternalPlaylistException {
+      rethrow;
+    } catch (_) {
+      throw const ExternalPlaylistException('YouTube returned playlist metadata in an unsupported format.');
+    }
+  }
+
+  static String? _youtubeVideoId(Map<String, dynamic> entry) {
+    final directId = _cleanText(entry['id']);
+    if (TrackSourceRepository.isValidYoutubeVideoId(directId)) return directId;
+    return TrackSourceRepository.videoIdFromUrlOrId(_cleanText(entry['webpage_url'] ?? entry['url']));
   }
 }
 
@@ -245,6 +330,72 @@ Future<String> _fetchExternalText(Uri uri) async {
     throw ExternalPlaylistException('Could not connect to the playlist provider: ${error.message}');
   } finally {
     client.close(force: true);
+  }
+}
+
+Future<String> _fetchYoutubePlaylistJson(Uri uri) async {
+  if (Platform.isAndroid) {
+    const channel = MethodChannel('resonance/android_youtube');
+    try {
+      final result = await channel
+          .invokeMethod<String>('getPlaylistMetadata', {'url': uri.toString()})
+          .timeout(const Duration(seconds: 60));
+      if (result == null || result.trim().isEmpty) {
+        throw const ExternalPlaylistException('YouTube did not return readable playlist metadata.');
+      }
+      return result;
+    } on TimeoutException {
+      throw const ExternalPlaylistException('YouTube took too long to read this playlist.');
+    } on PlatformException catch (error) {
+      throw ExternalPlaylistException(error.message ?? 'YouTube could not read this playlist.');
+    }
+  }
+  if (Platform.isWindows) return _fetchWindowsYoutubePlaylistJson(uri);
+  throw const ExternalPlaylistException('YouTube playlist import is supported on Windows and Android.');
+}
+
+Future<String> _fetchWindowsYoutubePlaylistJson(Uri uri) async {
+  final binDirectory = p.join(p.dirname(Platform.resolvedExecutable), 'bin');
+  final ytDlpPath = p.join(binDirectory, 'yt-dlp.exe');
+  final denoPath = p.join(binDirectory, 'deno.exe');
+  if (!await File(ytDlpPath).exists()) {
+    throw ExternalPlaylistException('Missing Windows downloader tool: $ytDlpPath');
+  }
+  if (!await File(denoPath).exists()) {
+    throw ExternalPlaylistException('Missing Windows JavaScript runtime: $denoPath');
+  }
+
+  final process = await Process.start(ytDlpPath, [
+    '--js-runtimes',
+    'deno:$denoPath',
+    '--force-ipv4',
+    '--flat-playlist',
+    '--dump-single-json',
+    '--skip-download',
+    '--yes-playlist',
+    '--playlist-end',
+    YoutubePlaylistProvider.maximumPlaylistEntries.toString(),
+    '--no-warnings',
+    uri.toString(),
+  ]);
+  final stdoutFuture = process.stdout.transform(utf8.decoder).join();
+  final stderrFuture = process.stderr.transform(utf8.decoder).join();
+  try {
+    final values = await Future.wait<Object>([
+      stdoutFuture,
+      stderrFuture,
+      process.exitCode,
+    ]).timeout(const Duration(seconds: 60));
+    final stdout = values[0] as String;
+    final stderr = values[1] as String;
+    final exitCode = values[2] as int;
+    if (exitCode != 0 || stdout.trim().isEmpty) {
+      throw ExternalPlaylistException(stderr.trim().isEmpty ? 'YouTube could not read this playlist.' : stderr.trim());
+    }
+    return stdout;
+  } on TimeoutException {
+    process.kill();
+    throw const ExternalPlaylistException('YouTube took too long to read this playlist.');
   }
 }
 
