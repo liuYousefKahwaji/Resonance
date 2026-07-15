@@ -1,7 +1,7 @@
 name: resonance
 description: "A local music player with youtube support"
 publish_to: 'none'
-version: 0.1.0
+version: 2.2.0
 
 environment:
   sdk: ^3.9.2
@@ -28,6 +28,7 @@ dependencies:
   audio_service_win: ^0.0.3
   desktop_drop: ^0.7.1
   permission_handler: ^12.0.1
+  package_info_plus: ^8.3.1
   dart_discord_presence: ^1.2.0
   window_proc_delegate: ^0.0.3
   win32: ^5.15.0
@@ -38,6 +39,7 @@ dependencies:
   media_kit: ^1.2.6
   media_kit_libs_windows_audio: ^1.0.9
   crypto: ^3.0.6
+  fftea: ^1.5.0+1
   image: ^4.8.0
   mobile_scanner: ^7.2.0
   qr_flutter: ^4.1.0

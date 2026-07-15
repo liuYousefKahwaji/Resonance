@@ -31,6 +31,7 @@ import 'package:metadata_god/metadata_god.dart';
 
 class TrackTile extends StatefulWidget {
   final String trackPath;
+  final int playlistNumber;
   final int index;
   final VoidCallback onDelete;
   final VoidCallback onDeleteEverywhere;
@@ -40,6 +41,7 @@ class TrackTile extends StatefulWidget {
   const TrackTile({
     super.key,
     required this.trackPath,
+    required this.playlistNumber,
     required this.index,
     required this.onDelete,
     required this.onDeleteEverywhere,
@@ -402,6 +404,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
         },
         child: _TrackTileContent(
           trackPath: widget.trackPath,
+          playlistNumber: widget.playlistNumber,
           index: widget.index,
           onDelete: widget.onDelete,
           onDeleteEverywhere: widget.onDeleteEverywhere,
@@ -416,10 +419,42 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
   }
 }
 
+@visibleForTesting
+enum TrackTapAction { load, restart }
+
+@visibleForTesting
+TrackTapAction trackTapAction({required String? activeTrackPath, required String tappedTrackPath}) =>
+    activeTrackPath == tappedTrackPath ? TrackTapAction.restart : TrackTapAction.load;
+
+/// A track activates only after Flutter has accepted a completed tap.
+///
+/// Deliberately omitting [InkWell.onDoubleTap] removes its recognition timeout,
+/// while allowing a scroll drag to defeat the tap in the gesture arena.
+@visibleForTesting
+class TrackTapRegion extends StatelessWidget {
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final BorderRadius borderRadius;
+  final Widget child;
+
+  const TrackTapRegion({
+    super.key,
+    required this.onTap,
+    required this.onLongPress,
+    required this.borderRadius,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) =>
+      InkWell(onTap: onTap, onLongPress: onLongPress, borderRadius: borderRadius, child: child);
+}
+
 // Separated into its own widget so StreamBuilder rebuilds are contained
 // inside it and don't touch the parent StatefulWidget's state.
 class _TrackTileContent extends StatelessWidget {
   final String trackPath;
+  final int playlistNumber;
   final int index;
   final VoidCallback onDelete;
   final VoidCallback onDeleteEverywhere;
@@ -431,6 +466,7 @@ class _TrackTileContent extends StatelessWidget {
 
   const _TrackTileContent({
     required this.trackPath,
+    required this.playlistNumber,
     required this.index,
     required this.onDelete,
     required this.onDeleteEverywhere,
@@ -447,11 +483,29 @@ class _TrackTileContent extends StatelessWidget {
     String resolvedTitle,
     String resolvedArtist,
   ) async {
-    final ready = await handler.preparePlaylistTrackForStandalone(trackPath, resolvedTitle, resolvedArtist);
+    final ready = await handler.preparePlaylistTrackForStandalone(
+      trackPath,
+      resolvedTitle,
+      resolvedArtist,
+      playlistNumber: playlistNumber,
+      playlistIndex: index,
+    );
     if (!context.mounted || !ready) return;
     await Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const StandalonePlayerScreen(playlistTrack: true)));
+  }
+
+  Future<void> _activateTrack(PlayerHandler handler, String resolvedTitle, String resolvedArtist) async {
+    switch (trackTapAction(activeTrackPath: handler.playbackVisualNotifier.value.trackId, tappedTrackPath: trackPath)) {
+      case TrackTapAction.restart:
+        await handler.seek(Duration.zero);
+        await handler.play();
+        return;
+      case TrackTapAction.load:
+        await handler.loadTrack(trackPath, resolvedTitle, resolvedArtist);
+        return;
+    }
   }
 
   @override
@@ -505,9 +559,8 @@ class _TrackTileContent extends StatelessWidget {
             ),
             child: Material(
               type: MaterialType.transparency,
-              child: InkWell(
-                onTap: () => handler.loadTrack(trackPath, resolvedTitle, resolvedArtist),
-                onDoubleTap: () => _openStandalone(context, handler, resolvedTitle, resolvedArtist),
+              child: TrackTapRegion(
+                onTap: () => unawaited(_activateTrack(handler, resolvedTitle, resolvedArtist)),
                 onLongPress: isStream ? null : () => onEditMetadata(context, resolvedTitle, resolvedArtist),
                 borderRadius: BorderRadius.circular(12),
                 child: Padding(

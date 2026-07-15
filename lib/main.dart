@@ -13,6 +13,7 @@ import 'package:resonance/screens/settings/settings_screen.dart';
 import 'package:resonance/screens/external_playlist/external_playlist_import_screen.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_export_screen.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_import_screen.dart';
+import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/services/playlist_transfer_codec.dart';
 import 'package:resonance/services/playlist_transfer_export_service.dart';
 import 'package:resonance/services/discord_presence_service.dart';
@@ -31,6 +32,7 @@ import 'package:just_audio/just_audio.dart' as ja;
 import 'package:path/path.dart' as p;
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
+import 'package:resonance/widgets/music_recognition/music_recognition_dialog.dart';
 
 // Desktop-only imports — guarded at runtime with Platform checks
 import 'package:resonance/platform/desktop/hotkey_service.dart'
@@ -822,6 +824,7 @@ class _MainAppState extends State<MainApp> {
           )
         : TrackList(
             tracks: playlist,
+            playlistNumber: activePlaylistNumber,
             controller: _playlistScrollController,
             pulsingTrackIndex: _pulsingTrackIndex,
             pulse: _trackPulse,
@@ -876,7 +879,11 @@ class _MainAppState extends State<MainApp> {
         ),
 
         // ── Player panel ──
-        AlbumCover(onTap: _handleNowPlayingTap, artworkRevision: _artworkRevision),
+        AlbumCover(
+          onTap: _handleNowPlayingTap,
+          onArtworkTap: _handleNowPlayingArtworkTap,
+          artworkRevision: _artworkRevision,
+        ),
         PlayerControls(),
       ],
     );
@@ -907,6 +914,12 @@ class _MainAppState extends State<MainApp> {
               ),
               if (!compact) ..._wideTransferActions(context),
               _buildPlaylistMenu(),
+              IconButton(
+                key: const Key('music-recognition-button'),
+                onPressed: () => _identifySong(context),
+                icon: const Icon(Icons.graphic_eq_rounded),
+                tooltip: 'Shazam / Identify a song',
+              ),
               IconButton(
                 onPressed: () => _openSearch(context),
                 icon: const Icon(Icons.search_rounded),
@@ -1015,6 +1028,28 @@ class _MainAppState extends State<MainApp> {
     if (addedTrack != null && mounted) await _revealCurrentTrack(addedTrack);
   }
 
+  Future<void> _identifySong(BuildContext context) async {
+    final match = await showMusicRecognitionDialog(context);
+    if (!mounted || match == null) return;
+
+    final capturedNumber = activePlaylistNumber;
+    final capturedName = playlistNames[capturedNumber] ?? 'Playlist $capturedNumber';
+    final addedTrack = await Navigator.push<String?>(
+      context,
+      MaterialPageRoute<String?>(
+        builder: (_) => YoutubeSearchScreen(
+          playlistNumber: capturedNumber,
+          playlistName: capturedName,
+          initialQuery: match.youtubeQuery,
+          recognitionLabel: [match.title, if (match.artist.isNotEmpty) match.artist].join(' — '),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await _loadPlaylistFromDisk();
+    if (addedTrack != null && mounted) await _revealCurrentTrack(addedTrack);
+  }
+
   Future<void> _handleNowPlayingTap(String trackPath) async {
     final handler = Provider.of<PlayerHandler>(context, listen: false);
     final navigator = _navigatorKey.currentState;
@@ -1024,6 +1059,58 @@ class _MainAppState extends State<MainApp> {
       isStandalone: handler.isStandaloneMode,
       trackPath: trackPath,
       revealTrack: _revealCurrentTrack,
+    );
+  }
+
+  Future<void> _handleNowPlayingArtworkTap(String trackPath) async {
+    final handler = Provider.of<PlayerHandler>(context, listen: false);
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) return;
+
+    if (handler.isStandaloneMode) {
+      await navigator.push<void>(MaterialPageRoute<void>(builder: (_) => const StandalonePlayerScreen()));
+      return;
+    }
+
+    final item = handler.mediaItem.value;
+    if (item == null) return;
+
+    final service = FileService();
+    int? playlistNumber = activePlaylistNumber;
+    var playlistIndex = service.findTrackIndex(playlist, trackPath);
+
+    if (playlistIndex < 0) {
+      playlistNumber = await service.findPlaylistContaining(trackPath, preferredPlaylistNumber: activePlaylistNumber);
+      if (!mounted || !navigator.mounted) return;
+      if (playlistNumber != null) {
+        final content = await service.readTextFromPlaylist(playlistNumber);
+        final tracks = content
+            .split('\n')
+            .map((line) => line.trim())
+            .where((line) => line.isNotEmpty && !line.startsWith('#'))
+            .toList();
+        playlistIndex = service.findTrackIndex(tracks, trackPath);
+      }
+    }
+
+    if (!mounted || !navigator.mounted) return;
+    if (playlistNumber != null && playlistIndex >= 0) {
+      final ready = await handler.preparePlaylistTrackForStandalone(
+        trackPath,
+        item.title,
+        item.artist ?? 'Unknown Artist',
+        playlistNumber: playlistNumber,
+        playlistIndex: playlistIndex,
+      );
+      if (!ready || !mounted || !navigator.mounted) return;
+    } else {
+      // A restored/non-playlist track still gets a temporary large-player
+      // presentation; leaving it restores the regular library interaction.
+      handler.setStandalonePresentation(true);
+    }
+
+    await navigator.push<void>(
+      MaterialPageRoute<void>(builder: (_) => const StandalonePlayerScreen(playlistTrack: true)),
     );
   }
 

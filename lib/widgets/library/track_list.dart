@@ -18,6 +18,7 @@ class TrackList extends StatefulWidget {
   static const double topPadding = 4;
 
   final List<String> tracks;
+  final int playlistNumber;
   final Function(int index, String path) onTrackDeleted;
   final Function(String path) onTrackDeletedEverywhere;
   final Function(int oldIndex, int newIndex) onReorder;
@@ -30,6 +31,7 @@ class TrackList extends StatefulWidget {
   const TrackList({
     super.key,
     required this.tracks,
+    required this.playlistNumber,
     required this.onTrackDeleted,
     required this.onTrackDeletedEverywhere,
     required this.onReorder,
@@ -81,6 +83,7 @@ class _TrackListState extends State<TrackList> {
             return TrackTile(
               key: widget.itemKeyForIndex(index),
               trackPath: trackPath,
+              playlistNumber: widget.playlistNumber,
               index: index,
               onDelete: () => widget.onTrackDeleted(index, trackPath),
               onDeleteEverywhere: () => widget.onTrackDeletedEverywhere(trackPath),

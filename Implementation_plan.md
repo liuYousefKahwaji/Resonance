@@ -1,25 +1,20 @@
-# Resonance TODO Implementation Plan
+# Resonance Issues #16–#18 Implementation Plan
 
-## Goals
-- Fix transient Windows waveform error during track switching.
-- Remove Android search/URL layout overflow and suppress local-track play/seek flicker.
-- Add configurable seek step buttons around the seek bar, with Windows hotkeys.
-- Add Windows taskbar thumbnail controls for previous, play/pause, and next.
-- Use embedded album art when available, with a graceful fallback.
-- Replace the single `playlist.m3u8` model with switchable `r_playlist_X.m3u8` playlists and migrate legacy data once.
-- Expose speed and pitch playback settings on Windows where supported by `media_kit`.
-- Add a short optional startup intro, enabled by default.
+## Scope
+
+- #16: remove local-track loading UI entirely and eliminate avoidable delay when selecting or switching tracks.
+- #17: give the standalone player its own fixed, non-scrollable layout with smaller artwork, metadata directly above larger controls, and animated overflow text.
+- #18: replace the dot/line perimeter visualizer with a smooth expanding pulse that renders identically on Windows and Android.
 
 ## Execution Checklist
-1. Inspect existing player, settings, playlist, storage, metadata, and Windows platform code.
-2. Update playlist storage so `r_playlist_1.m3u8` is the default active playlist, with legacy `playlist.m3u8` migration only when no Resonance playlist exists.
-3. Add playlist switching UI and provider state for multiple Resonance playlists.
-4. Add seek step settings, seek buttons, and Windows hotkey entries for seek backward/forward.
-5. Tighten Android layouts for search and URL actions.
-6. Refine playback loading state so local Android play/seek does not show the loading treatment; streamed tracks still can.
-7. Stabilize Windows track switching waveform/loading state to avoid transient red error UI.
-8. Surface playback settings on Windows if the existing `media_kit` pitch/rate calls are available.
-9. Add album art loading from metadata/cache into the now-playing card, preserving the animated icon fallback.
-10. Add Windows taskbar thumbnail toolbar buttons through the existing native media keys bridge.
-11. Add optional three-second max intro controlled by settings.
-12. Run formatting and static checks; fix issues caused by the changes.
+
+1. Preserve the existing uncommitted playlist/standalone navigation work and build the new changes on top of it.
+2. Move album-art extraction and persistence off the playback-critical path; start Windows playback on tap-down while retaining double-click standalone navigation, and remove redundant presence/settings work and full-file Unicode-path copies.
+3. Normalize public playback state so local files can never advertise loading or buffering, while streamed tracks retain genuine loading feedback.
+4. Recompose the standalone screen as one bounded, non-scrollable surface: an accent-tinted light/dark gradient, transparent app bar and controls, smaller responsive artwork, and larger transport buttons.
+5. Add an overflow-aware animated text widget that only moves when metadata exceeds its available width.
+6. Decode a low-rate mono PCM envelope after playback has started, using one background FFmpeg thread and a bounded disk/memory cache so analysis never blocks source switching.
+7. Sample the real RMS envelope at the live playback position and render the same filled pulse around both the Currently Playing card and standalone artwork, with a quiet static glow while paused or before analysis is ready.
+8. Add focused unit/widget coverage for local loading normalization, RMS envelope response, pulse animation, animated overflow behavior, theme-aware gradients, and fixed standalone layout.
+9. Run Dart formatting, Flutter tests, and static analysis; address regressions introduced by this scope.
+10. Launch `flutter build windows --release` and `flutter build apk --release` concurrently in separate processes and report both results.

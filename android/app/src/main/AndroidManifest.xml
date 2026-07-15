@@ -13,12 +13,16 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Required by microphone capture and Android playback capture. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- ── Audio service / background playback permissions ──────────────── -->
     <!-- Required to run audio as a foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Android 14+ (API 34+): must declare media-playback foreground type -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Android 14+: foreground service type used while sharing device audio. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- Android 13+ (API 33+): runtime notification permission -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Keep CPU alive when screen is off during background playback -->
@@ -61,6 +65,13 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+
+        <!-- Visible listening service required for Android playback capture. -->
+        <service
+            android:name=".MusicRecognitionCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection"
+            android:stopWithTask="true" />
 
         <!-- Media button receiver for notification/headset controls -->
         <receiver

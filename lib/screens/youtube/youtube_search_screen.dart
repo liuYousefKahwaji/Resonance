@@ -16,8 +16,16 @@ import 'package:resonance/widgets/youtube/windows_youtube.dart';
 class YoutubeSearchScreen extends StatefulWidget {
   final int playlistNumber;
   final String playlistName;
+  final String? initialQuery;
+  final String? recognitionLabel;
 
-  const YoutubeSearchScreen({super.key, required this.playlistNumber, required this.playlistName});
+  const YoutubeSearchScreen({
+    super.key,
+    required this.playlistNumber,
+    required this.playlistName,
+    this.initialQuery,
+    this.recognitionLabel,
+  });
 
   @override
   State<YoutubeSearchScreen> createState() => _YoutubeSearchScreenState();
@@ -37,6 +45,13 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   @override
   void initState() {
     super.initState();
+    final initialQuery = widget.initialQuery?.trim() ?? '';
+    if (initialQuery.isNotEmpty) {
+      _controller.text = initialQuery;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _submit();
+      });
+    }
   }
 
   @override
@@ -198,12 +213,19 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Search'),
+        title: Text(widget.recognitionLabel == null ? 'Search' : 'Song identified'),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(34),
           child: Padding(
             padding: const EdgeInsets.only(bottom: 10),
-            child: Text('Stream or download into ${widget.playlistName}', style: Theme.of(context).textTheme.bodySmall),
+            child: Text(
+              widget.recognitionLabel == null
+                  ? 'Stream or download into ${widget.playlistName}'
+                  : '${widget.recognitionLabel} · choose the best YouTube match',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
         ),
       ),

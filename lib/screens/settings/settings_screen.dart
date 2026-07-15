@@ -20,6 +20,7 @@ import 'package:restart_app/restart_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/app/theme.dart';
+import 'package:resonance/screens/settings/app_version_label.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -602,6 +603,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ],
+
+            // ── About ───────────────────────────────────────────────
+            _SectionHeader(label: 'About'),
+            _SettingsCard(
+              children: [
+                _SettingsTile(
+                  icon: Icons.music_note_rounded,
+                  title: 'Resonance',
+                  subtitle: 'A local music player with YouTube support',
+                ),
+                _Divider(),
+                _SettingsTile(icon: Icons.info_outline_rounded, title: 'Version', trailing: const AppVersionLabel()),
+              ],
+            ),
 
             const SizedBox(height: 24),
           ],

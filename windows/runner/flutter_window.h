@@ -30,6 +30,8 @@ class FlutterWindow : public Win32Window {
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
   std::unique_ptr<flutter::PluginRegistrarWindows> media_keys_registrar_;
+  std::unique_ptr<flutter::PluginRegistrarWindows>
+      music_recognition_registrar_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

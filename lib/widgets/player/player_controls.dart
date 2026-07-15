@@ -15,7 +15,9 @@ import 'package:resonance/widgets/player/speed_control.dart';
 import 'package:resonance/widgets/player/volume_bar.dart';
 
 class PlayerControls extends StatelessWidget {
-  const PlayerControls({super.key});
+  final bool standalone;
+
+  const PlayerControls({super.key, this.standalone = false});
 
   @override
   Widget build(BuildContext context) {
@@ -33,12 +35,18 @@ class PlayerControls extends StatelessWidget {
 
         return Container(
           decoration: BoxDecoration(
-            color: panelColor,
-            border: Border(top: BorderSide(color: panelBorder, width: 1)),
+            color: standalone ? Colors.transparent : panelColor,
+            border: standalone ? null : Border(top: BorderSide(color: panelBorder, width: 1)),
           ),
           child: screenWidth < 500
-              ? _MobileControls(handler: handler, isPlaying: isPlaying, isMobile: isMobile)
-              : _DesktopControls(handler: handler, isPlaying: isPlaying, isMobile: isMobile, screenWidth: screenWidth),
+              ? _MobileControls(handler: handler, isPlaying: isPlaying, isMobile: isMobile, standalone: standalone)
+              : _DesktopControls(
+                  handler: handler,
+                  isPlaying: isPlaying,
+                  isMobile: isMobile,
+                  screenWidth: screenWidth,
+                  standalone: standalone,
+                ),
         );
       },
     );
@@ -49,15 +57,21 @@ class _MobileControls extends StatelessWidget {
   final PlayerHandler handler;
   final bool isPlaying;
   final bool isMobile;
+  final bool standalone;
 
-  const _MobileControls({required this.handler, required this.isPlaying, required this.isMobile});
+  const _MobileControls({
+    required this.handler,
+    required this.isPlaying,
+    required this.isMobile,
+    required this.standalone,
+  });
 
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+        padding: EdgeInsets.fromLTRB(12, standalone ? 4 : 8, 12, 10),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -70,11 +84,11 @@ class _MobileControls extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: 26),
-                const SizedBox(width: 16),
-                _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: 48),
-                const SizedBox(width: 16),
-                _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: 26),
+                _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: standalone ? 40 : 26),
+                SizedBox(width: standalone ? 28 : 16),
+                _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: standalone ? 76 : 48),
+                SizedBox(width: standalone ? 28 : 16),
+                _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: standalone ? 40 : 26),
               ],
             ),
 
@@ -105,25 +119,27 @@ class _DesktopControls extends StatelessWidget {
   final bool isPlaying;
   final bool isMobile;
   final double screenWidth;
+  final bool standalone;
 
   const _DesktopControls({
     required this.handler,
     required this.isPlaying,
     required this.isMobile,
     required this.screenWidth,
+    required this.standalone,
   });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
+      padding: EdgeInsets.fromLTRB(20, standalone ? 4 : 10, 20, 14),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           const SeekBar(),
           const SizedBox(height: 8),
           SizedBox(
-            height: 52,
+            height: standalone ? 96 : 52,
             child: Stack(
               alignment: Alignment.center,
               children: [
@@ -145,11 +161,11 @@ class _DesktopControls extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: 24),
-                    const SizedBox(width: 12),
-                    _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: 48),
-                    const SizedBox(width: 12),
-                    _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: 24),
+                    _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: standalone ? 44 : 24),
+                    SizedBox(width: standalone ? 28 : 12),
+                    _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: standalone ? 84 : 48),
+                    SizedBox(width: standalone ? 28 : 12),
+                    _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: standalone ? 44 : 24),
                   ],
                 ),
 

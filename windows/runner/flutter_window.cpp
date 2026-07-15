@@ -1,5 +1,6 @@
 #include "flutter_window.h"
 #include "media_keys_plugin.h"
+#include "music_recognition_plugin.h"
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -32,6 +33,15 @@ bool FlutterWindow::OnCreate() {
         std::make_unique<flutter::PluginRegistrarWindows>(registrar_ref);
     resonance::MediaKeysPlugin::RegisterWithRegistrar(media_keys_registrar_.get());
   }
+  {
+    FlutterDesktopPluginRegistrarRef registrar_ref =
+        flutter_controller_->engine()->GetRegistrarForPlugin(
+            "MusicRecognitionPlugin");
+    music_recognition_registrar_ =
+        std::make_unique<flutter::PluginRegistrarWindows>(registrar_ref);
+    resonance::MusicRecognitionPlugin::RegisterWithRegistrar(
+        music_recognition_registrar_.get());
+  }
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -47,6 +57,9 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // Stop native capture before tearing down the engine/messenger it completes
+  // method calls through.
+  music_recognition_registrar_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
