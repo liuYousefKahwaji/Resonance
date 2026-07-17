@@ -67,6 +67,18 @@ void main() {
     expect(await service.readTextFromPlaylist(second), '#\nkeep-two.mp3\n');
   });
 
+  test('ordinary playlist removal removes the selected duplicate occurrence', () async {
+    SharedPreferences.setMockInitialValues({});
+    final directory = await Directory.systemTemp.createTemp('resonance-remove-one-');
+    addTearDown(() => directory.delete(recursive: true));
+    final service = FileService(documentsPathOverride: directory.path);
+
+    await service.writeTextToPlaylist(1, '#\nrepeat.mp3\nkeep.mp3\nrepeat.mp3\n');
+    await service.removeFromPlaylist('repeat.mp3', playlistIndex: 2);
+
+    expect(await service.readTextFromPlaylist(1), '#\nrepeat.mp3\nkeep.mp3\n');
+  });
+
   test('track lookup prefers the active playlist when a track is duplicated', () async {
     SharedPreferences.setMockInitialValues({});
     final directory = await Directory.systemTemp.createTemp('resonance-track-lookup-');

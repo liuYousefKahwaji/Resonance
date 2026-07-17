@@ -6,9 +6,11 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/widgets/common/overflowing_text.dart';
 import 'package:resonance/widgets/player/audio_visualizer.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
+import 'package:resonance/widgets/player/upcoming_queue.dart';
 
 const nowPlayingArtworkHeroTag = 'resonance-now-playing-artwork';
 
@@ -21,18 +23,25 @@ double standaloneArtworkSize(BoxConstraints constraints) {
 }
 
 @visibleForTesting
-List<Color> standaloneGradientColors(ThemeData theme) {
+List<Color> standaloneGradientColors(
+  ThemeData theme, {
+  Color? playerAccent,
+  Color? playerSecondary,
+  bool preserveOledSurface = false,
+}) {
   final base = theme.scaffoldBackgroundColor;
-  final accent = theme.colorScheme.primary;
+  if (preserveOledSurface) return [base, base, base];
+  final accent = playerAccent ?? theme.colorScheme.primary;
+  final secondary = playerSecondary ?? accent;
   final dark = theme.brightness == Brightness.dark;
   return [
     Color.alphaBlend(accent.withValues(alpha: dark ? 0.46 : 0.30), base),
-    Color.alphaBlend(accent.withValues(alpha: dark ? 0.20 : 0.13), base),
+    Color.alphaBlend(secondary.withValues(alpha: dark ? 0.20 : 0.13), base),
     base,
   ];
 }
 
-enum StandalonePlayerSwipeAction { next, previous, exit }
+enum StandalonePlayerSwipeAction { next, previous, queue, exit }
 
 const double _standaloneSwipeMinDistance = 56;
 const double _standaloneSwipeAxisDominance = 1.2;
@@ -50,6 +59,10 @@ StandalonePlayerSwipeAction? standalonePlayerSwipeAction(Offset dragOffset) {
       verticalDistance >= horizontalDistance * _standaloneSwipeAxisDominance) {
     return StandalonePlayerSwipeAction.exit;
   }
+  if (dragOffset.dy <= -_standaloneSwipeMinDistance &&
+      verticalDistance >= horizontalDistance * _standaloneSwipeAxisDominance) {
+    return StandalonePlayerSwipeAction.queue;
+  }
   return null;
 }
 
@@ -60,6 +73,7 @@ class StandalonePlayerGestureSurface extends StatefulWidget {
   final Widget child;
   final VoidCallback onNext;
   final void Function({required bool restartCurrent}) onPrevious;
+  final VoidCallback onQueue;
   final VoidCallback onExit;
 
   const StandalonePlayerGestureSurface({
@@ -67,6 +81,7 @@ class StandalonePlayerGestureSurface extends StatefulWidget {
     required this.child,
     required this.onNext,
     required this.onPrevious,
+    required this.onQueue,
     required this.onExit,
   });
 
@@ -91,6 +106,8 @@ class _StandalonePlayerGestureSurfaceState extends State<StandalonePlayerGesture
         widget.onNext();
       case StandalonePlayerSwipeAction.previous:
         widget.onPrevious(restartCurrent: false);
+      case StandalonePlayerSwipeAction.queue:
+        widget.onQueue();
       case StandalonePlayerSwipeAction.exit:
         widget.onExit();
       case null:
@@ -125,13 +142,27 @@ class StandalonePlayerScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final handler = context.read<PlayerHandler>();
     final theme = Theme.of(context);
-    final gradientColors = standaloneGradientColors(theme);
+    final themeProvider = context.watch<ThemeProvider>();
+    final playerAccent = themeProvider.playerAccent(theme.colorScheme.primary, theme.brightness);
+    final playerSecondary = themeProvider.playerSecondary(theme.colorScheme.secondary, theme.brightness);
+    final playerTheme = theme.copyWith(
+      colorScheme: theme.colorScheme.copyWith(primary: playerAccent, secondary: playerSecondary),
+    );
     return StreamBuilder<MediaItem?>(
       stream: handler.mediaItem,
       initialData: handler.mediaItem.value,
       builder: (context, snapshot) {
         final item = snapshot.data;
         final artist = item?.artist?.trim();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (context.mounted) context.read<ThemeProvider>().updatePlayerArtwork(item?.artUri);
+        });
+        final gradientColors = standaloneGradientColors(
+          theme,
+          playerAccent: playerAccent,
+          playerSecondary: playerSecondary,
+          preserveOledSurface: themeProvider.hasArtworkPalette && themeProvider.preserveOledPlayerSurface,
+        );
         return PopScope(
           onPopInvokedWithResult: (didPop, _) {
             if (didPop && playlistTrack) handler.setStandalonePresentation(false);
@@ -140,8 +171,11 @@ class StandalonePlayerScreen extends StatelessWidget {
             key: const Key('standalone-player-gesture-surface'),
             onNext: handler.next,
             onPrevious: handler.previous,
+            onQueue: () => _showUpcomingQueue(context, handler),
             onExit: () => Navigator.maybePop(context),
-            child: DecoratedBox(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 520),
+              curve: Curves.easeInOutCubic,
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
@@ -150,55 +184,58 @@ class StandalonePlayerScreen extends StatelessWidget {
                   colors: gradientColors,
                 ),
               ),
-              child: Scaffold(
-                backgroundColor: Colors.transparent,
-                appBar: AppBar(
+              child: Theme(
+                data: playerTheme,
+                child: Scaffold(
                   backgroundColor: Colors.transparent,
-                  surfaceTintColor: Colors.transparent,
-                  elevation: 0,
-                  centerTitle: true,
-                  leading: IconButton(
-                    icon: const Icon(Icons.keyboard_arrow_down_rounded),
-                    tooltip: 'Back to playlist',
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                  title: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'PLAYING FROM',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.3,
-                        ),
-                      ),
-                      Text(
-                        artist == null || artist.isEmpty ? 'Resonance' : artist,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                    ],
-                  ),
-                ),
-                body: ValueListenableBuilder<PlaybackVisualState>(
-                  valueListenable: handler.playbackVisualNotifier,
-                  builder: (context, playback, _) => Column(
-                    children: [
-                      Expanded(
-                        child: ValueListenableBuilder<TrackTransitionState>(
-                          valueListenable: handler.trackTransitionNotifier,
-                          builder: (context, transition, _) => _AnimatedTrackContent(
-                            item: item,
-                            isPlaying: playback.playing,
-                            direction: transition.direction,
+                  appBar: AppBar(
+                    backgroundColor: Colors.transparent,
+                    surfaceTintColor: Colors.transparent,
+                    elevation: 0,
+                    centerTitle: true,
+                    leading: IconButton(
+                      icon: const Icon(Icons.keyboard_arrow_down_rounded),
+                      tooltip: 'Back to playlist',
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                    title: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'PLAYING FROM',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.3,
                           ),
                         ),
-                      ),
-                      _StandaloneMetadata(item: item),
-                      const PlayerControls(standalone: true),
-                    ],
+                        Text(
+                          artist == null || artist.isEmpty ? 'Resonance' : artist,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                      ],
+                    ),
+                  ),
+                  body: ValueListenableBuilder<PlaybackVisualState>(
+                    valueListenable: handler.playbackVisualNotifier,
+                    builder: (context, playback, _) => Column(
+                      children: [
+                        Expanded(
+                          child: ValueListenableBuilder<TrackTransitionState>(
+                            valueListenable: handler.trackTransitionNotifier,
+                            builder: (context, transition, _) => _AnimatedTrackContent(
+                              item: item,
+                              isPlaying: playback.playing,
+                              direction: transition.direction,
+                            ),
+                          ),
+                        ),
+                        _StandaloneMetadata(item: item),
+                        const PlayerControls(standalone: true),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -208,6 +245,31 @@ class StandalonePlayerScreen extends StatelessWidget {
       },
     );
   }
+}
+
+void _showUpcomingQueue(BuildContext context, PlayerHandler handler) {
+  if (!Platform.isAndroid) return;
+  showModalBottomSheet<void>(
+    context: context,
+    useSafeArea: true,
+    isScrollControlled: true,
+    enableDrag: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) {
+      final height = MediaQuery.sizeOf(sheetContext).height;
+      return SizedBox(
+        height: (height * 0.62).clamp(360.0, 560.0),
+        child: UpcomingQueuePanel(
+          compact: true,
+          mediaItemStream: handler.mediaItem,
+          initialMediaItem: handler.mediaItem.value,
+          revision: handler.playbackModeRevision,
+          loadSnapshot: handler.playbackQueueSnapshot,
+          onClose: () => Navigator.pop(sheetContext),
+        ),
+      );
+    },
+  );
 }
 
 class _AnimatedTrackContent extends StatelessWidget {

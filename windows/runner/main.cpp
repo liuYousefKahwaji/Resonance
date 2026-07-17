@@ -98,6 +98,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::DispatchMessage(&msg);
   }
 
+  LogWindowsShutdownEvent("Win32 message loop ended; final runner exit");
+
   ::CoUninitialize();
 
   if (instance_mutex != nullptr) {

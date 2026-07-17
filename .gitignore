@@ -32,7 +32,10 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
-/release/
+/release/*
+!/release/*/
+/release/*/*
+!/release/*/patchnotes.md
 
 # Symbolication related
 app.*.symbols

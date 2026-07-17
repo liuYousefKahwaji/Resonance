@@ -1,6 +1,7 @@
 // lib/screens/settings/settings_screen.dart
 // Logic: UNCHANGED. Visual refresh only — new section headers, spacing, icons.
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 
@@ -11,6 +12,7 @@ import 'package:metadata_god/metadata_god.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/core/audio/playback_preferences.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/platform/android/storage_permission_service.dart';
 import 'package:resonance/platform/desktop/hotkey_settings_tile.dart';
@@ -21,6 +23,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/app/theme.dart';
 import 'package:resonance/screens/settings/app_version_label.dart';
+import 'package:resonance/screens/settings/download_history_screen.dart';
+import 'package:resonance/screens/settings/companion_screen.dart';
+import 'package:resonance/services/companion/companion_client_service.dart';
+import 'package:resonance/services/companion/companion_server_service.dart';
+import 'package:resonance/services/scroll_effects_preferences.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -37,6 +44,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _introEnabled = true;
   String _downloadDirectory = 'Default App Folder';
   int _seekStepSeconds = 5;
+  bool _crossfadeEnabled = false;
+  double _crossfadeDurationSeconds = 3.0;
+  bool _resumeLongTracks = true;
+  PlaybackSettingsScope _playbackSettingsScope = PlaybackSettingsScope.global;
   bool _coverLookupRunning = false;
   String _coverLookupStatus = '';
   final SettingsService _settingsService = SettingsService();
@@ -46,7 +57,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _loadDownloadDirectory();
     _loadSeekStep();
+    _loadPlaybackPreferences();
     _loadIntroPreference();
+    unawaited(ScrollEffectsPreferences.instance.initialize());
     if (_isDesktop) {
       _loadTrayMode();
       _loadDiscordPreference();
@@ -75,6 +88,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final clamped = value.clamp(1, 15);
     setState(() => _seekStepSeconds = clamped);
     await handler.setSeekStepSeconds(clamped);
+  }
+
+  Future<void> _loadPlaybackPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    final scopeName = prefs.getString('playback_settings_scope');
+    if (!mounted) return;
+    setState(() {
+      _crossfadeEnabled = prefs.getBool('crossfade_enabled') ?? false;
+      _crossfadeDurationSeconds = (prefs.getDouble('crossfade_duration_seconds') ?? 3.0).clamp(0.0, 8.0);
+      _resumeLongTracks = prefs.getBool('resume_long_tracks') ?? true;
+      _playbackSettingsScope = PlaybackSettingsScope.values.firstWhere(
+        (scope) => scope.name == scopeName,
+        orElse: () => PlaybackSettingsScope.global,
+      );
+    });
+  }
+
+  Future<void> _toggleCrossfade(bool enabled, PlayerHandler handler) async {
+    setState(() => _crossfadeEnabled = enabled);
+    await handler.setCrossfadeEnabled(enabled);
+  }
+
+  Future<void> _setCrossfadeDuration(double seconds, PlayerHandler handler) async {
+    setState(() => _crossfadeDurationSeconds = seconds.clamp(0.0, 8.0));
+    await handler.setCrossfadeDuration(seconds);
+  }
+
+  Future<void> _toggleResumeLongTracks(bool enabled, PlayerHandler handler) async {
+    setState(() => _resumeLongTracks = enabled);
+    await handler.setResumeLongTracksEnabled(enabled);
+  }
+
+  Future<void> _setPlaybackSettingsScope(PlaybackSettingsScope? scope, PlayerHandler handler) async {
+    if (scope == null || scope == _playbackSettingsScope) return;
+    setState(() => _playbackSettingsScope = scope);
+    await handler.setPlaybackSettingsScope(scope);
   }
 
   Future<void> _loadDownloadDirectory() async {
@@ -421,12 +470,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 _Divider(),
+                Consumer<ThemeProvider>(
+                  builder: (context, themeProvider, child) {
+                    return _SettingsTile(
+                      icon: Icons.color_lens_rounded,
+                      title: 'Artwork-based Player Colors',
+                      subtitle: 'Blend safe colors from the current cover into player accents and glow',
+                      trailing: Switch(
+                        value: themeProvider.artworkPlayerColors,
+                        onChanged: themeProvider.setArtworkPlayerColors,
+                      ),
+                    );
+                  },
+                ),
+                _Divider(),
                 _SettingsTile(
                   icon: Icons.auto_awesome_rounded,
                   title: 'Startup Intro',
                   subtitle: 'Show the Resonance pulse when the app opens',
                   trailing: Switch(value: _introEnabled, onChanged: _toggleIntro),
                 ),
+                if (Platform.isAndroid) ...[
+                  _Divider(),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: ScrollEffectsPreferences.instance.motionBlurEnabled,
+                    builder: (context, enabled, _) => _SettingsTile(
+                      icon: Icons.blur_on_rounded,
+                      title: 'Track List Motion Blur',
+                      subtitle: 'Optional scroll effect; off by default for smoother performance',
+                      trailing: Switch(
+                        value: enabled,
+                        onChanged: (value) => unawaited(ScrollEffectsPreferences.instance.setMotionBlurEnabled(value)),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
 
@@ -465,8 +543,112 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
+                _Divider(),
+                _SettingsTile(
+                  icon: Icons.multitrack_audio_rounded,
+                  title: 'Crossfade',
+                  subtitle: 'Blend automatic track changes; manual seeking is unaffected',
+                  trailing: Switch(
+                    value: _crossfadeEnabled,
+                    onChanged: (enabled) => _toggleCrossfade(enabled, handler),
+                  ),
+                ),
+                if (_crossfadeEnabled) ...[
+                  _Divider(),
+                  _SettingsTile(
+                    icon: Icons.timelapse_rounded,
+                    title: 'Crossfade Duration',
+                    trailing: SizedBox(
+                      width: 180,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Expanded(
+                            child: Slider(
+                              value: _crossfadeDurationSeconds,
+                              min: 0,
+                              max: 8,
+                              divisions: 8,
+                              label: '${_crossfadeDurationSeconds.round()}s',
+                              onChanged: (value) => _setCrossfadeDuration(value, handler),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 34,
+                            child: Text(
+                              '${_crossfadeDurationSeconds.round()}s',
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+                _Divider(),
+                _SettingsTile(
+                  icon: Icons.restore_rounded,
+                  title: 'Resume Long Tracks',
+                  subtitle: 'Remember progress for tracks at least 10 minutes long',
+                  trailing: Switch(
+                    value: _resumeLongTracks,
+                    onChanged: (enabled) => _toggleResumeLongTracks(enabled, handler),
+                  ),
+                ),
+                _Divider(),
+                _SettingsTile(
+                  icon: Icons.tune_rounded,
+                  title: 'Playback Settings Scope',
+                  subtitle: _playbackSettingsScope == PlaybackSettingsScope.global
+                      ? 'Use the same speed, pitch, and bass for every track'
+                      : 'Remember speed, pitch, and bass separately for each track',
+                  trailing: DropdownButtonHideUnderline(
+                    child: DropdownButton<PlaybackSettingsScope>(
+                      value: _playbackSettingsScope,
+                      onChanged: (scope) => _setPlaybackSettingsScope(scope, handler),
+                      items: const [
+                        DropdownMenuItem(value: PlaybackSettingsScope.global, child: Text('Global')),
+                        DropdownMenuItem(value: PlaybackSettingsScope.perTrack, child: Text('Per track')),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
+
+            if (Platform.isAndroid || Platform.isWindows) ...[
+              _SectionHeader(label: 'PC Companion'),
+              AnimatedBuilder(
+                animation: Platform.isWindows ? CompanionServerService.instance : CompanionClientService.instance,
+                builder: (context, _) {
+                  final subtitle = Platform.isWindows
+                      ? CompanionServerService.instance.running
+                            ? '${CompanionServerService.instance.address}:${CompanionServerService.instance.port} · ${CompanionServerService.instance.connectedClientCount} connected'
+                            : CompanionServerService.instance.error ??
+                                  'Pair Android to control this PC over your local network'
+                      : CompanionClientService.instance.connected
+                      ? 'Connected to ${CompanionClientService.instance.pcName}'
+                      : CompanionClientService.instance.hasSavedPairing
+                      ? 'Reconnect to ${CompanionClientService.instance.pcName}'
+                      : 'Scan a Resonance pairing code from Windows';
+                  return _SettingsCard(
+                    children: [
+                      _SettingsTile(
+                        icon: Platform.isWindows ? Icons.computer_rounded : Icons.phone_android_rounded,
+                        title: Platform.isWindows ? 'PC Companion Server' : 'PC Companion Remote',
+                        subtitle: subtitle,
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        onTap: () => Navigator.push<void>(
+                          context,
+                          MaterialPageRoute<void>(builder: (_) => const CompanionScreen()),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
 
             // ── Downloads ───────────────────────────────────────────
             _SectionHeader(label: 'Downloads'),
@@ -481,6 +663,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     color: isDark ? const Color(0xFF475569) : const Color(0xFFABA8C8),
                   ),
                   onTap: _pickDownloadDirectory,
+                ),
+                _Divider(),
+                _SettingsTile(
+                  icon: Icons.history_rounded,
+                  title: 'Download History',
+                  subtitle: 'Search downloaded tracks, failures, sources, and saved locations',
+                  trailing: Icon(
+                    Icons.chevron_right_rounded,
+                    color: isDark ? const Color(0xFF475569) : const Color(0xFFABA8C8),
+                  ),
+                  onTap: () => Navigator.push<void>(
+                    context,
+                    MaterialPageRoute<void>(builder: (_) => const DownloadHistoryScreen()),
+                  ),
                 ),
                 if (Platform.isAndroid || Platform.isWindows) ...[
                   _Divider(),

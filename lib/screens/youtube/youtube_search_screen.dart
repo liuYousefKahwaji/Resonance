@@ -166,6 +166,8 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         await _windows.initBinaries();
         await _windows.downloadAudio(
           url: track.url,
+          historyTitle: track.title,
+          historyArtist: track.artist,
           onProgress: (value, _) {
             if (mounted) setState(() => _progress = value);
           },
@@ -185,6 +187,8 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       } else {
         final downloads = await _android.downloadAudio(
           track.url,
+          historyTitle: track.title,
+          historyArtist: track.artist,
           onProgress: (value, _) {
             if (mounted) setState(() => _progress = value);
           },

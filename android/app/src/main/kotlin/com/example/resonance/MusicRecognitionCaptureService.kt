@@ -25,8 +25,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Owns Android playback capture while Resonance is in the background. Media
- * projection must run in a foreground service on current Android releases.
+ * Owns Android microphone or playback capture while Resonance is in the
+ * background. Both modes use a foreground service on current Android releases.
  */
 class MusicRecognitionCaptureService : Service() {
     fun interface CaptureCallback {
@@ -34,8 +34,11 @@ class MusicRecognitionCaptureService : Service() {
     }
 
     companion object {
-        private const val ACTION_CAPTURE = "com.example.resonance.action.CAPTURE_DEVICE_AUDIO"
-        private const val ACTION_CANCEL = "com.example.resonance.action.CANCEL_DEVICE_AUDIO"
+        private const val ACTION_CAPTURE_DEVICE_AUDIO =
+            "com.example.resonance.action.CAPTURE_DEVICE_AUDIO"
+        private const val ACTION_CAPTURE_MICROPHONE =
+            "com.example.resonance.action.CAPTURE_MICROPHONE"
+        private const val ACTION_CANCEL = "com.example.resonance.action.CANCEL_AUDIO_CAPTURE"
         private const val EXTRA_REQUEST_ID = "requestId"
         private const val EXTRA_RESULT_CODE = "resultCode"
         private const val EXTRA_PROJECTION_DATA = "projectionData"
@@ -51,7 +54,7 @@ class MusicRecognitionCaptureService : Service() {
         @Volatile
         private var instance: MusicRecognitionCaptureService? = null
 
-        /** Returns false only when another device-output capture owns the service. */
+        /** Returns false only when another recognition capture owns the service. */
         fun startCapture(
             context: Context,
             requestId: String,
@@ -65,7 +68,7 @@ class MusicRecognitionCaptureService : Service() {
             callbacks[requestId] = callback
 
             val serviceIntent = Intent(context, MusicRecognitionCaptureService::class.java).apply {
-                action = ACTION_CAPTURE
+                action = ACTION_CAPTURE_DEVICE_AUDIO
                 putExtra(EXTRA_REQUEST_ID, requestId)
                 putExtra(EXTRA_RESULT_CODE, resultCode)
                 putExtra(EXTRA_PROJECTION_DATA, projectionData)
@@ -89,12 +92,61 @@ class MusicRecognitionCaptureService : Service() {
             return true
         }
 
+        /** Starts microphone capture in a foreground service for tile scans. */
+        fun startMicrophoneCapture(
+            context: Context,
+            requestId: String,
+            captureDurationMs: Int,
+            callback: CaptureCallback,
+        ): Boolean {
+            if (!requestSlot.compareAndSet(null, requestId)) return false
+            callbacks[requestId] = callback
+
+            val serviceIntent = Intent(context, MusicRecognitionCaptureService::class.java).apply {
+                action = ACTION_CAPTURE_MICROPHONE
+                putExtra(EXTRA_REQUEST_ID, requestId)
+                putExtra(EXTRA_CAPTURE_DURATION_MS, captureDurationMs)
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
+            } catch (error: Throwable) {
+                complete(
+                    requestId,
+                    null,
+                    "CAPTURE_SERVICE_ERROR",
+                    error.message ?: "Could not start the microphone capture service",
+                )
+            }
+            return true
+        }
+
         fun cancelCapture(requestId: String) {
+            if (requestSlot.get() != requestId && instance?.activeRequestId != requestId) return
             cancelledRequests.add(requestId)
             instance?.cancelInternal(
                 requestId,
                 PcmCaptureFailure("CAPTURE_CANCELLED", "Music recognition was cancelled"),
             )
+        }
+
+        /** Last-resort ownership cleanup used by the Activity on every result. */
+        fun releaseReservation(requestId: String) {
+            cancelledRequests.remove(requestId)
+            callbacks.remove(requestId)
+            requestSlot.compareAndSet(requestId, null)
+        }
+
+        /** Clears a slot orphaned by service creation/destruction races. */
+        fun releaseStaleReservation() {
+            val requestId = requestSlot.get() ?: return
+            val service = instance
+            if (service == null || service.finished.get() || service.activeRequestId != requestId) {
+                releaseReservation(requestId)
+            }
         }
 
         private fun complete(
@@ -115,7 +167,6 @@ class MusicRecognitionCaptureService : Service() {
     private val finished = AtomicBoolean(false)
     private val cancellation = AtomicReference<PcmCaptureFailure?>(null)
     private var activeRequestId: String? = null
-    private var activeStartId: Int = 0
     private var audioRecord: AudioRecord? = null
     private var mediaProjection: MediaProjection? = null
     private var projectionCallback: MediaProjection.Callback? = null
@@ -134,21 +185,27 @@ class MusicRecognitionCaptureService : Service() {
             if (requestId != null) {
                 cancelCapture(requestId)
             }
+            if (activeRequestId == null) stopSelf(startId)
             return START_NOT_STICKY
         }
 
         val requestId = intent?.getStringExtra(EXTRA_REQUEST_ID)
-        if (intent?.action != ACTION_CAPTURE || requestId == null) {
+        val microphoneCapture = intent?.action == ACTION_CAPTURE_MICROPHONE
+        val deviceAudioCapture = intent?.action == ACTION_CAPTURE_DEVICE_AUDIO
+        if ((!microphoneCapture && !deviceAudioCapture) || requestId == null) {
+            requestId?.let {
+                complete(it, null, "CAPTURE_SERVICE_ERROR", "Invalid music-recognition capture request")
+            }
             stopSelf(startId)
             return START_NOT_STICKY
         }
-        if (activeRequestId != null) {
-            complete(requestId, null, "CAPTURE_BUSY", "Another device-audio capture is active")
+        if (activeRequestId != null || finished.get()) {
+            complete(requestId, null, "CAPTURE_BUSY", "Another music-recognition capture is active")
+            stopSelf()
             return START_NOT_STICKY
         }
 
         activeRequestId = requestId
-        activeStartId = startId
         if (cancelledRequests.contains(requestId)) {
             finishWithError(
                 PcmCaptureFailure("CAPTURE_CANCELLED", "Music recognition was cancelled"),
@@ -157,12 +214,18 @@ class MusicRecognitionCaptureService : Service() {
         }
 
         try {
-            val notification = createNotification(requestId)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val notification = createNotification(requestId, microphoneCapture)
+            if (deviceAudioCapture && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
                     NOTIFICATION_ID,
                     notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+                )
+            } else if (microphoneCapture && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
                 )
             } else {
                 startForeground(NOTIFICATION_ID, notification)
@@ -177,6 +240,12 @@ class MusicRecognitionCaptureService : Service() {
             return START_NOT_STICKY
         }
 
+        val captureDurationMs = intent.getIntExtra(EXTRA_CAPTURE_DURATION_MS, 8_000)
+        if (microphoneCapture) {
+            Thread({ captureMicrophone(captureDurationMs) }, "ResonanceMicrophoneCapture").start()
+            return START_NOT_STICKY
+        }
+
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
         val projectionData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(EXTRA_PROJECTION_DATA, Intent::class.java)
@@ -184,7 +253,6 @@ class MusicRecognitionCaptureService : Service() {
             @Suppress("DEPRECATION")
             intent.getParcelableExtra(EXTRA_PROJECTION_DATA) as? Intent
         }
-        val captureDurationMs = intent.getIntExtra(EXTRA_CAPTURE_DURATION_MS, 8_000)
         val waitTimeoutMs = intent.getIntExtra(EXTRA_WAIT_TIMEOUT_MS, 20_000)
         if (projectionData == null) {
             finishWithError(
@@ -202,6 +270,47 @@ class MusicRecognitionCaptureService : Service() {
             )
         }, "ResonanceDeviceAudioCapture").start()
         return START_NOT_STICKY
+    }
+
+    private fun captureMicrophone(captureDurationMs: Int) {
+        try {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                throw PcmCaptureException(
+                    PcmCaptureFailure("PERMISSION_DENIED", "Microphone permission is required to identify music"),
+                )
+            }
+            cancellation.get()?.let { throw PcmCaptureException(it) }
+            val record = PcmAudioCapture.createMicrophoneRecord()
+            audioRecord = record
+            val bytes = try {
+                PcmAudioCapture.capture(
+                    audioRecord = record,
+                    captureDurationMs = captureDurationMs,
+                    waitTimeoutMs = null,
+                    cancellation = { cancellation.get() },
+                )
+            } finally {
+                audioRecord = null
+                record.release()
+            }
+            finishCapture(bytes, null)
+        } catch (error: PcmCaptureException) {
+            finishCapture(null, error.failure)
+        } catch (error: SecurityException) {
+            finishWithError(
+                PcmCaptureFailure(
+                    "PERMISSION_DENIED",
+                    error.message ?: "Android blocked microphone capture",
+                ),
+            )
+        } catch (error: Throwable) {
+            finishWithError(
+                PcmCaptureFailure(
+                    "AUDIO_CAPTURE_FAILED",
+                    error.message ?: "Microphone capture failed",
+                ),
+            )
+        }
     }
 
     private fun captureDeviceOutput(
@@ -302,29 +411,39 @@ class MusicRecognitionCaptureService : Service() {
 
     private fun finishCapture(bytes: ByteArray?, failure: PcmCaptureFailure?) {
         if (!finished.compareAndSet(false, true)) return
-        val requestId = activeRequestId ?: return
+        val requestId = activeRequestId ?: requestSlot.get()
+        try {
+            runCatching { audioRecord?.stop() }
+            runCatching { audioRecord?.release() }
+            audioRecord = null
 
-        runCatching { audioRecord?.stop() }
-        runCatching { audioRecord?.release() }
-        audioRecord = null
+            val projection = mediaProjection
+            val callback = projectionCallback
+            if (projection != null && callback != null) {
+                runCatching { projection.unregisterCallback(callback) }
+            }
+            projectionCallback = null
+            mediaProjection = null
+            runCatching { projection?.stop() }
 
-        val projection = mediaProjection
-        val callback = projectionCallback
-        if (projection != null && callback != null) {
-            runCatching { projection.unregisterCallback(callback) }
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+            }
+        } finally {
+            activeRequestId = null
+            if (requestId != null) {
+                complete(requestId, bytes, failure?.code, failure?.message)
+            }
+            // A notification Cancel intent has a newer startId than the
+            // capture request. stopSelfResult(oldId) leaves a finished service
+            // alive forever, so terminate this one-shot service unconditionally.
+            stopSelf()
         }
-        projectionCallback = null
-        mediaProjection = null
-        runCatching { projection?.stop() }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
-        complete(requestId, bytes, failure?.code, failure?.message)
-        stopSelfResult(activeStartId)
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -356,13 +475,13 @@ class MusicRecognitionCaptureService : Service() {
             "Music recognition",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Shown while Resonance listens to audio playing on this device"
+            description = "Shown while Resonance listens for music in the background"
             setShowBadge(false)
         }
         manager.createNotificationChannel(channel)
     }
 
-    private fun createNotification(requestId: String): Notification {
+    private fun createNotification(requestId: String, microphoneCapture: Boolean): Notification {
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -382,10 +501,22 @@ class MusicRecognitionCaptureService : Service() {
             cancelIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        return Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+        return builder
+            .setSmallIcon(R.drawable.ic_music_recognition_tile)
             .setContentTitle("Resonance is listening")
-            .setContentText("Play a song on this device to identify it")
+            .setContentText(
+                if (microphoneCapture) {
+                    "Listening through the microphone"
+                } else {
+                    "Play a song on this device to identify it"
+                },
+            )
             .setContentIntent(openAppPendingIntent)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)

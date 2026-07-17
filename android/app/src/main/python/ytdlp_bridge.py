@@ -13,6 +13,7 @@
 #   - bestaudio[ext=m4a]: direct m4a CDN fallback (single stream, seekable)
 #   - bestaudio/best: last resort
 
+import base64
 import json
 import yt_dlp
 
@@ -244,13 +245,40 @@ def download(url: str, output_dir: str, event_sink) -> None:
 
     event_sink.success(msg) is called with:
       "progress:<percent>:<message>"
-      "track:<filepath>|<title_encoded>|<artist_encoded>|<cover_encoded>|<video_id>"
+      "track-json:<base64 UTF-8 JSON payload>"
       "done"
       "error:<message>"
     """
     import os
     from urllib.request import Request, urlopen
-    from urllib.parse import quote
+
+    def unicode_text(value) -> str:
+        """Normalize downloader/filesystem values without dropping Unicode."""
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8")
+            except UnicodeDecodeError:
+                # Some extractors/device code pages still surface legacy bytes.
+                # Latin-1 is a lossless byte mapping and is preferable to either
+                # throwing or stripping non-ASCII characters.
+                return value.decode("latin-1")
+        text = str(value)
+        return text.encode("utf-8", errors="replace").decode("utf-8")
+
+    def track_event(filepath, title, artist, cover_path, video_id) -> str:
+        payload = {
+            "path": unicode_text(filepath),
+            "title": unicode_text(title),
+            "artist": unicode_text(artist),
+            "coverPath": unicode_text(cover_path),
+            "videoId": unicode_text(video_id),
+        }
+        encoded = base64.b64encode(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        return f"track-json:{encoded}"
 
     output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
 
@@ -279,9 +307,9 @@ def download(url: str, output_dir: str, event_sink) -> None:
                 else ""
             )
             event_sink.success(f"progress:99.0:{prefix}Processing audio...")
-            filepath = os.fsdecode(
+            filepath = unicode_text(os.fsdecode(
                 d.get("filename") or d.get("info_dict", {}).get("filepath", "")
-            )
+            ))
             info = d.get("info_dict", {})
             if filepath:
                 title = info.get("title") or ""
@@ -297,10 +325,7 @@ def download(url: str, output_dir: str, event_sink) -> None:
                             cover.write(response.read())
                     except Exception:
                         cover_path = ""
-                event_sink.success(
-                    f"track:{filepath}|{quote(title, safe='')}|{quote(artist, safe='')}"
-                    f"|{quote(cover_path, safe='')}|{quote(video_id, safe='')}"
-                )
+                event_sink.success(track_event(filepath, title, artist, cover_path, video_id))
                 current_item[0] += 1
 
     def postprocessor_hook(d):
@@ -316,12 +341,7 @@ def download(url: str, output_dir: str, event_sink) -> None:
                 or info.get("artist")
                 or ""
             )
-            encoded = (
-                f"track:{filepath}"
-                f"|{quote(title, safe='')}"
-                f"|{quote(artist, safe='')}"
-            )
-            event_sink.success(encoded)
+            event_sink.success(track_event(filepath, title, artist, "", info.get("id") or ""))
             current_item[0] += 1
 
     opts = {
@@ -331,6 +351,10 @@ def download(url: str, output_dir: str, event_sink) -> None:
         "format": "bestaudio[has_drm!=true]/best[has_drm!=true]",
         "outtmpl": output_template,
         "progress_hooks": [progress_hook],
+        # Keep valid Unicode. yt-dlp still replaces only separators/control
+        # characters which are actually invalid for the target filesystem.
+        "restrictfilenames": False,
+        "windowsfilenames": False,
         # Conversion is handled by the app's bundled FFmpegKit library.
         # Never ask yt-dlp to locate desktop ffmpeg/ffprobe executables on Android.
         "yes_playlist": True,
@@ -343,4 +367,4 @@ def download(url: str, output_dir: str, event_sink) -> None:
             total_items[0] = len(list(entries))
         event_sink.success("done")
     except Exception as e:
-        event_sink.success(f"error:{e}")
+        event_sink.success(f"error:{unicode_text(e)}")

@@ -39,4 +39,28 @@ void main() {
     expect(colors.first, isNot(theme.scaffoldBackgroundColor));
     expect(colors.last, theme.scaffoldBackgroundColor);
   });
+
+  test('standalone gradient can blend two artwork-derived accents', () {
+    final theme = ThemeData.dark().copyWith(scaffoldBackgroundColor: const Color(0xFF101014));
+    final colors = standaloneGradientColors(
+      theme,
+      playerAccent: const Color(0xFFE24A62),
+      playerSecondary: const Color(0xFF3478D4),
+    );
+
+    expect(colors.first, isNot(colors[1]));
+    expect(colors.last, theme.scaffoldBackgroundColor);
+  });
+
+  test('OLED preservation keeps the standalone surface true black', () {
+    final theme = ThemeData.dark().copyWith(scaffoldBackgroundColor: Colors.black);
+    final colors = standaloneGradientColors(
+      theme,
+      playerAccent: const Color(0xFFE24A62),
+      playerSecondary: const Color(0xFF3478D4),
+      preserveOledSurface: true,
+    );
+
+    expect(colors, everyElement(Colors.black));
+  });
 }

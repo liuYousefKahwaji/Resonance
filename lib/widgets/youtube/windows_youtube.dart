@@ -18,6 +18,8 @@ import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/services/track_source_repository.dart';
+import 'package:resonance/services/download_history_repository.dart';
+import 'package:resonance/core/youtube/windows_process_output.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -48,30 +50,41 @@ class MediaDownloader {
 
     final denoPath = p.join(binDir, 'deno.exe');
 
-    final process = await Process.start(ytDlpPath, [
-      '--js-runtimes',
-      'deno:$denoPath',
+    final process = await Process.start(
+      ytDlpPath,
+      [
+        '--js-runtimes',
+        'deno:$denoPath',
 
-      '--force-ipv4',
+        '--force-ipv4',
 
-      '--flat-playlist',
+        ...windowsYtDlpUtf8Arguments,
 
-      '--dump-json',
+        '--flat-playlist',
 
-      '--no-download',
+        '--dump-json',
 
-      'ytsearch10:$query',
-    ]);
+        '--no-download',
+
+        'ytsearch10:$query',
+      ],
+      environment: windowsYtDlpUtf8Environment,
+      includeParentEnvironment: true,
+    );
 
     // Drain stderr to prevent pipe deadlock
 
-    process.stderr.drain();
+    final stderrDone = process.stderr.drain<void>();
 
     // Collect all stdout lines then parse — avoids async-forEach gotcha
 
-    final lines = await process.stdout.transform(utf8.decoder).transform(const LineSplitter()).toList();
+    final stdout = await collectWindowsProcessOutput(process.stdout);
+
+    final lines = const LineSplitter().convert(stdout);
 
     await process.exitCode;
+
+    await stderrDone;
 
     final results = <YoutubeTrack>[];
 
@@ -92,18 +105,25 @@ class MediaDownloader {
 
   Future<YoutubeTrack> lookup(String url) async {
     final binDir = await binDirPath;
-    final process = await Process.start(p.join(binDir, 'yt-dlp.exe'), [
-      '--js-runtimes',
-      'deno:${p.join(binDir, 'deno.exe')}',
-      '--force-ipv4',
-      '--dump-single-json',
-      '--no-download',
-      '--no-playlist',
-      url,
-    ]);
-    final stderrFuture = process.stderr.transform(utf8.decoder).join();
-    final stdout = await process.stdout.transform(utf8.decoder).join();
+    final process = await Process.start(
+      p.join(binDir, 'yt-dlp.exe'),
+      [
+        '--js-runtimes',
+        'deno:${p.join(binDir, 'deno.exe')}',
+        '--force-ipv4',
+        ...windowsYtDlpUtf8Arguments,
+        '--dump-single-json',
+        '--no-download',
+        '--no-playlist',
+        url,
+      ],
+      environment: windowsYtDlpUtf8Environment,
+      includeParentEnvironment: true,
+    );
+    final stderrFuture = collectWindowsProcessOutput(process.stderr);
+    final stdoutFuture = collectWindowsProcessOutput(process.stdout);
     final exitCode = await process.exitCode;
+    final stdout = await stdoutFuture;
     final stderr = await stderrFuture;
     if (exitCode != 0 || stdout.trim().isEmpty) {
       throw StateError(stderr.trim().isEmpty ? 'Could not read this link' : stderr.trim());
@@ -143,6 +163,8 @@ class MediaDownloader {
     required Function(double percentage, String status) onProgress,
 
     required Function(String filePath, String? youtubeVideoId) onTrackDownloaded,
+    String? historyTitle,
+    String? historyArtist,
   }) async {
     final binDir = await binDirPath;
 
@@ -185,59 +207,66 @@ class MediaDownloader {
       }
 
       try {
-        final process = await Process.start(ytDlpPath, [
-          '--ffmpeg-location',
-          ffmpegPath,
+        final process = await Process.start(
+          ytDlpPath,
+          [
+            '--ffmpeg-location',
+            ffmpegPath,
 
-          '--js-runtimes',
-          'deno:${p.join(binDir, 'deno.exe')}',
+            '--js-runtimes',
+            'deno:${p.join(binDir, 'deno.exe')}',
 
-          '--force-ipv4',
+            '--force-ipv4',
 
-          '--format',
-          'bestaudio[has_drm!=true]/best[has_drm!=true]',
+            ...windowsYtDlpUtf8Arguments,
 
-          '--concurrent-fragments',
-          '4',
+            '--format',
+            'bestaudio[has_drm!=true]/best[has_drm!=true]',
 
-          '--windows-filenames',
-          '-x',
+            '--concurrent-fragments',
+            '4',
 
-          '--audio-format',
-          'mp3',
+            '--windows-filenames',
+            '-x',
 
-          '--embed-metadata',
+            '--audio-format',
+            'mp3',
 
-          '--embed-thumbnail',
+            '--embed-metadata',
 
-          '--convert-thumbnails',
-          'jpg',
+            '--embed-thumbnail',
 
-          // --progress forces progress output even when stderr is not a TTY
-          // (i.e. when piped). Without this yt-dlp silently suppresses all
-          // [download] XX.X% lines, leaving the bar stuck at 0%.
-          '--progress',
+            '--convert-thumbnails',
+            'jpg',
 
-          '--newline',
+            // --progress forces progress output even when stderr is not a TTY
+            // (i.e. when piped). Without this yt-dlp silently suppresses all
+            // [download] XX.X% lines, leaving the bar stuck at 0%.
+            '--progress',
 
-          '--no-colors',
+            '--newline',
 
-          '--progress-delta',
-          '0.2',
+            '--no-colors',
 
-          '--progress-template',
-          'download:resonance_progress:%(progress._percent_str)s',
+            '--progress-delta',
+            '0.2',
 
-          '--yes-playlist',
+            '--progress-template',
+            'download:resonance_progress:%(progress._percent_str)s',
 
-          '--print',
-          'after_move:%(filepath)s|%(id)s',
+            '--yes-playlist',
 
-          '-o',
-          outputTemplate,
+            '--print',
+            'after_move:%(filepath)s|%(id)s',
 
-          url,
-        ]);
+            '-o',
+            outputTemplate,
+
+            url,
+          ],
+          environment: windowsYtDlpUtf8Environment,
+          includeParentEnvironment: true,
+        );
 
         final progressRegex = RegExp(r'\[download\]\s+(\d+(?:\.\d+)?)%');
         final templateProgressRegex = RegExp(r'resonance_progress:\s*(\d+(?:\.\d+)?)%');
@@ -298,9 +327,16 @@ class MediaDownloader {
           }
         }
 
-        final stdoutDone = process.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+        final stdoutTextFuture = collectWindowsProcessOutput(process.stdout);
+        final stderrDone = decodeWindowsProcessLines(process.stderr).listen(handleLine).asFuture<void>();
+
+        // Keep stdout as raw bytes until the process exits. This avoids a
+        // strict UTF-8 stream decoder aborting on a Windows code-page byte
+        // before the filesystem fallback can recover the real Unicode path.
+        final stdoutText = await stdoutTextFuture;
+        for (final line in const LineSplitter().convert(stdoutText)) {
           final trimmed = line.trim();
-          if (trimmed.isEmpty) return;
+          if (trimmed.isEmpty) continue;
           if (trimmed.contains('resonance_progress:') ||
               trimmed.contains('[download]') ||
               trimmed.contains('[ExtractAudio]') ||
@@ -310,12 +346,7 @@ class MediaDownloader {
           } else {
             printedPaths.add(trimmed);
           }
-        }).asFuture<void>();
-        final stderrDone = process.stderr
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .listen(handleLine)
-            .asFuture<void>();
+        }
 
         // ── Collect ALL stdout lines first, then process sequentially ──
 
@@ -327,7 +358,6 @@ class MediaDownloader {
 
         // onTrackDownloaded call — fixing the last-track race condition.
 
-        await stdoutDone;
         await stderrDone;
 
         // ── Process filepath lines sequentially, fully awaited ──
@@ -339,6 +369,16 @@ class MediaDownloader {
           final normalized = p.normalize(path);
           if (processedPaths.add(normalized) && await File(normalized).exists()) {
             await onTrackDownloaded(normalized, youtubeVideoId);
+            try {
+              await const DownloadHistoryRepository().recordSuccess(
+                source: youtubeVideoId ?? url,
+                localPath: normalized,
+                title: historyTitle,
+                artist: historyArtist,
+              );
+            } catch (historyError) {
+              debugPrint('Could not save download history: $historyError');
+            }
             importedCount++;
           }
         }
@@ -402,7 +442,19 @@ class MediaDownloader {
       } catch (e) {
         debugPrint('Download failure on attempt $attempt: $e');
 
-        if (attempt >= maxAttempts) rethrow;
+        if (attempt >= maxAttempts) {
+          try {
+            await const DownloadHistoryRepository().recordFailure(
+              source: url,
+              error: e,
+              title: historyTitle,
+              artist: historyArtist,
+            );
+          } catch (historyError) {
+            debugPrint('Could not save failed download history: $historyError');
+          }
+          rethrow;
+        }
       }
     }
   }
@@ -459,7 +511,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     super.dispose();
   }
 
-  Future<void> _startDownload(String url) async {
+  Future<void> _startDownload(String url, {YoutubeTrack? track}) async {
     setState(() {
       _mode = _DialogMode.downloading;
 
@@ -471,6 +523,8 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     try {
       await _downloader.downloadAudio(
         url: url,
+        historyTitle: track?.title,
+        historyArtist: track?.artist,
 
         onProgress: (percent, status) {
           if (mounted) {
@@ -586,18 +640,26 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
       final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
       final denoPath = p.join(binDir, 'deno.exe');
 
-      final process = await Process.start(ytDlpPath, [
-        '--js-runtimes',
-        'deno:$denoPath',
-        '--force-ipv4',
-        '--dump-json',
-        '--no-download',
-        url,
-      ]);
+      final process = await Process.start(
+        ytDlpPath,
+        [
+          '--js-runtimes',
+          'deno:$denoPath',
+          '--force-ipv4',
+          ...windowsYtDlpUtf8Arguments,
+          '--dump-json',
+          '--no-download',
+          url,
+        ],
+        environment: windowsYtDlpUtf8Environment,
+        includeParentEnvironment: true,
+      );
 
-      process.stderr.drain();
-      final lines = await process.stdout.transform(utf8.decoder).transform(const LineSplitter()).toList();
+      final stderrDone = process.stderr.drain<void>();
+      final stdout = await collectWindowsProcessOutput(process.stdout);
+      final lines = const LineSplitter().convert(stdout);
       await process.exitCode;
+      await stderrDone;
 
       if (lines.isNotEmpty) {
         final json = jsonDecode(lines.first) as Map<String, dynamic>;
@@ -966,7 +1028,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                     IconButton(
                       icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary),
                       tooltip: 'Download',
-                      onPressed: () => _startDownload(result.url),
+                      onPressed: () => _startDownload(result.url, track: result),
                     ),
                   ],
                 ),

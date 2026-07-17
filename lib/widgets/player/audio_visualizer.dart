@@ -9,6 +9,7 @@ class PlaybackPulse extends StatefulWidget {
   final double borderRadius;
   final double reach;
   final double Function()? amplitudeProvider;
+  final Color? color;
 
   const PlaybackPulse({
     super.key,
@@ -17,6 +18,7 @@ class PlaybackPulse extends StatefulWidget {
     required this.borderRadius,
     this.reach = 18,
     this.amplitudeProvider,
+    this.color,
   });
 
   @override
@@ -54,27 +56,32 @@ class _PlaybackPulseState extends State<PlaybackPulse> with SingleTickerProvider
 
   @override
   Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.primary;
-    return RepaintBoundary(
-      child: AnimatedBuilder(
-        animation: _controller,
-        child: widget.child,
-        builder: (context, child) {
-          final target = widget.active ? (widget.amplitudeProvider?.call() ?? 0).clamp(0.0, 1.0) : 0.0;
-          final response = target > _smoothedLevel ? 0.34 : 0.16;
-          _smoothedLevel += (target - _smoothedLevel) * response;
-          return CustomPaint(
-            key: const ValueKey('playback-pulse'),
-            painter: _PulsePainter(
-              level: _smoothedLevel,
-              active: widget.active,
-              color: color,
-              borderRadius: widget.borderRadius,
-              reach: widget.reach,
-            ),
-            child: child,
-          );
-        },
+    final targetColor = widget.color ?? Theme.of(context).colorScheme.primary;
+    return TweenAnimationBuilder<Color?>(
+      duration: const Duration(milliseconds: 520),
+      curve: Curves.easeInOutCubic,
+      tween: ColorTween(end: targetColor),
+      builder: (context, animatedColor, _) => RepaintBoundary(
+        child: AnimatedBuilder(
+          animation: _controller,
+          child: widget.child,
+          builder: (context, child) {
+            final target = widget.active ? (widget.amplitudeProvider?.call() ?? 0).clamp(0.0, 1.0) : 0.0;
+            final response = target > _smoothedLevel ? 0.34 : 0.16;
+            _smoothedLevel += (target - _smoothedLevel) * response;
+            return CustomPaint(
+              key: const ValueKey('playback-pulse'),
+              painter: _PulsePainter(
+                level: _smoothedLevel,
+                active: widget.active,
+                color: animatedColor ?? targetColor,
+                borderRadius: widget.borderRadius,
+                reach: widget.reach,
+              ),
+              child: child,
+            );
+          },
+        ),
       ),
     );
   }

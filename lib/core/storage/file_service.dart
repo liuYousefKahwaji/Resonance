@@ -315,14 +315,30 @@ class FileService {
     }
   }
 
-  Future<void> removeFromPlaylist(String filePath) async {
+  Future<void> removeFromPlaylist(String filePath, {int? playlistIndex}) async {
     try {
       final file = await _localFile;
       if (await file.exists()) {
         final contents = await file.readAsString();
         final lines = contents.split("\n");
-        final updatedLines = lines.where((line) => line != filePath).toList();
-        await file.writeAsString(updatedLines.join("\n"));
+        var lineToRemove = -1;
+        if (playlistIndex != null && playlistIndex >= 0) {
+          var currentTrackIndex = 0;
+          for (var index = 0; index < lines.length; index++) {
+            final line = lines[index].trim();
+            if (line.isEmpty || line.startsWith('#')) continue;
+            if (currentTrackIndex == playlistIndex && sameTrackPath(line, filePath)) {
+              lineToRemove = index;
+              break;
+            }
+            currentTrackIndex++;
+          }
+        }
+        lineToRemove = lineToRemove >= 0
+            ? lineToRemove
+            : lines.indexWhere((line) => sameTrackPath(line.trim(), filePath));
+        if (lineToRemove >= 0) lines.removeAt(lineToRemove);
+        await file.writeAsString(lines.join("\n"));
       }
     } catch (_) {}
   }

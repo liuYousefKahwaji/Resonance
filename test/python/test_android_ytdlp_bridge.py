@@ -1,4 +1,5 @@
 import importlib.util
+import base64
 import json
 import os
 import sys
@@ -154,13 +155,58 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
             FakeYoutubeDL.responder = respond
             bridge.download("https://youtu.be/jNQXAC9IVRw", directory, sink)
 
-        self.assertTrue(any(event.startswith("track:") for event in sink.events))
+        self.assertTrue(any(event.startswith("track-json:") for event in sink.events))
         self.assertEqual(sink.events[-1], "done")
         self.assertEqual(
             FakeYoutubeDL.calls[0]["format"],
             "bestaudio[has_drm!=true]/best[has_drm!=true]",
         )
         self.assertNotIn("postprocessors", FakeYoutubeDL.calls[0])
+
+    def test_download_event_preserves_unicode_metadata_and_filename_as_utf8(self):
+        cases = [
+            ("øneheart - apathy (slowed)", "øneheart"),
+            ("São Paulo (Official Audio)", "Anitta"),
+            ("東京の夜", "宇多田ヒカル"),
+            ("midnight drive 🎧", "artist ✨"),
+        ]
+
+        for index, (title, artist) in enumerate(cases):
+            with self.subTest(title=title), tempfile.TemporaryDirectory() as directory:
+                filename = f"{title}.webm"
+                path = os.path.join(directory, filename)
+                Path(path).write_bytes(b"audio")
+                sink = EventSink()
+
+                def respond(ydl, _target, download):
+                    self.assertTrue(download)
+                    info = {
+                        "title": title,
+                        "uploader": artist,
+                        "id": f"unicode{index:04d}"[-11:],
+                    }
+                    ydl.options["progress_hooks"][0](
+                        {"status": "finished", "filename": path, "info_dict": info}
+                    )
+                    return info
+
+                FakeYoutubeDL.responder = respond
+                bridge.download("https://youtu.be/unicodeTest", directory, sink)
+
+                track_message = next(
+                    event for event in sink.events if event.startswith("track-json:")
+                )
+                payload = json.loads(
+                    base64.b64decode(track_message.removeprefix("track-json:")).decode(
+                        "utf-8"
+                    )
+                )
+                self.assertEqual(payload["path"], path)
+                self.assertEqual(payload["title"], title)
+                self.assertEqual(payload["artist"], artist)
+                self.assertEqual(Path(payload["path"]).name, filename)
+                self.assertFalse(FakeYoutubeDL.calls[-1]["restrictfilenames"])
+                self.assertFalse(FakeYoutubeDL.calls[-1]["windowsfilenames"])
 
 
 if __name__ == "__main__":

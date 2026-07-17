@@ -219,12 +219,10 @@ class MusicRecognitionService {
       if (!status.isGranted) {
         throw const MusicRecognitionException('Microphone permission is required to identify music.');
       }
-      if (source == MusicRecognitionSource.deviceOutput) {
-        // The foreground capture still works when notification access is
-        // declined, but asking here keeps the listening indicator visible in
-        // the notification drawer after Resonance moves to the background.
-        await Permission.notification.request();
-      }
+      // Capture still works when notification access is declined. Asking for
+      // both sources lets Android report a result when the user backgrounds a
+      // microphone scan as well as while device-audio capture is active.
+      await Permission.notification.request();
     }
     _throwIfCancelled();
 

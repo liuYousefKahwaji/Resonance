@@ -55,6 +55,158 @@ class ExternalPlaylistService {
   }
 }
 
+class ExternalTrackMetadata {
+  final String title;
+  final String artist;
+
+  const ExternalTrackMetadata({required this.title, required this.artist});
+
+  String get searchQuery => artist.isEmpty ? title : '$artist $title';
+}
+
+/// Reads the public metadata already embedded in Spotify and Audiomack track
+/// pages. This is deliberately metadata-only; playback still goes through the
+/// existing YouTube search flow.
+class ExternalTrackMetadataService {
+  final ExternalPlaylistTextFetcher _fetchText;
+
+  ExternalTrackMetadataService({ExternalPlaylistTextFetcher? fetchText}) : _fetchText = fetchText ?? _fetchExternalText;
+
+  bool supports(Uri uri) {
+    final host = uri.host.toLowerCase().replaceFirst(RegExp(r'^www\.'), '');
+    return host == 'open.spotify.com' || host == 'audiomack.com' || host.endsWith('.audiomack.com');
+  }
+
+  Future<ExternalTrackMetadata> fetch(Uri uri) async {
+    if (!supports(uri)) throw const ExternalPlaylistException('This shared track provider is not supported.');
+    return parseHtml(await _fetchText(uri), sourceUri: uri);
+  }
+
+  static ExternalTrackMetadata parseHtml(String html, {required Uri sourceUri}) {
+    final structured = _structuredTrackMetadata(html);
+    if (structured != null) return structured;
+
+    final meta = _htmlMetadata(html);
+    var title = _cleanSharedMetadata(meta['og:title'] ?? meta['twitter:title']);
+    var artist = _cleanSharedMetadata(meta['music:musician'] ?? meta['music:artist']);
+    final description = _cleanSharedMetadata(meta['og:description'] ?? meta['twitter:description']);
+    final host = sourceUri.host.toLowerCase();
+
+    if (host.contains('audiomack')) {
+      final match = RegExp(
+        r'^(.+?)\s+by\s+(.+?)(?::\s*listen\s+on\s+audiomack|\s*\|\s*audiomack|$)',
+        caseSensitive: false,
+      ).firstMatch(title);
+      if (match != null) {
+        title = match.group(1)!.trim();
+        artist = match.group(2)!.trim();
+      } else {
+        title = title
+            .replaceFirst(RegExp(r':\s*listen\s+on\s+audiomack.*$', caseSensitive: false), '')
+            .replaceFirst(RegExp(r'\s*\|\s*audiomack.*$', caseSensitive: false), '')
+            .trim();
+      }
+    } else if (host.contains('spotify')) {
+      final match = RegExp(
+        r'^(.+?)\s+-\s+(?:song(?:\s+and\s+lyrics)?|single)\s+by\s+(.+?)(?:\s*\|\s*spotify)?$',
+        caseSensitive: false,
+      ).firstMatch(title);
+      if (match != null) {
+        title = match.group(1)!.trim();
+        artist = match.group(2)!.trim();
+      } else {
+        title = title.replaceFirst(RegExp(r'\s*\|\s*spotify.*$', caseSensitive: false), '').trim();
+      }
+    }
+
+    if (artist.startsWith('http://') || artist.startsWith('https://')) artist = '';
+    if (artist.isEmpty && description.isNotEmpty) {
+      final byMatch = RegExp(
+        r'(?:listen\s+to\s+.+?\s+|song\s+|single\s+)?by\s+([^.|]+?)(?:\s+on\s+|[.|]|$)',
+        caseSensitive: false,
+      ).firstMatch(description);
+      if (byMatch != null) artist = byMatch.group(1)!.trim();
+    }
+    if (title.isEmpty) {
+      throw const ExternalPlaylistException('The shared track did not expose readable title metadata.');
+    }
+    return ExternalTrackMetadata(title: title, artist: artist);
+  }
+}
+
+ExternalTrackMetadata? _structuredTrackMetadata(String html) {
+  final scripts = RegExp(r'<script\b([^>]*)>(.*?)</script>', caseSensitive: false, dotAll: true).allMatches(html);
+  for (final script in scripts) {
+    if (!script.group(1)!.toLowerCase().contains('application/ld+json')) continue;
+    try {
+      final found = _findStructuredTrack(jsonDecode(script.group(2)!));
+      if (found != null) return found;
+    } catch (_) {
+      // Pages often include unrelated or partially escaped structured data.
+    }
+  }
+  return null;
+}
+
+ExternalTrackMetadata? _findStructuredTrack(dynamic node) {
+  if (node is List) {
+    for (final item in node) {
+      final found = _findStructuredTrack(item);
+      if (found != null) return found;
+    }
+    return null;
+  }
+  if (node is! Map) return null;
+  final map = Map<String, dynamic>.from(node);
+  final type = map['@type'];
+  final types = type is List ? type.map((value) => value.toString()) : <String>[type?.toString() ?? ''];
+  if (types.any((value) => value.toLowerCase() == 'musicrecording')) {
+    final title = _cleanText(map['name'] ?? map['headline']);
+    final artist = _structuredArtist(map['byArtist'] ?? map['author']);
+    if (title.isNotEmpty) return ExternalTrackMetadata(title: title, artist: artist);
+  }
+  for (final value in map.values) {
+    final found = _findStructuredTrack(value);
+    if (found != null) return found;
+  }
+  return null;
+}
+
+String _structuredArtist(dynamic value) {
+  if (value is List) {
+    return value.map(_structuredArtist).where((artist) => artist.isNotEmpty).join(', ');
+  }
+  if (value is Map) return _cleanText(value['name']);
+  return _cleanText(value);
+}
+
+Map<String, String> _htmlMetadata(String html) {
+  final result = <String, String>{};
+  for (final match in RegExp(r'<meta\b[^>]*>', caseSensitive: false).allMatches(html)) {
+    final tag = match.group(0)!;
+    final name = _htmlAttribute(tag, 'property') ?? _htmlAttribute(tag, 'name');
+    final content = _htmlAttribute(tag, 'content');
+    if (name != null && content != null) result[name.toLowerCase()] = content;
+  }
+  return result;
+}
+
+String? _htmlAttribute(String tag, String name) {
+  final doubleQuoted = RegExp('$name\\s*=\\s*"([^"]*)"', caseSensitive: false).firstMatch(tag)?.group(1);
+  if (doubleQuoted != null) return doubleQuoted;
+  return RegExp("$name\\s*=\\s*'([^']*)'", caseSensitive: false).firstMatch(tag)?.group(1);
+}
+
+String _cleanSharedMetadata(String? value) => (value ?? '')
+    .replaceAll('&amp;', '&')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'")
+    .replaceAll('&apos;', "'")
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll(RegExp(r'\s+'), ' ')
+    .trim();
+
 class YoutubePlaylistProvider implements ExternalPlaylistProvider {
   static const maximumPlaylistEntries = 1000;
   final YoutubePlaylistJsonFetcher _fetchJson;

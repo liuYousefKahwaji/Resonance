@@ -32,8 +32,12 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 ### Playback
 
 - Play/pause, previous/next, scrubbing, mute, shuffle, and loop-off/one/all controls.
+- Open the real upcoming queue from a swipe-up sheet on Android or a persistent drawer on Windows; shuffled playback shows its already-generated order.
+- Optionally crossfade automatic track changes by 0–8 seconds with true overlapping playback.
 - Adjustable 1–15 second seek buttons and support for tracks longer than one hour.
-- Playback speed and pitch from 0.5× to 2.0×, plus a clearly marked volume boost up to 200%.
+- Playback speed and pitch from 0.5× to 2.0×, real bass adjustment, and a clearly marked volume boost up to 200%.
+- Apply speed, pitch, and bass globally or override them for individual tracks.
+- Optionally remember the position of tracks at least ten minutes long and resume them later.
 - Restores the last track and remembers volume, speed, pitch, loop, and shuffle settings.
 - Responsive player layouts, embedded artwork, loading feedback, and an optional startup pulse.
 - Opening a playlist track in the standalone player continues the current song instead of starting a second playback instance.
@@ -44,6 +48,8 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 - **Play** opens a standalone, playlist-free Now Playing screen.
 - **Stream** adds the track's URL to the current playlist without downloading it.
 - **Download** saves the audio locally, imports it, remembers its source, and shows live progress.
+- Search download history by title or artist, review successes and failures, replay completed tracks, reveal files on Windows, or remove old records.
+- Unicode titles and artists are preserved across Android search and download events.
 - Uses bundled tools: yt-dlp, FFmpeg, and Deno on Windows; embedded Python/yt-dlp with Android-safe conversion on Android.
 
 ### Playlist transfer
@@ -66,10 +72,12 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 
 | Windows | Android |
 | --- | --- |
-| Configurable global hotkeys for transport, seek, volume, and speed | Background playback with notification and lock-screen controls |
+| Configurable global hotkeys for transport, seek, volume, and speed | Background playback and music-recognition result notifications |
 | Hardware media keys and taskbar thumbnail buttons | Headset/media buttons, artwork, seek controls, and a true stop/exit action |
-| Close to tray, minimize to tray, or disable the tray | Runtime audio, storage, camera, and notification permissions |
-| Optional Discord Rich Presence | QR camera scanning and export to `Pictures/Resonance` |
+| Fast, watchdog-backed close behavior; close to tray, minimize to tray, or disable the tray | Quick Settings tile for microphone or device-audio song recognition |
+| Optional Discord Rich Presence | Android share target for YouTube, YouTube Music, Spotify, Audiomack, playlist links, and search text |
+|  | Runtime audio, storage, camera, microphone, and notification permissions |
+|  | QR camera scanning and export to `Pictures/Resonance` |
 
 ## Themes
 
@@ -81,16 +89,18 @@ Void uses a true black base in dark mode for an OLED-style look.
 
 The full style changes backgrounds and surfaces as well as the accent. The default style keeps the older, more restrained theme treatment.
 
+An optional artwork-color setting extracts and caches a safe palette for Currently Playing, the standalone player, and the visualizer glow while preserving the selected theme and Void's true-black surfaces.
+
 ## Performance
 
 Playback and interface updates are kept lighter during normal use and when Resonance is minimized to the tray. Track menus and playlist scrolling also use smoother transitions, with a subtle blur effect while scrolling.
 
 ## Download
 
-The current release is **v2.0.0**:
+The current release is **v2.3.0**:
 
-- [Android ARM64 APK](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.0.0/Resonance-Android-v2.0.0.apk) — Android 7.0 (API 24) or newer.
-- [Windows x64 package](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.0.0/Resonance-Windows-v2.0.0.rar) — extract the entire archive, then run `resonance.exe`.
+- [Android APK](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.3.0/Resonance-Android-v2.3.0.apk) — Android 7.0 (API 24) or newer.
+- [Windows x64 package](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.3.0/Resonance-Windows-v2.3.0.rar) — extract the entire archive, then run `resonance.exe`.
 
 All versions and their notes are on the [Releases page](https://github.com/liuYousefKahwaji/Resonance/releases). Keep the Windows package together after extraction; its `bin` folder contains the tools used for YouTube features.
 
@@ -131,11 +141,11 @@ python -m unittest discover -s test/python -p "test_*.py"
 Create release builds:
 
 ```powershell
+flutter build apk --release
 flutter build windows --release
-.\build_android_release.ps1
 ```
 
-The Android helper creates an ARM64 APK. Windows packages yt-dlp, FFmpeg, and Deno from `assets/bin` into the release bundle automatically.
+Windows packages yt-dlp, FFmpeg, and Deno from `assets/bin` into the release bundle automatically.
 
 ## Project layout
 
@@ -157,6 +167,10 @@ The table condenses every published changelog; each version links to its full re
 
 | Release | What changed |
 | --- | --- |
+| [v2.3.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.3.0) | Background Android recognition, Quick Settings and share-sheet integration, the visual queue, crossfade, long-track resume, scoped audio controls and real bass, download history, artwork-derived player colors, Unicode-safe downloads, and faster Windows shutdown. |
+| [v2.2.1](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.2.1) | Restored exact YouTube and YouTube Music playlist imports, unified cross-website downloads and streams, bounded metadata extraction, and fixed metadata leaking between playlists. |
+| [v2.2.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.2.0) | Shazam-style song identification, standalone-player gestures, touch-safe scrolling, Currently Playing navigation improvements, and an About section with the packaged version. |
+| [v2.1.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.1.0) | Faster local track switching, a unified gradient standalone player, a real audio-reactive visualizer, and double-click/tap standalone playback. |
 | [v2.0.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.0.0) | Spotify and Audiomack playlist importing, download-or-stream transfers, track actions and permanent deletion, full theme styling, smoother menus and scrolling, and improved standalone playback. |
 | [v1.9.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.9.0) | Dedicated YouTube search and standalone player, five theme styles, better artwork, responsive layouts, and more reliable streams/downloads. |
 | [v1.8.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.8.0) | Local QR playlist transfer, persistent YouTube source matching, reuse of local tracks, and narrow-screen toolbar improvements. |

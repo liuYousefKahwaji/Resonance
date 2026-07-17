@@ -1,9 +1,28 @@
 #include "flutter_window.h"
 #include "media_keys_plugin.h"
 #include "music_recognition_plugin.h"
+#include <chrono>
+#include <cstdio>
 #include <optional>
+#include <thread>
+
+#include <flutter/standard_method_codec.h>
 
 #include "flutter/generated_plugin_registrant.h"
+
+void LogWindowsShutdownEvent(const char* event) {
+  SYSTEMTIME timestamp{};
+  GetLocalTime(&timestamp);
+  char line[512];
+  std::snprintf(line, sizeof(line),
+                "[Resonance shutdown %04d-%02d-%02dT%02d:%02d:%02d.%03d] %s\n",
+                timestamp.wYear, timestamp.wMonth, timestamp.wDay,
+                timestamp.wHour, timestamp.wMinute, timestamp.wSecond,
+                timestamp.wMilliseconds, event);
+  OutputDebugStringA(line);
+  std::fputs(line, stderr);
+  std::fflush(stderr);
+}
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -26,6 +45,41 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  shutdown_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "resonance/windows_shutdown",
+          &flutter::StandardMethodCodec::GetInstance());
+  shutdown_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() == "configure") {
+          const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
+          if (arguments != nullptr) {
+            const auto mode = arguments->find(flutter::EncodableValue("closeToTray"));
+            if (mode != arguments->end()) {
+              if (const auto* value = std::get_if<bool>(&mode->second)) {
+                close_to_tray_ = *value;
+                LogWindowsShutdownEvent(close_to_tray_
+                                            ? "native close mode: close-to-tray"
+                                            : "native close mode: exit");
+              }
+            }
+          }
+          result->Success();
+          return;
+        }
+        if (call.method_name() == "beginExit") {
+          if (GetHandle() != nullptr) {
+            ShowWindow(GetHandle(), SW_HIDE);
+          }
+          StartExitWatchdog("Dart requested process exit");
+          result->Success();
+          return;
+        }
+        result->NotImplemented();
+      });
   {
     FlutterDesktopPluginRegistrarRef registrar_ref =
         flutter_controller_->engine()->GetRegistrarForPlugin("MediaKeysPlugin");
@@ -57,20 +111,50 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  LogWindowsShutdownEvent("FlutterWindow::OnDestroy entered");
   // Stop native capture before tearing down the engine/messenger it completes
   // method calls through.
+  shutdown_channel_ = nullptr;
   music_recognition_registrar_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
 
   Win32Window::OnDestroy();
+  LogWindowsShutdownEvent("FlutterWindow::OnDestroy finished");
+}
+
+void FlutterWindow::StartExitWatchdog(const char* reason) {
+  if (exit_watchdog_started_.exchange(true)) {
+    return;
+  }
+  LogWindowsShutdownEvent(reason);
+  // This thread is intentionally independent of the Flutter engine. If Dart,
+  // an audio worker, or a plugin teardown stalls, the process still exits well
+  // inside the one-second close budget.
+  std::thread([]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(900));
+    LogWindowsShutdownEvent("native watchdog forcing final process exit");
+    TerminateProcess(GetCurrentProcess(), 0);
+  }).detach();
 }
 
 LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_CLOSE) {
+    LogWindowsShutdownEvent("WM_CLOSE received before Flutter/plugin dispatch");
+    // Hide synchronously before any plugin or Dart callback. The user never
+    // waits on the main isolate to see the window close.
+    ShowWindow(hwnd, SW_HIDE);
+    if (close_to_tray_) {
+      LogWindowsShutdownEvent("WM_CLOSE hidden immediately; retaining tray process");
+    } else {
+      StartExitWatchdog("WM_CLOSE armed native exit watchdog");
+    }
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

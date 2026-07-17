@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -34,6 +35,8 @@ class MetadataCacheService {
   // even need to touch SharedPreferences.
   static Map<String, dynamic>? _cache;
   static Future<void>? _loadingFuture;
+  static Timer? _persistDebounce;
+  static Future<void> _pendingPersist = Future<void>.value();
 
   static Future<void> _ensureLoaded() async {
     if (_cache != null) return;
@@ -98,6 +101,15 @@ class MetadataCacheService {
     }
   }
 
+  static void _schedulePersist() {
+    _persistDebounce?.cancel();
+    _persistDebounce = Timer(const Duration(milliseconds: 750), () {
+      // Coalesce the many metadata discoveries caused by the first library
+      // scroll into one JSON encode/preferences write.
+      _pendingPersist = _pendingPersist.then((_) => _persist());
+    });
+  }
+
   static bool _isStreamUrl(String path) => path.startsWith('http://') || path.startsWith('https://');
 
   /// Returns cached metadata for [filePath] if present and still valid
@@ -145,19 +157,22 @@ class MetadataCacheService {
 
     _cache![filePath] = {'title': title, 'artist': artist, 'mtime': mtime, 'isStream': _isStreamUrl(filePath)};
 
-    await _persist();
+    _schedulePersist();
   }
 
   /// Removes a single entry (e.g. when a track is deleted from the library).
   static Future<void> remove(String filePath) async {
     await _ensureLoaded();
     if (_cache!.remove(filePath) != null) {
+      _persistDebounce?.cancel();
+      await _pendingPersist;
       await _persist();
     }
   }
 
   /// Clears the entire cache. Useful for a "rescan library" settings option.
   static Future<void> clear() async {
+    _persistDebounce?.cancel();
     _cache = {};
     try {
       final prefs = await SharedPreferences.getInstance();

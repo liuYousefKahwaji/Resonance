@@ -103,19 +103,35 @@ class YoutubeTransferService {
     String videoId, {
     required void Function(double percentage, String status) onProgress,
     TrackSourceMethod sourceMethod = TrackSourceMethod.importedFromQrTransfer,
+    String? historyTitle,
+    String? historyArtist,
   }) async {
     if (!TrackSourceRepository.isValidYoutubeVideoId(videoId)) {
       throw ArgumentError.value(videoId, 'videoId', 'Invalid YouTube video ID');
     }
     final url = TrackSourceRepository.canonicalUrlFor(videoId);
+    var resolvedTitle = _nonEmpty(historyTitle);
+    var resolvedArtist = _nonEmpty(historyArtist);
     YoutubeDownloadResult result;
     if (Platform.isWindows) {
       final downloader = windows_youtube.MediaDownloader();
       await downloader.initBinaries();
+      if (resolvedTitle == null || resolvedArtist == null) {
+        try {
+          final metadata = await downloader.lookup(url);
+          resolvedTitle ??= _nonEmpty(metadata.title);
+          resolvedArtist ??= _nonEmpty(metadata.artist);
+        } catch (_) {
+          // Metadata improves download history, but must not make the actual
+          // transfer fail when yt-dlp can still download the source.
+        }
+      }
       final downloaded = <YoutubeDownloadResult>[];
       await downloader.downloadAudio(
         url: url,
         onProgress: onProgress,
+        historyTitle: resolvedTitle,
+        historyArtist: resolvedArtist,
         onTrackDownloaded: (path, downloadedVideoId) async {
           downloaded.add(YoutubeDownloadResult(localPath: path, youtubeVideoId: downloadedVideoId ?? videoId));
         },
@@ -123,7 +139,12 @@ class YoutubeTransferService {
       if (downloaded.isEmpty) throw Exception('The download finished without a local audio file.');
       result = downloaded.firstWhere((item) => item.youtubeVideoId == videoId, orElse: () => downloaded.first);
     } else if (Platform.isAndroid) {
-      final downloaded = await android_youtube.AndroidYoutubeDownloader().downloadAudio(url, onProgress: onProgress);
+      final downloaded = await android_youtube.AndroidYoutubeDownloader().downloadAudio(
+        url,
+        onProgress: onProgress,
+        historyTitle: resolvedTitle,
+        historyArtist: resolvedArtist,
+      );
       if (downloaded.isEmpty) throw Exception('The download finished without a local audio file.');
       result = downloaded.firstWhere((item) => item.youtubeVideoId == videoId, orElse: () => downloaded.first);
     } else {
@@ -138,8 +159,8 @@ class YoutubeTransferService {
     return YoutubeDownloadResult(
       localPath: result.localPath,
       youtubeVideoId: videoId,
-      title: result.title,
-      artist: result.artist,
+      title: result.title ?? resolvedTitle,
+      artist: result.artist ?? resolvedArtist,
     );
   }
 
@@ -156,5 +177,10 @@ class YoutubeTransferService {
       return (await getExternalStorageDirectory())?.path ?? (await getApplicationDocumentsDirectory()).path;
     }
     return (await getApplicationSupportDirectory()).path;
+  }
+
+  static String? _nonEmpty(String? value) {
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
   }
 }

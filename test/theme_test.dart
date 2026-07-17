@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:resonance/app/theme.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -57,12 +60,40 @@ void main() {
     expect(provider.themeStyle, ResonanceThemeStyle.magma);
     expect(provider.isDarkMode, isTrue);
     expect(provider.fullThemePalette, isTrue);
+    expect(provider.artworkPlayerColors, isFalse);
 
     await provider.setThemeStyle(ResonanceThemeStyle.jade);
     await provider.setFullThemePalette(false);
+    await provider.setArtworkPlayerColors(true);
     final preferences = await SharedPreferences.getInstance();
     expect(preferences.getString('theme_style'), 'jade');
     expect(preferences.getBool('is_dark_mode'), isTrue);
     expect(preferences.getBool('theme_full_palette'), isFalse);
+    expect(preferences.getBool('artwork_player_colors'), isTrue);
+  });
+
+  test('persisted artwork colors extract artwork observed before preferences load', () async {
+    SharedPreferences.setMockInitialValues({'artwork_player_colors': true});
+    final image = img.Image(width: 4, height: 4);
+    for (var y = 0; y < image.height; y++) {
+      for (var x = 0; x < image.width; x++) {
+        image.setPixelRgba(x, y, 205, 45, 70, 255);
+      }
+    }
+    final artwork = File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}resonance_theme_${DateTime.now().microsecondsSinceEpoch}.png',
+    );
+    await artwork.writeAsBytes(img.encodePng(image), flush: true);
+    addTearDown(() async {
+      if (await artwork.exists()) await artwork.delete();
+    });
+
+    final provider = ThemeProvider();
+    await provider.updatePlayerArtwork(artwork.uri);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(provider.artworkPlayerColors, isTrue);
+    await provider.updatePlayerArtwork(artwork.uri);
+    expect(provider.hasArtworkPalette, isTrue);
   });
 }

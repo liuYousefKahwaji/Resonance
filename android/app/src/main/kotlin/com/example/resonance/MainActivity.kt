@@ -6,10 +6,10 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioRecord
 import android.media.audiofx.LoudnessEnhancer
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
@@ -18,8 +18,7 @@ import android.provider.MediaStore
 import androidx.annotation.Keep
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
-import com.ryanheise.audioservice.AudioServicePlugin
-import io.flutter.embedding.android.FlutterFragmentActivity
+import com.ryanheise.audioservice.AudioServiceFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -32,7 +31,7 @@ import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
-class MainActivity : FlutterFragmentActivity() {
+class MainActivity : AudioServiceFragmentActivity() {
 
     companion object {
         private const val METHOD_CHANNEL = "resonance/android_youtube"
@@ -40,6 +39,7 @@ class MainActivity : FlutterFragmentActivity() {
         private const val APP_CONTROL_CHANNEL = "resonance/app_control"
         private const val PLAYLIST_TRANSFER_CHANNEL = "resonance/playlist_transfer"
         private const val MUSIC_RECOGNITION_CHANNEL = "resonance/music_recognition"
+        private const val ANDROID_ENTRYPOINT_CHANNEL = "resonance/android_entrypoints"
         private const val QR_STORAGE_PERMISSION_REQUEST = 4102
         private const val MEDIA_PROJECTION_REQUEST = 4103
         private const val MAX_CAPTURE_DURATION_MS = 60_000
@@ -51,6 +51,10 @@ class MainActivity : FlutterFragmentActivity() {
     private var pendingQrFiles: List<Map<String, Any?>>? = null
     private var pendingQrResult: MethodChannel.Result? = null
     private var activeRecognitionRequest: RecognitionRequest? = null
+    private var androidEntrypointChannel: MethodChannel? = null
+    private var activityResumed = false
+    private var entrypointDispatchScheduled = false
+    private var minimizedTileLaunch = false
 
     private data class RecognitionRequest(
         val id: String,
@@ -59,15 +63,53 @@ class MainActivity : FlutterFragmentActivity() {
         val waitTimeoutMs: Int,
         val result: MethodChannel.Result,
         val cancelled: AtomicBoolean = AtomicBoolean(false),
-        @Volatile var audioRecord: AudioRecord? = null,
-        @Volatile var projectionServiceStarted: Boolean = false,
+        @Volatile var captureServiceStarted: Boolean = false,
     )
 
-    override fun provideFlutterEngine(context: Context): FlutterEngine? =
-        AudioServicePlugin.getFlutterEngine(context)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        minimizedTileLaunch = shouldMinimizeTileLaunch(intent)
+        if (minimizedTileLaunch) setTheme(R.style.TileLaunchTheme)
+        super.onCreate(savedInstanceState)
+        if (minimizedTileLaunch) applyMinimizedTileWindow()
+        handleLaunchIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (shouldMinimizeTileLaunch(intent) && !activityResumed) {
+            minimizedTileLaunch = true
+            applyMinimizedTileWindow()
+        } else if (!shouldMinimizeTileLaunch(intent)) {
+            restoreNormalWindow()
+        }
+        setIntent(intent)
+        handleLaunchIntent(intent)
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        activityResumed = true
+        MusicRecognitionCoordinator.setActivityVisible(true)
+        if (minimizedTileLaunch && !MusicRecognitionCoordinator.tileSnapshot(this).active) {
+            restoreNormalWindow()
+        }
+        scheduleEntrypointDispatch()
+    }
+
+    override fun onPause() {
+        activityResumed = false
+        MusicRecognitionCoordinator.setActivityVisible(false)
+        super.onPause()
+    }
+
+    override fun onStop() {
+        MusicRecognitionCoordinator.setActivityVisible(false)
+        super.onStop()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        AndroidBassBoostBridge.register(flutterEngine)
 
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(this))
@@ -256,9 +298,160 @@ class MainActivity : FlutterFragmentActivity() {
             }
 
         setupMusicRecognitionChannel(flutterEngine)
+        setupAndroidEntrypointChannel(flutterEngine)
 
         // ── Loudness Enhancer channel ──────────────────────────────────────
         setupLoudnessChannel(flutterEngine)
+    }
+
+    private fun setupAndroidEntrypointChannel(flutterEngine: FlutterEngine) {
+        androidEntrypointChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            ANDROID_ENTRYPOINT_CHANNEL,
+        ).also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getPendingAction" -> result.success(
+                        MusicRecognitionCoordinator.pendingLaunchAction(this)
+                            ?: MusicRecognitionCoordinator.pendingResultAction(this),
+                    )
+                    "acknowledgeAction" -> {
+                        MusicRecognitionCoordinator.acknowledgeLaunchAction(
+                            this,
+                            call.argument<String>("id"),
+                        )
+                        result.success(null)
+                        scheduleEntrypointDispatch()
+                    }
+                    "getDefaultRecognitionSource" ->
+                        result.success(MusicRecognitionCoordinator.getDefaultSource(this))
+                    "setDefaultRecognitionSource" -> {
+                        val source = call.argument<String>("source")
+                        if (source != "microphone" && source != "deviceOutput") {
+                            result.error("INVALID_SOURCE", "Unknown recognition source", null)
+                        } else {
+                            MusicRecognitionCoordinator.setDefaultSource(this, source)
+                            result.success(null)
+                        }
+                    }
+                    "beginRecognition" -> {
+                        val fromTile = call.argument<Boolean>("fromTile") == true
+                        val acquired = MusicRecognitionCoordinator.beginScan(this, fromTile)
+                        runCatching { result.success(acquired) }.onFailure {
+                            if (acquired) MusicRecognitionCoordinator.resetScan(this)
+                        }
+                    }
+                    "updateRecognitionStage" -> {
+                        MusicRecognitionCoordinator.updateStage(
+                            this,
+                            call.argument<String>("stage") ?: "listening",
+                        )
+                        result.success(null)
+                    }
+                    "finishRecognition" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val outcome = (call.arguments as? Map<String, Any?>)?.toMap()
+                            ?: mapOf(
+                                "success" to false,
+                                "message" to "Music recognition ended unexpectedly.",
+                            )
+                        result.success(MusicRecognitionCoordinator.finishScan(this, outcome))
+                    }
+                    "resetRecognition" -> {
+                        MusicRecognitionCoordinator.resetScan(this)
+                        result.success(null)
+                    }
+                    "clearPendingRecognitionResult" -> {
+                        MusicRecognitionCoordinator.clearPendingResult(
+                            this,
+                            call.argument<String>("id"),
+                        )
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        scheduleEntrypointDispatch()
+    }
+
+    private fun handleLaunchIntent(sourceIntent: Intent?) {
+        val launchAction: Map<String, Any?>? = when (sourceIntent?.action) {
+            Intent.ACTION_SEND -> {
+                val text = runCatching {
+                    sourceIntent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+                        ?: sourceIntent.clipData
+                            ?.takeIf { it.itemCount > 0 }
+                            ?.getItemAt(0)
+                            ?.coerceToText(this)
+                            ?.toString()
+                }.getOrNull()
+                text?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                    mapOf("kind" to "share", "text" to it)
+                }
+            }
+            MusicRecognitionCoordinator.ACTION_START_RECOGNITION -> mapOf(
+                "kind" to "startRecognition",
+                "source" to (
+                    sourceIntent.getStringExtra(MusicRecognitionCoordinator.EXTRA_SOURCE)
+                        ?: MusicRecognitionCoordinator.getDefaultSource(this)
+                    ),
+                "fromTile" to sourceIntent.getBooleanExtra(
+                    MusicRecognitionCoordinator.EXTRA_FROM_TILE,
+                    false,
+                ),
+            )
+            MusicRecognitionCoordinator.ACTION_OPEN_RECOGNITION_PICKER ->
+                mapOf("kind" to "openRecognitionPicker")
+            MusicRecognitionCoordinator.ACTION_OPEN_RECOGNITION_RESULT -> {
+                val pending = MusicRecognitionCoordinator.pendingResultAction(this)
+                val requestedId = sourceIntent.getStringExtra(
+                    MusicRecognitionCoordinator.EXTRA_RESULT_ID,
+                )
+                pending?.takeIf { requestedId == null || it["id"] == requestedId }
+            }
+            else -> null
+        }
+        sourceIntent?.action = null
+        if (launchAction == null) return
+        MusicRecognitionCoordinator.enqueueLaunchAction(this, launchAction)
+        scheduleEntrypointDispatch()
+    }
+
+    private fun scheduleEntrypointDispatch() {
+        if (!activityResumed || androidEntrypointChannel == null || entrypointDispatchScheduled) return
+        entrypointDispatchScheduled = true
+        Handler(Looper.getMainLooper()).post {
+            entrypointDispatchScheduled = false
+            if (!activityResumed) return@post
+            val pending = MusicRecognitionCoordinator.pendingLaunchAction(this)
+                ?: MusicRecognitionCoordinator.pendingResultAction(this)
+                ?: return@post
+            androidEntrypointChannel?.invokeMethod("onLaunchAction", pending)
+        }
+    }
+
+    private fun shouldMinimizeTileLaunch(sourceIntent: Intent?): Boolean =
+        sourceIntent?.action == MusicRecognitionCoordinator.ACTION_START_RECOGNITION &&
+            sourceIntent.getBooleanExtra(MusicRecognitionCoordinator.EXTRA_FROM_TILE, false) &&
+            sourceIntent.getBooleanExtra(
+                MusicRecognitionCoordinator.EXTRA_MINIMIZED_TILE_LAUNCH,
+                false,
+            ) &&
+            sourceIntent.getStringExtra(MusicRecognitionCoordinator.EXTRA_SOURCE) == "microphone" &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun applyMinimizedTileWindow() {
+        window.attributes = window.attributes.apply { alpha = 0.01f }
+        @Suppress("DEPRECATION")
+        overridePendingTransition(0, 0)
+    }
+
+    private fun restoreNormalWindow() {
+        if (!minimizedTileLaunch) return
+        minimizedTileLaunch = false
+        window.attributes = window.attributes.apply { alpha = 1f }
+        setTheme(R.style.NormalTheme)
     }
 
     private fun setupMusicRecognitionChannel(flutterEngine: FlutterEngine) {
@@ -334,46 +527,31 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private fun captureMicrophone(request: RecognitionRequest) {
-        Thread({
-            try {
-                if (request.cancelled.get()) {
-                    throw PcmCaptureException(
-                        PcmCaptureFailure("CAPTURE_CANCELLED", "Music recognition was cancelled"),
-                    )
-                }
-                val record = PcmAudioCapture.createMicrophoneRecord()
-                request.audioRecord = record
-                val bytes = try {
-                    PcmAudioCapture.capture(
-                        audioRecord = record,
-                        captureDurationMs = request.captureDurationMs,
-                        waitTimeoutMs = null,
-                        cancellation = {
-                            if (request.cancelled.get()) {
-                                PcmCaptureFailure("CAPTURE_CANCELLED", "Music recognition was cancelled")
-                            } else {
-                                null
-                            }
-                        },
-                    )
-                } finally {
-                    request.audioRecord = null
-                    record.release()
-                }
-                completeRecognition(request, bytes, null)
-            } catch (error: PcmCaptureException) {
-                completeRecognition(request, null, error.failure)
-            } catch (error: Throwable) {
+        request.captureServiceStarted = true
+        val started = MusicRecognitionCaptureService.startMicrophoneCapture(
+            context = applicationContext,
+            requestId = request.id,
+            captureDurationMs = request.captureDurationMs,
+            callback = MusicRecognitionCaptureService.CaptureCallback { bytes, code, message ->
                 completeRecognition(
                     request,
-                    null,
-                    PcmCaptureFailure(
-                        "AUDIO_CAPTURE_FAILED",
-                        error.message ?: "Microphone capture failed",
-                    ),
+                    bytes,
+                    if (code == null) null else PcmCaptureFailure(code, message ?: code),
                 )
-            }
-        }, "ResonanceMicrophoneCapture").start()
+            },
+        )
+        if (!started) {
+            request.captureServiceStarted = false
+            completeRecognition(
+                request,
+                null,
+                PcmCaptureFailure("CAPTURE_BUSY", "Another music-recognition capture is active"),
+            )
+            return
+        }
+        if (MusicRecognitionCoordinator.isTileScanActive(this)) {
+            moveTaskToBack(true)
+        }
     }
 
     private fun requestDeviceAudioConsent(request: RecognitionRequest) {
@@ -425,7 +603,7 @@ class MainActivity : FlutterFragmentActivity() {
             return
         }
 
-        request.projectionServiceStarted = true
+        request.captureServiceStarted = true
         val started = MusicRecognitionCaptureService.startCapture(
             context = applicationContext,
             requestId = request.id,
@@ -442,7 +620,7 @@ class MainActivity : FlutterFragmentActivity() {
             },
         )
         if (!started) {
-            request.projectionServiceStarted = false
+            request.captureServiceStarted = false
             completeRecognition(
                 request,
                 null,
@@ -460,9 +638,18 @@ class MainActivity : FlutterFragmentActivity() {
         val request = activeRecognitionRequest ?: return
         request.cancelled.set(true)
         when {
-            request.source == "microphone" -> runCatching { request.audioRecord?.stop() }
-            request.projectionServiceStarted ->
+            request.captureServiceStarted -> {
                 MusicRecognitionCaptureService.cancelCapture(request.id)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (activeRecognitionRequest?.id == request.id && request.cancelled.get()) {
+                        completeRecognition(
+                            request,
+                            null,
+                            PcmCaptureFailure("CAPTURE_CANCELLED", "Music recognition was cancelled"),
+                        )
+                    }
+                }, 1_500)
+            }
             else -> completeRecognition(
                 request,
                 null,
@@ -477,15 +664,19 @@ class MainActivity : FlutterFragmentActivity() {
         failure: PcmCaptureFailure?,
     ) {
         runOnUiThread {
+            MusicRecognitionCaptureService.releaseReservation(request.id)
             if (activeRecognitionRequest?.id != request.id) return@runOnUiThread
             activeRecognitionRequest = null
-            if (failure == null && bytes != null) {
-                request.result.success(bytes)
+            val delivered = if (failure == null && bytes != null) {
+                runCatching { request.result.success(bytes) }
             } else {
                 val resolvedFailure = failure
                     ?: PcmCaptureFailure("AUDIO_CAPTURE_FAILED", "No PCM audio was returned")
-                request.result.error(resolvedFailure.code, resolvedFailure.message, null)
+                runCatching {
+                    request.result.error(resolvedFailure.code, resolvedFailure.message, null)
+                }
             }
+            if (delivered.isFailure) MusicRecognitionCoordinator.resetScan(this)
         }
     }
 
@@ -610,9 +801,15 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun onDestroy() {
-        if (isFinishing) cancelActiveRecognition()
+        activityResumed = false
+        MusicRecognitionCoordinator.setActivityVisible(false)
+        if (isFinishing) {
+            cancelActiveRecognition()
+            MusicRecognitionCoordinator.resetScan(this)
+        }
         loudnessEnhancer?.release()
         loudnessEnhancer = null
+        androidEntrypointChannel = null
         super.onDestroy()
     }
 }

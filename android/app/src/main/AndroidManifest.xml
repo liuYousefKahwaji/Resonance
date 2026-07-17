@@ -23,6 +23,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Android 14+: foreground service type used while sharing device audio. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Android 14+: keeps tile-triggered microphone recognition alive after
+         Resonance moves behind the app which is playing the music. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- Android 13+ (API 33+): runtime notification permission -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Keep CPU alive when screen is off during background playback -->
@@ -31,6 +34,7 @@
     <application
         android:label="Resonance"
         android:name="${applicationName}"
+        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -53,6 +57,41 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!-- Android Quick Settings entry point. Active mode lets the Flutter
+             recognition flow request tile updates as stages change. -->
+        <service
+            android:name=".MusicRecognitionTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_music_recognition_tile"
+            android:label="Identify music"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="true" />
+        </service>
+
+        <!-- SystemUI resolves this activity for a long-press on the tile. -->
+        <activity
+            android:name=".MusicRecognitionTilePreferencesActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:theme="@style/LaunchTheme">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <!-- audio_service foreground service declaration.
@@ -66,12 +105,17 @@
             </intent-filter>
         </service>
 
-        <!-- Visible listening service required for Android playback capture. -->
+        <!-- Visible listening service required for background microphone and
+             Android playback capture. -->
         <service
             android:name=".MusicRecognitionCaptureService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection"
+            android:foregroundServiceType="mediaProjection|microphone"
             android:stopWithTask="true" />
+
+        <receiver
+            android:name=".MusicRecognitionNotificationDismissReceiver"
+            android:exported="false" />
 
         <!-- Media button receiver for notification/headset controls -->
         <receiver

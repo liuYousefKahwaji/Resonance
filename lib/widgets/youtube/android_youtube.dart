@@ -25,6 +25,8 @@ import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_download_result.dart';
 import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/services/track_source_repository.dart';
+import 'package:resonance/core/youtube/android_download_event.dart';
+import 'package:resonance/services/download_history_repository.dart';
 
 class AndroidYoutubeDownloader {
   static const _method = MethodChannel('resonance/android_youtube');
@@ -62,6 +64,8 @@ class AndroidYoutubeDownloader {
   Future<List<YoutubeDownloadResult>> downloadAudio(
     String url, {
     required void Function(double percentage, String status) onProgress,
+    String? historyTitle,
+    String? historyArtist,
   }) async {
     final pendingTracks =
         <String, ({String path, String? title, String? artist, String? coverPath, String? videoId})>{};
@@ -73,16 +77,16 @@ class AndroidYoutubeDownloader {
           final parts = event.split(':');
           final percentage = double.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0.0;
           onProgress(percentage, parts.length > 2 ? parts.sublist(2).join(':') : 'Downloading...');
-        } else if (event.startsWith('track:')) {
-          final parts = event.substring('track:'.length).split('|');
-          if (parts.isEmpty || parts[0].trim().isEmpty) return;
-          final path = p.normalize(parts[0]);
-          final candidateId = parts.length > 4 ? Uri.decodeComponent(parts[4]) : null;
+        } else if (event.startsWith('track-json:') || event.startsWith('track:')) {
+          final trackEvent = parseAndroidDownloadTrackEvent(event);
+          if (trackEvent == null) return;
+          final path = p.normalize(trackEvent.path);
+          final candidateId = trackEvent.videoId;
           pendingTracks[path] = (
             path: path,
-            title: parts.length > 1 && parts[1].isNotEmpty ? Uri.decodeComponent(parts[1]) : null,
-            artist: parts.length > 2 && parts[2].isNotEmpty ? Uri.decodeComponent(parts[2]) : null,
-            coverPath: parts.length > 3 && parts[3].isNotEmpty ? Uri.decodeComponent(parts[3]) : null,
+            title: trackEvent.title,
+            artist: trackEvent.artist,
+            coverPath: trackEvent.coverPath,
             videoId: candidateId != null && TrackSourceRepository.isValidYoutubeVideoId(candidateId)
                 ? candidateId
                 : TrackSourceRepository.videoIdFromUrlOrId(url),
@@ -90,7 +94,16 @@ class AndroidYoutubeDownloader {
         } else if (event == 'done') {
           if (!done.isCompleted) done.complete();
         } else if (event.startsWith('error:')) {
-          if (!done.isCompleted) done.completeError(Exception(event.substring('error:'.length)));
+          if (!done.isCompleted) {
+            // yt-dlp can report a later playlist-item/extractor failure after
+            // already emitting one or more complete local tracks. Preserve the
+            // successful files; console/error text must not invalidate them.
+            if (pendingTracks.isNotEmpty) {
+              done.complete();
+            } else {
+              done.completeError(Exception(event.substring('error:'.length)));
+            }
+          }
         }
       },
       onError: (Object error, StackTrace stackTrace) {
@@ -101,30 +114,53 @@ class AndroidYoutubeDownloader {
       },
     );
     try {
-      await done.future;
-    } finally {
-      await subscription.cancel();
-    }
-    if (pendingTracks.isEmpty) throw Exception('The download completed without an audio file');
-    final results = <YoutubeDownloadResult>[];
-    for (final track in pendingTracks.values) {
-      onProgress(99, 'Converting audio...');
-      final converted = await convertAndroidYoutubeAudioToMp3(
-        track.path,
-        title: track.title,
-        artist: track.artist,
-        coverPath: track.coverPath,
-      );
-      results.add(
-        YoutubeDownloadResult(
+      try {
+        await done.future;
+      } finally {
+        await subscription.cancel();
+      }
+      if (pendingTracks.isEmpty) throw Exception('The download completed without an audio file');
+      final results = <YoutubeDownloadResult>[];
+      for (final track in pendingTracks.values) {
+        onProgress(99, 'Converting audio...');
+        final converted = await convertAndroidYoutubeAudioToMp3(
+          track.path,
+          title: track.title,
+          artist: track.artist,
+          coverPath: track.coverPath,
+        );
+        final result = YoutubeDownloadResult(
           localPath: converted,
           youtubeVideoId: track.videoId,
           title: track.title,
           artist: track.artist,
-        ),
-      );
+        );
+        results.add(result);
+        try {
+          await const DownloadHistoryRepository().recordSuccess(
+            source: track.videoId ?? url,
+            localPath: converted,
+            title: track.title ?? historyTitle,
+            artist: track.artist ?? historyArtist,
+          );
+        } catch (historyError) {
+          debugPrint('Could not save download history: $historyError');
+        }
+      }
+      return results;
+    } catch (error) {
+      try {
+        await const DownloadHistoryRepository().recordFailure(
+          source: url,
+          error: error,
+          title: historyTitle,
+          artist: historyArtist,
+        );
+      } catch (historyError) {
+        debugPrint('Could not save failed download history: $historyError');
+      }
+      rethrow;
     }
-    return results;
   }
 }
 
@@ -209,7 +245,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     super.dispose();
   }
 
-  Future<void> _startDownload(String url) async {
+  Future<void> _startDownload(String url, {YoutubeTrack? track}) async {
     setState(() {
       _mode = _DialogMode.downloading;
       _downloadPercentage = 0.0;
@@ -218,6 +254,8 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     try {
       final tracks = await _downloader.downloadAudio(
         url,
+        historyTitle: track?.title,
+        historyArtist: track?.artist,
         onProgress: (percentage, status) {
           if (mounted) {
             setState(() {
@@ -625,7 +663,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                           padding: EdgeInsets.zero,
                           icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary, size: 20),
                           tooltip: 'Download',
-                          onPressed: () => _startDownload(result.url),
+                          onPressed: () => _startDownload(result.url, track: result),
                         ),
                       ),
                     ],

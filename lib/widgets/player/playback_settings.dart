@@ -34,12 +34,14 @@ class _PlaybackSettingsDialog extends StatefulWidget {
 class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
   late double speed;
   late double pitch;
+  late double bass;
 
   @override
   void initState() {
     super.initState();
     speed = widget.handler.speedNotifier.value;
     pitch = widget.handler.pitchNotifier.value;
+    bass = widget.handler.bassBoostNotifier.value;
   }
 
   @override
@@ -48,7 +50,7 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
       title: const Text('Playback Settings'),
       content: SizedBox(
         width: 300,
-        height: 200,
+        height: 270,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -99,26 +101,58 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
                 Text('${pitch.toStringAsFixed(1)}x', style: const TextStyle(fontWeight: FontWeight.bold)),
               ],
             ),
+            const SizedBox(height: 20),
+            ValueListenableBuilder<bool>(
+              valueListenable: widget.handler.bassBoostSupportedNotifier,
+              builder: (context, supported, _) => Row(
+                children: [
+                  Tooltip(
+                    message: supported ? 'Low-frequency equalizer boost' : 'Bass EQ is unavailable on this device',
+                    child: const Text('Bass', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Slider(
+                      value: bass,
+                      min: 0,
+                      max: 1,
+                      divisions: 10,
+                      label: '${(bass * 100).round()}%',
+                      onChanged: supported
+                          ? (newBass) {
+                              setState(() => bass = newBass);
+                              widget.handler.setBassBoost(newBass);
+                            }
+                          : null,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 42,
+                    child: Text(
+                      supported ? '${(bass * 100).round()}%' : 'N/A',
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
       actions: [
         TextButton(
-          onPressed: () {
-            // Reset to 1.0 for both
-            widget.handler.setSpeed(1.0);
-            widget.handler.setPitch(1.0);
+          onPressed: () async {
             setState(() {
               speed = 1.0;
               pitch = 1.0;
+              bass = 0.0;
             });
+            await widget.handler.resetPlaybackAdjustments();
           },
           child: const Text('Reset'),
         ),
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Close'),
-        ),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
       ],
     );
   }

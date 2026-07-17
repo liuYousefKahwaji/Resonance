@@ -65,6 +65,8 @@ void main() {
     );
 
     expect(youtube.downloadedIds, ['aaaaaaaaaaa', 'bbbbbbbbbbb']);
+    expect(youtube.downloadedTitles, ['First', 'Second']);
+    expect(youtube.downloadedArtists, ['Artist A', 'Artist B']);
     expect(result.downloaded, 2);
     expect(result.playlistEntries, 3);
     expect(
@@ -82,6 +84,8 @@ void main() {
 class _FakeYoutubeTransferService extends YoutubeTransferService {
   final String directory;
   final List<String> downloadedIds = [];
+  final List<String?> downloadedTitles = [];
+  final List<String?> downloadedArtists = [];
 
   _FakeYoutubeTransferService(this.directory);
 
@@ -90,8 +94,12 @@ class _FakeYoutubeTransferService extends YoutubeTransferService {
     String videoId, {
     required void Function(double percentage, String status) onProgress,
     TrackSourceMethod sourceMethod = TrackSourceMethod.importedFromQrTransfer,
+    String? historyTitle,
+    String? historyArtist,
   }) async {
     downloadedIds.add(videoId);
+    downloadedTitles.add(historyTitle);
+    downloadedArtists.add(historyArtist);
     onProgress(100, 'Done');
     return YoutubeDownloadResult(localPath: '$directory${Platform.pathSeparator}$videoId.mp3', youtubeVideoId: videoId);
   }

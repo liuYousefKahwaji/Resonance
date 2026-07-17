@@ -144,6 +144,8 @@ class YoutubePlaylistImportService {
             final result = await youtube.downloadVideo(
               entry.videoId,
               sourceMethod: TrackSourceMethod.importedFromExternalPlaylist,
+              historyTitle: entry.title,
+              historyArtist: entry.artist,
               onProgress: report,
             );
             resolvedById[entry.videoId] = result.localPath;

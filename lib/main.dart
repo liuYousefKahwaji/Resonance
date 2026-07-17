@@ -6,9 +6,11 @@ import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
+import 'package:resonance/platform/android/android_entrypoint_service.dart';
 import 'package:resonance/screens/settings/settings_screen.dart';
 import 'package:resonance/screens/external_playlist/external_playlist_import_screen.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_export_screen.dart';
@@ -17,10 +19,12 @@ import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/services/playlist_transfer_codec.dart';
 import 'package:resonance/services/playlist_transfer_export_service.dart';
 import 'package:resonance/services/discord_presence_service.dart';
+import 'package:resonance/services/android_shared_content_service.dart';
 import 'package:resonance/widgets/library/import_track_button.dart';
 import 'package:resonance/widgets/library/track_list.dart';
 import 'package:resonance/widgets/player/album_cover.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
+import 'package:resonance/widgets/player/upcoming_queue.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/app/theme.dart';
 import 'package:resonance/app/now_playing_navigation.dart';
@@ -31,7 +35,11 @@ import 'package:media_kit/media_kit.dart';
 import 'package:just_audio/just_audio.dart' as ja;
 import 'package:path/path.dart' as p;
 import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/services/music_recognition/music_recognition_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
+import 'package:resonance/services/companion/companion_client_service.dart';
+import 'package:resonance/services/companion/companion_server_service.dart';
+import 'package:resonance/services/scroll_effects_preferences.dart';
 import 'package:resonance/widgets/music_recognition/music_recognition_dialog.dart';
 
 // Desktop-only imports — guarded at runtime with Platform checks
@@ -52,6 +60,11 @@ import 'package:desktop_drop/desktop_drop.dart';
 //TODO: album cover (downloads dont come with album cover)
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+const _windowsShutdownChannel = MethodChannel('resonance/windows_shutdown');
+
+void _shutdownLog(String event) {
+  debugPrint('[Resonance shutdown ${DateTime.now().toIso8601String()}] $event');
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -77,6 +90,12 @@ Future<void> main() async {
       androidStopForegroundOnPause: false,
     ),
   );
+  await ScrollEffectsPreferences.instance.initialize();
+  if (Platform.isWindows) {
+    unawaited(CompanionServerService.instance.initialize(handler));
+  } else if (Platform.isAndroid) {
+    unawaited(CompanionClientService.instance.initialize());
+  }
 
   if (_isDesktop) {
     await HotkeyService.init({
@@ -95,6 +114,15 @@ Future<void> main() async {
   if (_isDesktop) {
     final settingsService = SettingsService();
     final trayMode = await settingsService.getTrayMode();
+    if (Platform.isWindows) {
+      try {
+        await _windowsShutdownChannel.invokeMethod<void>('configure', {
+          'closeToTray': trayMode == TrayMode.closeToTray,
+        });
+      } catch (error) {
+        _shutdownLog('native close-mode configuration failed: $error');
+      }
+    }
     if (trayMode != TrayMode.noTray) {
       await TrayService.init();
     }
@@ -165,10 +193,12 @@ class _DesktopWindowHandler with WindowListener, TrayListener {
 
   @override
   void onWindowClose() {
+    _shutdownLog('onWindowClose fired (trayMode: ${trayMode.name})');
     switch (trayMode) {
       case TrayMode.closeToTray:
         onSuspend();
         unawaited(windowManager.hide());
+        _shutdownLog('close-to-tray window hide requested');
         break;
       case TrayMode.minimizeToTray:
       case TrayMode.noTray:
@@ -224,7 +254,9 @@ class _MainAppState extends State<MainApp> {
   final Map<({int playlistNumber, int index}), GlobalKey> _trackItemKeys = {};
   bool _exitInProgress = false;
   bool _uiVisible = true;
+  bool _queueDrawerOpen = false;
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  bool _handlingAndroidAction = false;
 
   final SettingsService _settingsService = SettingsService();
   _DesktopWindowHandler? _desktopHandler;
@@ -234,6 +266,7 @@ class _MainAppState extends State<MainApp> {
     super.initState();
     _initIntro();
     _loadPlaylistFromDisk();
+    if (Platform.isAndroid) unawaited(AndroidEntrypointService.initialize(_handleAndroidAction));
     if (_isDesktop) {
       _initDesktop();
     }
@@ -298,12 +331,14 @@ class _MainAppState extends State<MainApp> {
         playlist = fileData.split('\n').where((line) => line.isNotEmpty).skip(1).toList();
         isLoading = false;
       });
+      widget.handler.playbackModeRevision.value++;
     }
   }
 
   Future<void> _switchPlaylist(int number) async {
     setState(() => isLoading = true);
     await FileService().setActivePlaylistNumber(number);
+    if (widget.handler.getShuffleMode()) await widget.handler.shuffleQueue();
     await _loadPlaylistFromDisk();
   }
 
@@ -616,6 +651,7 @@ class _MainAppState extends State<MainApp> {
       _pulsingTrackIndex = null;
     });
     await FileService().reorderPlaylist(playlist);
+    widget.handler.playbackModeRevision.value++;
   }
 
   Future<void> _deleteTrackEverywhere(String trackPath) async {
@@ -685,26 +721,180 @@ class _MainAppState extends State<MainApp> {
   }
 
   void _exitApp() {
-    if (_exitInProgress) return;
+    if (_exitInProgress) {
+      _shutdownLog('_exitApp ignored because exit is already in progress');
+      return;
+    }
     _exitInProgress = true;
+    _shutdownLog('_exitApp entered');
     final handler = Provider.of<PlayerHandler>(context, listen: false);
-    unawaited(handler.saveState().timeout(const Duration(milliseconds: 500)).catchError((_) {}));
-    unawaited(handler.pause().timeout(const Duration(milliseconds: 500)).catchError((_) {}));
-    unawaited(handler.dispose().timeout(const Duration(seconds: 1)).catchError((_) {}));
+    if (Platform.isWindows) {
+      // Arms a native watchdog which is independent of the Dart isolate and
+      // hides the HWND synchronously. It remains effective if a plugin blocks.
+      unawaited(
+        _windowsShutdownChannel
+            .invokeMethod<void>('beginExit')
+            .timeout(const Duration(milliseconds: 80))
+            .catchError((error) => _shutdownLog('native beginExit call failed: $error')),
+      );
+    }
+    if (_isDesktop) {
+      unawaited(windowManager.hide().catchError((error) => _shutdownLog('window hide failed: $error')));
+    }
+
+    // Dart's fallback is deliberately below the native watchdog's 900 ms
+    // deadline, but leaves a small, bounded window for essential preferences.
+    Timer(const Duration(milliseconds: 700), () {
+      _shutdownLog('Dart hard deadline reached; final process exit');
+      exit(0);
+    });
+    unawaited(_completeExit(handler));
+  }
+
+  Future<void> _handleAndroidAction(Map<String, dynamic> action) async {
+    while (_handlingAndroidAction && mounted) {
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+    if (!mounted) throw StateError('Resonance navigation is no longer mounted.');
+    _handlingAndroidAction = true;
+    try {
+      final actionKind = action['kind']?.toString();
+      final requiresLibrary = actionKind == 'share' || actionKind == 'recognitionResult';
+      BuildContext? navigatorContext;
+      for (var attempt = 0; attempt < 50 && mounted; attempt++) {
+        navigatorContext = _navigatorKey.currentState?.overlay?.context;
+        if (navigatorContext != null &&
+            (!requiresLibrary || !isLoading) &&
+            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
+      if (!mounted ||
+          navigatorContext == null ||
+          (requiresLibrary && isLoading) ||
+          WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        throw StateError('Resonance navigation is not ready.');
+      }
+      if (_showIntro) {
+        await _introPlayer?.stop();
+        if (mounted) setState(() => _showIntro = false);
+      }
+      navigatorContext = _navigatorKey.currentState?.overlay?.context;
+      if (!mounted || navigatorContext == null || WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        throw StateError('Resonance navigation is no longer ready.');
+      }
+
+      switch (actionKind) {
+        case 'share':
+          await _openSharedContent(action['text']?.toString() ?? '');
+        case 'startRecognition':
+          final source = action['source'] == 'deviceOutput'
+              ? MusicRecognitionSource.deviceOutput
+              : MusicRecognitionSource.microphone;
+          unawaited(_identifySong(navigatorContext, initialSource: source, tileTriggered: action['fromTile'] == true));
+        case 'openRecognitionPicker':
+          unawaited(_identifySong(navigatorContext));
+        case 'recognitionResult':
+          final resultId = action['id']?.toString();
+          if (action['success'] == true && (action['title']?.toString().trim().isNotEmpty ?? false)) {
+            final match = MusicRecognitionResult(
+              title: action['title'].toString(),
+              artist: action['artist']?.toString() ?? '',
+              album: action['album']?.toString(),
+              artworkUrl: action['artworkUrl']?.toString(),
+              shazamUrl: action['shazamUrl']?.toString(),
+            );
+            unawaited(_openRecognitionSearch(navigatorContext, match, pendingResultId: resultId));
+          } else {
+            ScaffoldMessenger.of(navigatorContext).showSnackBar(
+              SnackBar(content: Text(action['message']?.toString() ?? 'Music recognition did not return a result.')),
+            );
+            await AndroidEntrypointService.clearPendingRecognitionResult(resultId);
+          }
+      }
+    } finally {
+      _handlingAndroidAction = false;
+    }
+  }
+
+  Future<void> _openSharedContent(String text) async {
+    late final AndroidSharedContent shared;
+    try {
+      shared = await AndroidSharedContentService().resolve(text);
+    } catch (error) {
+      final context = _navigatorKey.currentState?.overlay?.context;
+      if (!mounted || context == null || WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        rethrow;
+      }
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(SnackBar(content: Text('Could not read the shared content: $error')));
+      return;
+    }
+
+    final navigatorContext = _navigatorKey.currentState?.overlay?.context;
+    if (!mounted || navigatorContext == null || WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      throw StateError('Resonance navigation is not ready.');
+    }
+    if (shared.kind == AndroidSharedContentKind.playlist) {
+      final future = Navigator.push<bool>(
+        navigatorContext,
+        MaterialPageRoute(builder: (_) => ExternalPlaylistImportScreen(initialUrl: shared.value, autoFetch: true)),
+      );
+      unawaited(
+        future.then((imported) async {
+          if (imported == true && mounted) await _loadPlaylistFromDisk();
+        }),
+      );
+      return;
+    }
+    final capturedNumber = activePlaylistNumber;
+    final capturedName = playlistNames[capturedNumber] ?? 'Playlist $capturedNumber';
+    final future = Navigator.push<String?>(
+      navigatorContext,
+      MaterialPageRoute(
+        builder: (_) =>
+            YoutubeSearchScreen(playlistNumber: capturedNumber, playlistName: capturedName, initialQuery: shared.value),
+      ),
+    );
+    unawaited(
+      future.then((addedTrack) async {
+        if (!mounted) return;
+        await _loadPlaylistFromDisk();
+        if (addedTrack != null && mounted) await _revealCurrentTrack(addedTrack);
+      }),
+    );
+  }
+
+  Future<void> _completeExit(PlayerHandler handler) async {
+    await Future.wait([
+      _shutdownStep('essential state save', handler.saveState, const Duration(milliseconds: 220)),
+      _shutdownStep('audio pause', handler.pause, const Duration(milliseconds: 120)),
+    ]);
 
     if (Platform.isWindows) {
-      unawaited(MediaKeysService.unregister().timeout(const Duration(milliseconds: 500)).catchError((_) {}));
+      await _shutdownStep('media-key unregister', MediaKeysService.unregister, const Duration(milliseconds: 100));
     }
-
     if (_isDesktop) {
-      unawaited(trayManager.destroy());
-      unawaited(windowManager.destroy());
+      await _shutdownStep('tray destroy', trayManager.destroy, const Duration(milliseconds: 100));
+      _shutdownLog('windowManager.destroy starting');
+      await _shutdownStep('windowManager.destroy', windowManager.destroy, const Duration(milliseconds: 180));
+      _shutdownLog('windowManager.destroy returned');
     }
 
-    // Native audio/Discord workers can keep the Windows runner alive after
-    // the window is gone. Give fire-and-forget preference writes one event
-    // turn, then terminate deterministically.
-    Future.delayed(const Duration(milliseconds: 80), () => exit(0));
+    _shutdownLog('bounded cleanup finished; final process exit');
+    exit(0);
+  }
+
+  Future<void> _shutdownStep(String label, Future<void> Function() action, Duration timeout) async {
+    final started = DateTime.now();
+    try {
+      await action().timeout(timeout);
+      _shutdownLog('$label finished in ${DateTime.now().difference(started).inMilliseconds} ms');
+    } catch (error) {
+      _shutdownLog('$label stopped at ${DateTime.now().difference(started).inMilliseconds} ms: $error');
+    }
   }
 
   @override
@@ -834,7 +1024,8 @@ class _MainAppState extends State<MainApp> {
             itemKeyForIndex: _trackItemKey,
             onTrackDeleted: (index, trackPath) async {
               setState(() => playlist.removeAt(index));
-              await FileService().removeFromPlaylist(trackPath);
+              await FileService().removeFromPlaylist(trackPath, playlistIndex: index);
+              widget.handler.removeTrackFromActivePlaybackOrder(trackPath);
             },
             onTrackDeletedEverywhere: (trackPath) => unawaited(_deleteTrackEverywhere(trackPath)),
             onReorder: _handleReorder,
@@ -853,7 +1044,7 @@ class _MainAppState extends State<MainApp> {
       child: KeyedSubtree(key: ValueKey('$activePlaylistNumber-$isLoading'), child: trackListWidget),
     );
 
-    return Column(
+    final library = Column(
       children: [
         // ── Toolbar row ──
         _buildToolbar(nestedContext),
@@ -870,6 +1061,7 @@ class _MainAppState extends State<MainApp> {
                       DropZone(
                         onFileAdded: (newPath) {
                           setState(() => playlist.add(newPath));
+                          widget.handler.playbackModeRevision.value++;
                         },
                         child: animatedTrackList,
                       ),
@@ -884,10 +1076,62 @@ class _MainAppState extends State<MainApp> {
         AlbumCover(
           onTap: _handleNowPlayingTap,
           onArtworkTap: _handleNowPlayingArtworkTap,
+          onQueueRequested: _toggleUpcomingQueue,
           artworkRevision: _artworkRevision,
         ),
         PlayerControls(),
       ],
+    );
+    if (!Platform.isWindows || !_queueDrawerOpen) return library;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final drawerWidth = (constraints.maxWidth * 0.30).clamp(280.0, 360.0);
+        return Row(
+          children: [
+            Expanded(child: library),
+            SizedBox(
+              width: drawerWidth,
+              child: UpcomingQueuePanel(
+                mediaItemStream: widget.handler.mediaItem,
+                initialMediaItem: widget.handler.mediaItem.value,
+                revision: widget.handler.playbackModeRevision,
+                loadSnapshot: widget.handler.playbackQueueSnapshot,
+                onPlay: widget.handler.playPlaybackQueueEntry,
+                onClose: _toggleUpcomingQueue,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _toggleUpcomingQueue() {
+    if (Platform.isWindows) {
+      setState(() => _queueDrawerOpen = !_queueDrawerOpen);
+      return;
+    }
+    if (!Platform.isAndroid) return;
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      enableDrag: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        final height = MediaQuery.sizeOf(sheetContext).height;
+        return SizedBox(
+          height: (height * 0.62).clamp(360.0, 560.0),
+          child: UpcomingQueuePanel(
+            compact: true,
+            mediaItemStream: widget.handler.mediaItem,
+            initialMediaItem: widget.handler.mediaItem.value,
+            revision: widget.handler.playbackModeRevision,
+            loadSnapshot: widget.handler.playbackQueueSnapshot,
+            onClose: () => Navigator.pop(sheetContext),
+          ),
+        );
+      },
     );
   }
 
@@ -1012,7 +1256,10 @@ class _MainAppState extends State<MainApp> {
 
   Future<void> _importLocalTracks(BuildContext context) async {
     await ImportTrackButton.selectFiles(context, (newPath) {
-      if (mounted) setState(() => playlist.add(newPath));
+      if (mounted) {
+        setState(() => playlist.add(newPath));
+        widget.handler.playbackModeRevision.value++;
+      }
     });
   }
 
@@ -1030,13 +1277,25 @@ class _MainAppState extends State<MainApp> {
     if (addedTrack != null && mounted) await _revealCurrentTrack(addedTrack);
   }
 
-  Future<void> _identifySong(BuildContext context) async {
-    final match = await showMusicRecognitionDialog(context);
+  Future<void> _identifySong(
+    BuildContext context, {
+    MusicRecognitionSource? initialSource,
+    bool tileTriggered = false,
+  }) async {
+    final match = await showMusicRecognitionDialog(context, initialSource: initialSource, tileTriggered: tileTriggered);
     if (!mounted || match == null) return;
 
+    await _openRecognitionSearch(context, match);
+  }
+
+  Future<void> _openRecognitionSearch(
+    BuildContext context,
+    MusicRecognitionResult match, {
+    String? pendingResultId,
+  }) async {
     final capturedNumber = activePlaylistNumber;
     final capturedName = playlistNames[capturedNumber] ?? 'Playlist $capturedNumber';
-    final addedTrack = await Navigator.push<String?>(
+    final route = Navigator.push<String?>(
       context,
       MaterialPageRoute<String?>(
         builder: (_) => YoutubeSearchScreen(
@@ -1047,6 +1306,10 @@ class _MainAppState extends State<MainApp> {
         ),
       ),
     );
+    if (pendingResultId != null) {
+      await AndroidEntrypointService.clearPendingRecognitionResult(pendingResultId);
+    }
+    final addedTrack = await route;
     if (!mounted) return;
     await _loadPlaylistFromDisk();
     if (addedTrack != null && mounted) await _revealCurrentTrack(addedTrack);

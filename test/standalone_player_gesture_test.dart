@@ -8,15 +8,16 @@ void main() {
     expect(standalonePlayerSwipeAction(const Offset(-120, 0)), StandalonePlayerSwipeAction.next);
     expect(standalonePlayerSwipeAction(const Offset(120, 0)), StandalonePlayerSwipeAction.previous);
     expect(standalonePlayerSwipeAction(const Offset(0, 120)), StandalonePlayerSwipeAction.exit);
-    expect(standalonePlayerSwipeAction(const Offset(0, -120)), isNull);
+    expect(standalonePlayerSwipeAction(const Offset(0, -120)), StandalonePlayerSwipeAction.queue);
     expect(standalonePlayerSwipeAction(const Offset(30, 0)), isNull);
     expect(standalonePlayerSwipeAction(const Offset(80, 75)), isNull);
   });
 
-  testWidgets('touch swipes invoke next, previous, and exit exactly once', (tester) async {
+  testWidgets('touch swipes invoke next, previous, queue, and exit exactly once', (tester) async {
     var nextCount = 0;
     var previousCount = 0;
     bool? previousRestartCurrent;
+    var queueCount = 0;
     var exitCount = 0;
     await tester.pumpWidget(
       _GestureHarness(
@@ -25,6 +26,7 @@ void main() {
           previousCount++;
           previousRestartCurrent = restartCurrent;
         },
+        onQueue: () => queueCount++,
         onExit: () => exitCount++,
       ),
     );
@@ -32,19 +34,26 @@ void main() {
     final surface = find.byKey(const Key('gesture-test-surface'));
     await tester.drag(surface, const Offset(-160, 0));
     await tester.drag(surface, const Offset(160, 0));
+    await tester.drag(surface, const Offset(0, -160));
     await tester.drag(surface, const Offset(0, 160));
     await tester.pump();
 
     expect(nextCount, 1);
     expect(previousCount, 1);
     expect(previousRestartCurrent, isFalse);
+    expect(queueCount, 1);
     expect(exitCount, 1);
   });
 
   testWidgets('mouse drag invokes the same swipe callbacks on Windows', (tester) async {
     var nextCount = 0;
     await tester.pumpWidget(
-      _GestureHarness(onNext: () => nextCount++, onPrevious: ({required restartCurrent}) {}, onExit: () {}),
+      _GestureHarness(
+        onNext: () => nextCount++,
+        onPrevious: ({required restartCurrent}) {},
+        onQueue: () {},
+        onExit: () {},
+      ),
     );
 
     final center = tester.getCenter(find.byKey(const Key('gesture-test-surface')));
@@ -60,9 +69,10 @@ void main() {
 class _GestureHarness extends StatelessWidget {
   final VoidCallback onNext;
   final void Function({required bool restartCurrent}) onPrevious;
+  final VoidCallback onQueue;
   final VoidCallback onExit;
 
-  const _GestureHarness({required this.onNext, required this.onPrevious, required this.onExit});
+  const _GestureHarness({required this.onNext, required this.onPrevious, required this.onQueue, required this.onExit});
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -71,6 +81,7 @@ class _GestureHarness extends StatelessWidget {
         key: const Key('gesture-test-surface'),
         onNext: onNext,
         onPrevious: onPrevious,
+        onQueue: onQueue,
         onExit: onExit,
         child: const SizedBox.expand(),
       ),

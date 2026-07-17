@@ -7,14 +7,16 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/widgets/player/audio_visualizer.dart';
 
 class AlbumCover extends StatelessWidget {
   final ValueChanged<String>? onTap;
   final ValueChanged<String>? onArtworkTap;
+  final VoidCallback? onQueueRequested;
   final int artworkRevision;
-  const AlbumCover({super.key, this.onTap, this.onArtworkTap, this.artworkRevision = 0});
+  const AlbumCover({super.key, this.onTap, this.onArtworkTap, this.onQueueRequested, this.artworkRevision = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -30,38 +32,53 @@ class AlbumCover extends StatelessWidget {
         final rawTitle = item?.title ?? '';
         final title = rawTitle.isNotEmpty ? rawTitle : 'Nothing playing';
         final artist = item?.artist ?? '';
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (context.mounted) context.read<ThemeProvider>().updatePlayerArtwork(item?.artUri);
+        });
 
-        return ValueListenableBuilder<PlaybackVisualState>(
-          valueListenable: handler.playbackVisualNotifier,
-          builder: (context, playback, _) {
-            final isPlaying = playback.playing;
-            final isLoading = playback.loading;
+        return Consumer<ThemeProvider>(
+          builder: (context, themeProvider, _) {
+            final theme = Theme.of(context);
+            final accent = themeProvider.playerAccent(theme.colorScheme.primary, theme.brightness);
+            final secondary = themeProvider.playerSecondary(theme.colorScheme.secondary, theme.brightness);
+            return ValueListenableBuilder<PlaybackVisualState>(
+              valueListenable: handler.playbackVisualNotifier,
+              builder: (context, playback, _) {
+                final isPlaying = playback.playing;
+                final isLoading = playback.loading;
+                final maxW = screenWidth < 500 ? (screenWidth - 32.0).clamp(0.0, double.infinity) : 640.0;
 
-            final maxW = screenWidth < 500 ? (screenWidth - 32.0).clamp(0.0, double.infinity) : 640.0;
-
-            return Center(
-              child: Container(
-                margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                constraints: BoxConstraints(maxWidth: maxW),
-                width: double.infinity,
-                child: PlaybackPulse(
-                  active: isPlaying && !isLoading,
-                  borderRadius: 16,
-                  reach: 14,
-                  amplitudeProvider: () => handler.visualizerAmplitude,
-                  child: NowPlayingCard(
-                    title: title,
-                    artist: artist,
-                    artworkUri: item?.artUri,
-                    isPlaying: isPlaying,
-                    isLoading: isLoading,
-                    hasTrack: item != null,
-                    isDark: isDark,
-                    onTap: item == null ? null : () => onTap?.call(path),
-                    onArtworkTap: item == null ? null : () => onArtworkTap?.call(path),
+                return Center(
+                  child: Container(
+                    margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                    constraints: BoxConstraints(maxWidth: maxW),
+                    width: double.infinity,
+                    child: PlaybackPulse(
+                      active: isPlaying && !isLoading,
+                      borderRadius: 16,
+                      reach: 14,
+                      color: accent,
+                      amplitudeProvider: () => handler.visualizerAmplitude,
+                      child: NowPlayingCard(
+                        title: title,
+                        artist: artist,
+                        artworkUri: item?.artUri,
+                        isPlaying: isPlaying,
+                        isLoading: isLoading,
+                        hasTrack: item != null,
+                        isDark: isDark,
+                        playerAccent: accent,
+                        playerSecondary: secondary,
+                        tintSurface: themeProvider.hasArtworkPalette && !themeProvider.preserveOledPlayerSurface,
+                        showQueueButton: Platform.isWindows && item != null && onQueueRequested != null,
+                        onQueueTap: onQueueRequested,
+                        onTap: item == null ? null : () => onTap?.call(path),
+                        onArtworkTap: item == null ? null : () => onArtworkTap?.call(path),
+                      ),
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
             );
           },
         );
@@ -87,6 +104,11 @@ class NowPlayingCard extends StatelessWidget {
   final bool isDark;
   final VoidCallback? onTap;
   final VoidCallback? onArtworkTap;
+  final Color? playerAccent;
+  final Color? playerSecondary;
+  final bool tintSurface;
+  final bool showQueueButton;
+  final VoidCallback? onQueueTap;
 
   const NowPlayingCard({
     super.key,
@@ -99,11 +121,17 @@ class NowPlayingCard extends StatelessWidget {
     required this.isDark,
     required this.onTap,
     required this.onArtworkTap,
+    this.playerAccent,
+    this.playerSecondary,
+    this.tintSurface = false,
+    this.showQueueButton = false,
+    this.onQueueTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
+    final primary = playerAccent ?? Theme.of(context).colorScheme.primary;
+    final secondary = playerSecondary ?? primary;
     final surface = Theme.of(context).colorScheme.surface;
     final border = Theme.of(context).colorScheme.outline;
     final textPrimary = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A);
@@ -122,7 +150,17 @@ class NowPlayingCard extends StatelessWidget {
           curve: Curves.easeOut,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
-            color: surface,
+            color: tintSurface ? null : surface,
+            gradient: tintSurface
+                ? LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color.alphaBlend(primary.withValues(alpha: isDark ? 0.18 : 0.10), surface),
+                      Color.alphaBlend(secondary.withValues(alpha: isDark ? 0.11 : 0.06), surface),
+                    ],
+                  )
+                : null,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: isActive ? primary.withValues(alpha: 0.4) : border, width: isActive ? 1.5 : 1),
           ),
@@ -186,6 +224,16 @@ class NowPlayingCard extends StatelessWidget {
               ] else if (isPlaying) ...[
                 const SizedBox(width: 12),
                 _PlayingBadge(),
+              ],
+              if (showQueueButton) ...[
+                const SizedBox(width: 6),
+                IconButton(
+                  key: const Key('upcoming-queue-button'),
+                  onPressed: onQueueTap,
+                  tooltip: 'Upcoming tracks',
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(Icons.queue_music_rounded, size: 20, color: primary),
+                ),
               ],
             ],
           ),
