@@ -17,6 +17,7 @@ class TrackSourceRepository {
       _isWindowsOverride = isWindowsOverride;
 
   static String canonicalUrlFor(String videoId) => 'https://www.youtube.com/watch?v=$videoId';
+  static String thumbnailUrlFor(String videoId) => 'https://i.ytimg.com/vi/$videoId/hqdefault.jpg';
 
   static bool isValidYoutubeVideoId(String value) => youtubeVideoIdPattern.hasMatch(value);
 

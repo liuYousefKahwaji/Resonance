@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:resonance/app/theme.dart';
 import 'package:resonance/services/artwork_palette_service.dart';
@@ -8,6 +10,7 @@ class ThemeProvider extends ChangeNotifier {
   ResonanceThemeStyle _themeStyle = ResonanceThemeStyle.obsidian;
   bool _fullThemePalette = true;
   bool _artworkPlayerColors = false;
+  bool _windowsNativeControls = Platform.isWindows;
   ArtworkPalette? _artworkPalette;
   final ArtworkPaletteService _artworkPaletteService = ArtworkPaletteService();
   String? _currentArtworkKey;
@@ -18,6 +21,7 @@ class ThemeProvider extends ChangeNotifier {
   ResonanceThemeStyle get themeStyle => _themeStyle;
   bool get fullThemePalette => _fullThemePalette;
   bool get artworkPlayerColors => _artworkPlayerColors;
+  bool get windowsNativeControls => _windowsNativeControls;
   bool get hasArtworkPalette => _artworkPlayerColors && _artworkPalette != null;
   bool get preserveOledPlayerSurface => _themeStyle == ResonanceThemeStyle.voidTheme;
 
@@ -30,6 +34,7 @@ class ThemeProvider extends ChangeNotifier {
     final isDark = prefs.getBool('is_dark_mode') ?? false;
     _themeStyle = ResonanceThemeStyleLabel.fromStorage(prefs.getString('theme_style'));
     _fullThemePalette = prefs.getBool('theme_full_palette') ?? true;
+    _windowsNativeControls = prefs.getBool('windows_native_controls') ?? Platform.isWindows;
     final artworkPlayerColors = prefs.getBool('artwork_player_colors') ?? false;
     if (artworkPlayerColors && !_artworkPlayerColors && _currentArtworkKey != null) {
       // The player can publish its current artwork before async preferences
@@ -77,6 +82,14 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('artwork_player_colors', enabled);
+  }
+
+  Future<void> setWindowsNativeControls(bool enabled) async {
+    if (_windowsNativeControls == enabled) return;
+    _windowsNativeControls = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('windows_native_controls', enabled);
   }
 
   Future<void> updatePlayerArtwork(Uri? artworkUri) async {

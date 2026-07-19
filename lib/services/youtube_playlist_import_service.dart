@@ -16,14 +16,21 @@ class YoutubePlaylistImportEntry {
   final String videoId;
   final String title;
   final String artist;
+  final String? thumbnailUrl;
 
-  const YoutubePlaylistImportEntry({required this.videoId, required this.title, required this.artist});
+  const YoutubePlaylistImportEntry({
+    required this.videoId,
+    required this.title,
+    required this.artist,
+    this.thumbnailUrl,
+  });
 
   YoutubeSearchCandidate asCandidate() => YoutubeSearchCandidate(
     title: title,
     uploader: artist,
     url: TrackSourceRepository.canonicalUrlFor(videoId),
     videoId: videoId,
+    thumbnailUrl: thumbnailUrl ?? TrackSourceRepository.thumbnailUrlFor(videoId),
   );
 }
 

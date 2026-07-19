@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <variant>
+#include <vector>
 #include <shellapi.h>
 
 namespace resonance {
@@ -96,6 +97,157 @@ HICON CreateMediaGlyphIcon(int kind) {
   DeleteObject(mask_bitmap);
   DeleteObject(color_bitmap);
   return icon;
+}
+
+bool IsExtendedKey(WORD key) {
+  switch (key) {
+    case VK_RMENU:
+    case VK_RCONTROL:
+    case VK_INSERT:
+    case VK_DELETE:
+    case VK_HOME:
+    case VK_END:
+    case VK_PRIOR:
+    case VK_NEXT:
+    case VK_LEFT:
+    case VK_RIGHT:
+    case VK_UP:
+    case VK_DOWN:
+    case VK_NUMLOCK:
+    case VK_DIVIDE:
+      return true;
+    default:
+      return false;
+  }
+}
+
+INPUT KeyboardInput(WORD key, bool key_up, bool force_extended = false) {
+  INPUT input{};
+  input.type = INPUT_KEYBOARD;
+  const UINT scan_code = MapVirtualKeyW(key, MAPVK_VK_TO_VSC_EX);
+  if (scan_code != 0) {
+    input.ki.wScan = static_cast<WORD>(scan_code & 0xFF);
+    input.ki.dwFlags = KEYEVENTF_SCANCODE |
+                       (key_up ? KEYEVENTF_KEYUP : 0) |
+                       (((scan_code & 0xFF00) != 0 || force_extended || IsExtendedKey(key))
+                            ? KEYEVENTF_EXTENDEDKEY
+                            : 0);
+  } else {
+    input.ki.wVk = key;
+    input.ki.dwFlags = (key_up ? KEYEVENTF_KEYUP : 0) |
+                       ((force_extended || IsExtendedKey(key)) ? KEYEVENTF_EXTENDEDKEY : 0);
+  }
+  return input;
+}
+
+WORD VirtualKeyFromHidUsage(int64_t hid_usage) {
+  // Flutter physical keyboard identifiers use the USB HID usage with the
+  // usage page in the upper 16 bits. Only keyboard-page keys are valid here.
+  if (((hid_usage >> 16) & 0xFFFF) != 0x07) return 0;
+  const WORD usage = static_cast<WORD>(hid_usage & 0xFFFF);
+  if (usage >= 0x04 && usage <= 0x1D) return static_cast<WORD>('A' + usage - 0x04);
+  if (usage >= 0x1E && usage <= 0x26) return static_cast<WORD>('1' + usage - 0x1E);
+  if (usage == 0x27) return '0';
+  if (usage >= 0x3A && usage <= 0x45) return static_cast<WORD>(VK_F1 + usage - 0x3A);
+  if (usage >= 0x68 && usage <= 0x73) return static_cast<WORD>(VK_F13 + usage - 0x68);
+  if (usage >= 0x59 && usage <= 0x61) return static_cast<WORD>(VK_NUMPAD1 + usage - 0x59);
+  switch (usage) {
+    case 0x28: return VK_RETURN;
+    case 0x29: return VK_ESCAPE;
+    case 0x2A: return VK_BACK;
+    case 0x2B: return VK_TAB;
+    case 0x2C: return VK_SPACE;
+    case 0x2D: return VK_OEM_MINUS;
+    case 0x2E: return VK_OEM_PLUS;
+    case 0x2F: return VK_OEM_4;
+    case 0x30: return VK_OEM_6;
+    case 0x31: return VK_OEM_5;
+    case 0x32: return VK_OEM_102;
+    case 0x33: return VK_OEM_1;
+    case 0x34: return VK_OEM_7;
+    case 0x35: return VK_OEM_3;
+    case 0x36: return VK_OEM_COMMA;
+    case 0x37: return VK_OEM_PERIOD;
+    case 0x38: return VK_OEM_2;
+    case 0x39: return VK_CAPITAL;
+    case 0x46: return VK_SNAPSHOT;
+    case 0x47: return VK_SCROLL;
+    case 0x48: return VK_PAUSE;
+    case 0x49: return VK_INSERT;
+    case 0x4A: return VK_HOME;
+    case 0x4B: return VK_PRIOR;
+    case 0x4C: return VK_DELETE;
+    case 0x4D: return VK_END;
+    case 0x4E: return VK_NEXT;
+    case 0x4F: return VK_RIGHT;
+    case 0x50: return VK_LEFT;
+    case 0x51: return VK_DOWN;
+    case 0x52: return VK_UP;
+    case 0x53: return VK_NUMLOCK;
+    case 0x54: return VK_DIVIDE;
+    case 0x55: return VK_MULTIPLY;
+    case 0x56: return VK_SUBTRACT;
+    case 0x57: return VK_ADD;
+    case 0x58: return VK_RETURN;  // Numpad Enter; marked extended below.
+    case 0x62: return VK_NUMPAD0;
+    case 0x63: return VK_DECIMAL;
+    case 0x64: return VK_OEM_102;
+    case 0x65: return VK_APPS;
+    default: return 0;
+  }
+}
+
+bool SendShortcut(const flutter::EncodableMap& arguments) {
+  const auto key_it = arguments.find(flutter::EncodableValue("keyCode"));
+  if (key_it == arguments.end()) return false;
+  WORD key = 0;
+  if (const auto* value32 = std::get_if<int32_t>(&key_it->second)) {
+    key = static_cast<WORD>(*value32);
+  } else if (const auto* value64 = std::get_if<int64_t>(&key_it->second)) {
+    key = static_cast<WORD>(*value64);
+  }
+  bool key_is_extended = false;
+  const auto hid_it = arguments.find(flutter::EncodableValue("hidUsage"));
+  if (hid_it != arguments.end()) {
+    int64_t hid_usage = 0;
+    if (const auto* value32 = std::get_if<int32_t>(&hid_it->second)) {
+      hid_usage = *value32;
+    } else if (const auto* value64 = std::get_if<int64_t>(&hid_it->second)) {
+      hid_usage = *value64;
+    }
+    const WORD hid_key = VirtualKeyFromHidUsage(hid_usage);
+    if (hid_key != 0) {
+      key = hid_key;
+      key_is_extended = (hid_usage & 0xFFFF) == 0x58;
+    }
+  }
+  if (key == 0) return false;
+
+  std::vector<WORD> modifiers;
+  const auto modifiers_it = arguments.find(flutter::EncodableValue("modifiers"));
+  if (modifiers_it != arguments.end()) {
+    if (const auto* values = std::get_if<flutter::EncodableList>(&modifiers_it->second)) {
+      for (const auto& encoded : *values) {
+        const auto* name = std::get_if<std::string>(&encoded);
+        if (name == nullptr) continue;
+        if (*name == "control") modifiers.push_back(VK_CONTROL);
+        else if (*name == "alt") modifiers.push_back(VK_MENU);
+        else if (*name == "shift") modifiers.push_back(VK_SHIFT);
+        else if (*name == "meta") modifiers.push_back(VK_LWIN);
+      }
+    }
+  }
+
+  std::vector<INPUT> inputs;
+  inputs.reserve(modifiers.size() * 2 + 2);
+  for (WORD modifier : modifiers) inputs.push_back(KeyboardInput(modifier, false));
+  inputs.push_back(KeyboardInput(key, false, key_is_extended));
+  inputs.push_back(KeyboardInput(key, true, key_is_extended));
+  for (auto it = modifiers.rbegin(); it != modifiers.rend(); ++it) {
+    inputs.push_back(KeyboardInput(*it, true));
+  }
+  const UINT sent = ::SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+  return sent == inputs.size();
 }
 
 // Minimal StreamHandler implementation. We avoid relying on the
@@ -407,6 +559,9 @@ void MediaKeysPlugin::HandleMethodCall(
   } else if (call.method_name() == "updateTaskbarPlaying") {
     const auto* value = std::get_if<bool>(call.arguments());
     result->Success(flutter::EncodableValue(value != nullptr && UpdateTaskbarPlayState(*value)));
+  } else if (call.method_name() == "sendShortcut") {
+    const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
+    result->Success(flutter::EncodableValue(arguments != nullptr && SendShortcut(*arguments)));
   } else {
     result->NotImplemented();
   }

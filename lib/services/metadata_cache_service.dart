@@ -3,13 +3,15 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:resonance/services/track_source_repository.dart';
 
 /// Cached metadata for a single track.
 class CachedTrackMetadata {
   final String title;
   final String artist;
+  final String? artworkUrl;
 
-  const CachedTrackMetadata({required this.title, required this.artist});
+  const CachedTrackMetadata({required this.title, required this.artist, this.artworkUrl});
 }
 
 /// Caches extracted track metadata (title/artist) so the library list
@@ -138,12 +140,21 @@ class MetadataCacheService {
     final artist = entry['artist'] as String?;
     if (title == null || artist == null) return null;
 
-    return CachedTrackMetadata(title: title, artist: artist);
+    var artworkUrl = entry['artworkUrl']?.toString().trim();
+    if (_isStreamUrl(filePath) && (artworkUrl == null || artworkUrl.isEmpty)) {
+      final videoId = TrackSourceRepository.videoIdFromUrlOrId(filePath);
+      if (videoId != null) artworkUrl = TrackSourceRepository.thumbnailUrlFor(videoId);
+    }
+    return CachedTrackMetadata(
+      title: title,
+      artist: artist,
+      artworkUrl: artworkUrl?.isNotEmpty == true ? artworkUrl : null,
+    );
   }
 
   /// Stores metadata for [filePath], tagged with the file's current
   /// last-modified time for future invalidation checks.
-  static Future<void> set(String filePath, String title, String artist) async {
+  static Future<void> set(String filePath, String title, String artist, {String? artworkUrl}) async {
     await _ensureLoaded();
 
     int mtime = 0;
@@ -155,7 +166,19 @@ class MetadataCacheService {
       }
     }
 
-    _cache![filePath] = {'title': title, 'artist': artist, 'mtime': mtime, 'isStream': _isStreamUrl(filePath)};
+    final existing = _cache![filePath];
+    final retainedArtwork = artworkUrl?.trim().isNotEmpty == true
+        ? artworkUrl!.trim()
+        : existing is Map
+        ? existing['artworkUrl']?.toString()
+        : null;
+    _cache![filePath] = {
+      'title': title,
+      'artist': artist,
+      'mtime': mtime,
+      'isStream': _isStreamUrl(filePath),
+      if (retainedArtwork?.isNotEmpty == true) 'artworkUrl': retainedArtwork,
+    };
 
     _schedulePersist();
   }

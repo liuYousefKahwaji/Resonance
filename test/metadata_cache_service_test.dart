@@ -37,4 +37,22 @@ void main() {
     final preferences = await SharedPreferences.getInstance();
     expect(preferences.containsKey('track_metadata_cache_v1'), isFalse);
   });
+
+  test('stream artwork persists and legacy YouTube streams derive a thumbnail', () async {
+    await MetadataCacheService.clear();
+    SharedPreferences.setMockInitialValues({});
+    const url = 'https://www.youtube.com/watch?v=bbbbbbbbbbb';
+
+    await MetadataCacheService.set(url, 'Stream title', 'Stream artist', artworkUrl: 'https://img.test/cover.jpg');
+    expect((await MetadataCacheService.get(url))?.artworkUrl, 'https://img.test/cover.jpg');
+
+    await MetadataCacheService.set(url, 'Updated title', 'Stream artist');
+    expect((await MetadataCacheService.get(url))?.artworkUrl, 'https://img.test/cover.jpg');
+
+    await MetadataCacheService.set('https://www.youtube.com/watch?v=ccccccccccc', 'Legacy title', 'Legacy artist');
+    expect(
+      (await MetadataCacheService.get('https://www.youtube.com/watch?v=ccccccccccc'))?.artworkUrl,
+      'https://i.ytimg.com/vi/ccccccccccc/hqdefault.jpg',
+    );
+  });
 }

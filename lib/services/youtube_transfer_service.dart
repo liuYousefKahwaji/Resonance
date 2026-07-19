@@ -15,6 +15,7 @@ class YoutubeSearchCandidate {
   final String url;
   final String videoId;
   final int? durationSeconds;
+  final String? thumbnailUrl;
 
   const YoutubeSearchCandidate({
     required this.title,
@@ -22,6 +23,7 @@ class YoutubeSearchCandidate {
     required this.url,
     required this.videoId,
     this.durationSeconds,
+    this.thumbnailUrl,
   });
 
   String get formattedDuration {
@@ -51,6 +53,7 @@ class YoutubeTransferService {
               url: TrackSourceRepository.canonicalUrlFor(videoId),
               videoId: videoId,
               durationSeconds: result.durationSeconds,
+              thumbnailUrl: result.thumbnailUrl,
             ),
       ];
     }
@@ -65,6 +68,7 @@ class YoutubeTransferService {
               url: TrackSourceRepository.canonicalUrlFor(videoId),
               videoId: videoId,
               durationSeconds: result.durationSeconds,
+              thumbnailUrl: result.thumbnailUrl,
             ),
       ];
     }
@@ -90,12 +94,13 @@ class YoutubeTransferService {
       url: url,
       videoId: videoId,
       durationSeconds: track.durationSeconds,
+      thumbnailUrl: track.thumbnailUrl,
     );
   }
 
   Future<String> rememberStream(YoutubeSearchCandidate candidate) async {
     final url = TrackSourceRepository.canonicalUrlFor(candidate.videoId);
-    await MetadataCacheService.set(url, candidate.title, candidate.uploader);
+    await MetadataCacheService.set(url, candidate.title, candidate.uploader, artworkUrl: candidate.thumbnailUrl);
     return url;
   }
 

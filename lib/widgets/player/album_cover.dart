@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:resonance/app/theme.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
@@ -41,6 +42,7 @@ class AlbumCover extends StatelessWidget {
             final theme = Theme.of(context);
             final accent = themeProvider.playerAccent(theme.colorScheme.primary, theme.brightness);
             final secondary = themeProvider.playerSecondary(theme.colorScheme.secondary, theme.brightness);
+            final windowsNative = useWindowsNativeControls(context);
             return ValueListenableBuilder<PlaybackVisualState>(
               valueListenable: handler.playbackVisualNotifier,
               builder: (context, playback, _) {
@@ -50,12 +52,12 @@ class AlbumCover extends StatelessWidget {
 
                 return Center(
                   child: Container(
-                    margin: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                    margin: EdgeInsets.fromLTRB(16, windowsNative ? 8 : 12, 16, windowsNative ? 8 : 12),
                     constraints: BoxConstraints(maxWidth: maxW),
                     width: double.infinity,
                     child: PlaybackPulse(
                       active: isPlaying && !isLoading,
-                      borderRadius: 16,
+                      borderRadius: windowsNative ? 8 : 16,
                       reach: 14,
                       color: accent,
                       amplitudeProvider: () => handler.visualizerAmplitude,
@@ -136,6 +138,8 @@ class NowPlayingCard extends StatelessWidget {
     final border = Theme.of(context).colorScheme.outline;
     final textPrimary = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A);
     const textMuted = Color(0xFF64748B);
+    final windowsNative = useWindowsNativeControls(context);
+    final cardRadius = windowsNative ? 8.0 : 16.0;
 
     final isActive = isPlaying || isLoading;
 
@@ -144,11 +148,11 @@ class NowPlayingCard extends StatelessWidget {
       child: InkWell(
         key: nowPlayingCardTapKey,
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(cardRadius),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 400),
           curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: EdgeInsets.symmetric(horizontal: windowsNative ? 12 : 16, vertical: windowsNative ? 10 : 14),
           decoration: BoxDecoration(
             color: tintSurface ? null : surface,
             gradient: tintSurface
@@ -161,7 +165,7 @@ class NowPlayingCard extends StatelessWidget {
                     ],
                   )
                 : null,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(cardRadius),
             border: Border.all(color: isActive ? primary.withValues(alpha: 0.4) : border, width: isActive ? 1.5 : 1),
           ),
           child: Row(
@@ -262,15 +266,16 @@ class _AlbumIcon extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bgColor = isDark ? primary.withValues(alpha: 0.15) : primary.withValues(alpha: 0.08);
     final uri = artworkUri;
+    final artworkRadius = useWindowsNativeControls(context) ? 4.0 : 10.0;
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(artworkRadius),
       child: Container(
         width: 42,
         height: 42,
         decoration: BoxDecoration(
           color: bgColor,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(artworkRadius),
           border: Border.all(
             color: (isPlaying || isLoading) ? primary.withValues(alpha: 0.3) : Colors.transparent,
             width: 1,

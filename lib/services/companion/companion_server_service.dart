@@ -10,6 +10,7 @@ import 'package:just_audio/just_audio.dart' show LoopMode;
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/services/companion/companion_protocol.dart';
+import 'package:resonance/services/companion/discord_keybind_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class CompanionApprovedDevice {
@@ -51,6 +52,7 @@ class CompanionServerService extends ChangeNotifier {
   CompanionServerService._();
 
   static final CompanionServerService instance = CompanionServerService._();
+  final DiscordKeybindService _discordKeybinds = const DiscordKeybindService();
   static const _enabledKey = 'companion_server_enabled';
   static const _devicesKey = 'companion_approved_devices_v1';
   static const int defaultPort = 45873;
@@ -355,6 +357,14 @@ class CompanionServerService extends ChangeNotifier {
         final entry = _queueEntries[id];
         if (entry == null) throw const FormatException('That queue item is no longer available');
         await handler.playPlaybackQueueEntry(entry);
+      case companionToggleMuteCommand:
+        if (!await _discordKeybinds.trigger(DiscordKeybindAction.toggleMute)) {
+          throw StateError('Windows could not send the Discord mute shortcut');
+        }
+      case companionToggleDeafenCommand:
+        if (!await _discordKeybinds.trigger(DiscordKeybindAction.toggleDeafen)) {
+          throw StateError('Windows could not send the Discord deafen shortcut');
+        }
       default:
         throw const FormatException('Unknown companion command');
     }

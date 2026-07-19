@@ -1,5 +1,24 @@
 import 'package:flutter/material.dart';
 
+@immutable
+class ResonancePlatformTheme extends ThemeExtension<ResonancePlatformTheme> {
+  final bool windowsNativeControls;
+
+  const ResonancePlatformTheme({required this.windowsNativeControls});
+
+  @override
+  ResonancePlatformTheme copyWith({bool? windowsNativeControls}) =>
+      ResonancePlatformTheme(windowsNativeControls: windowsNativeControls ?? this.windowsNativeControls);
+
+  @override
+  ResonancePlatformTheme lerp(covariant ResonancePlatformTheme? other, double t) {
+    return t < 0.5 ? this : (other ?? this);
+  }
+}
+
+bool useWindowsNativeControls(BuildContext context) =>
+    Theme.of(context).extension<ResonancePlatformTheme>()?.windowsNativeControls ?? false;
+
 enum ResonanceThemeStyle { obsidian, jade, cobalt, magma, voidTheme }
 
 extension ResonanceThemeStyleLabel on ResonanceThemeStyle {
@@ -131,7 +150,12 @@ _Palette _palette(ResonanceThemeStyle style) => switch (style) {
   ),
 };
 
-ThemeData buildResonanceTheme(ResonanceThemeStyle style, Brightness brightness, {bool fullPalette = true}) {
+ThemeData buildResonanceTheme(
+  ResonanceThemeStyle style,
+  Brightness brightness, {
+  bool fullPalette = true,
+  bool windowsNativeControls = false,
+}) {
   final palette = _palette(style);
   final dark = brightness == Brightness.dark;
   final primary = dark ? palette.darkPrimary : palette.lightPrimary;
@@ -164,6 +188,15 @@ ThemeData buildResonanceTheme(ResonanceThemeStyle style, Brightness brightness, 
       : dark
       ? const Color(0xFF30303A)
       : const Color(0xFFD8DCE5);
+  final controlRadius = windowsNativeControls ? 5.0 : 10.0;
+  final surfaceRadius = windowsNativeControls ? 8.0 : 14.0;
+  final controlShape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(controlRadius));
+  final appBackground = windowsNativeControls
+      ? Color.alphaBlend(primary.withValues(alpha: dark ? 0.035 : 0.025), bgBase)
+      : bgBase;
+  final appSurface = windowsNativeControls
+      ? Color.alphaBlend(primary.withValues(alpha: dark ? 0.025 : 0.018), bgSurface)
+      : bgSurface;
 
   final scheme =
       ColorScheme.fromSeed(
@@ -171,36 +204,71 @@ ThemeData buildResonanceTheme(ResonanceThemeStyle style, Brightness brightness, 
         brightness: brightness,
         primary: primary,
         secondary: secondary,
-        surface: bgSurface,
+        surface: appSurface,
       ).copyWith(
         onSurface: textPrimary,
         onSurfaceVariant: textMuted,
         outline: border,
         surfaceContainerHigh: bgElevated,
         surfaceContainerHighest: bgHighest,
+        surfaceContainerLow: appBackground,
       );
 
   return ThemeData(
     brightness: brightness,
-    scaffoldBackgroundColor: bgBase,
-    cardColor: bgSurface,
+    useMaterial3: true,
+    fontFamily: windowsNativeControls ? 'Segoe UI' : null,
+    visualDensity: windowsNativeControls ? const VisualDensity(horizontal: -1, vertical: -1) : VisualDensity.standard,
+    materialTapTargetSize: windowsNativeControls ? MaterialTapTargetSize.shrinkWrap : MaterialTapTargetSize.padded,
+    splashFactory: windowsNativeControls ? NoSplash.splashFactory : null,
+    hoverColor: primary.withValues(alpha: dark ? 0.11 : 0.07),
+    focusColor: primary.withValues(alpha: dark ? 0.18 : 0.12),
+    scaffoldBackgroundColor: appBackground,
+    canvasColor: appSurface,
+    cardColor: appSurface,
     colorScheme: scheme,
-    appBarTheme: AppBarTheme(backgroundColor: bgBase, elevation: 0, surfaceTintColor: Colors.transparent),
-    cardTheme: CardThemeData(
-      color: bgSurface,
+    extensions: [ResonancePlatformTheme(windowsNativeControls: windowsNativeControls)],
+    appBarTheme: AppBarTheme(
+      backgroundColor: windowsNativeControls ? appSurface : appBackground,
+      foregroundColor: textPrimary,
       elevation: 0,
+      scrolledUnderElevation: 0,
+      centerTitle: windowsNativeControls ? false : null,
+      toolbarHeight: windowsNativeControls ? 46 : null,
+      titleSpacing: windowsNativeControls ? 14 : null,
+      titleTextStyle: TextStyle(
+        color: textPrimary,
+        fontFamily: windowsNativeControls ? 'Segoe UI' : null,
+        fontSize: windowsNativeControls ? 16 : 18,
+        fontWeight: FontWeight.w600,
+      ),
+      surfaceTintColor: Colors.transparent,
+      shape: windowsNativeControls ? Border(bottom: BorderSide(color: border)) : null,
+    ),
+    cardTheme: CardThemeData(
+      color: appSurface,
+      elevation: windowsNativeControls ? 1 : 0,
+      shadowColor: windowsNativeControls ? Colors.black.withValues(alpha: dark ? 0.28 : 0.10) : null,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(surfaceRadius),
         side: BorderSide(color: border),
       ),
     ),
-    listTileTheme: ListTileThemeData(textColor: textPrimary, iconColor: textMuted),
+    listTileTheme: ListTileThemeData(
+      textColor: textPrimary,
+      iconColor: textMuted,
+      dense: windowsNativeControls,
+      minVerticalPadding: windowsNativeControls ? 6 : null,
+      horizontalTitleGap: windowsNativeControls ? 12 : null,
+      shape: windowsNativeControls ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)) : null,
+      selectedTileColor: primary.withValues(alpha: dark ? 0.16 : 0.09),
+    ),
     iconTheme: const IconThemeData(color: textMuted),
     dialogTheme: DialogThemeData(
-      backgroundColor: bgSurface,
+      backgroundColor: appSurface,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(windowsNativeControls ? 8 : 20),
         side: BorderSide(color: border),
       ),
     ),
@@ -208,35 +276,76 @@ ThemeData buildResonanceTheme(ResonanceThemeStyle style, Brightness brightness, 
       filled: true,
       fillColor: bgElevated,
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(controlRadius),
         borderSide: BorderSide(color: border),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(controlRadius),
         borderSide: BorderSide(color: border),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(controlRadius),
         borderSide: BorderSide(color: primary, width: 1.5),
       ),
       labelStyle: const TextStyle(color: textMuted),
       hintStyle: TextStyle(color: dark ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
+      contentPadding: windowsNativeControls ? const EdgeInsets.symmetric(horizontal: 11, vertical: 9) : null,
+      prefixIconConstraints: windowsNativeControls ? const BoxConstraints(minWidth: 36, minHeight: 32) : null,
+      suffixIconConstraints: windowsNativeControls ? const BoxConstraints(minWidth: 36, minHeight: 32) : null,
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: primary,
         foregroundColor: Colors.white,
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        minimumSize: windowsNativeControls ? const Size(0, 32) : null,
+        padding: windowsNativeControls ? const EdgeInsets.symmetric(horizontal: 14, vertical: 7) : null,
+        shape: controlShape,
       ),
     ),
-    textButtonTheme: TextButtonThemeData(style: TextButton.styleFrom(foregroundColor: secondary)),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        minimumSize: windowsNativeControls ? const Size(0, 32) : null,
+        padding: windowsNativeControls ? const EdgeInsets.symmetric(horizontal: 14, vertical: 7) : null,
+        shape: controlShape,
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        minimumSize: windowsNativeControls ? const Size(0, 32) : null,
+        padding: windowsNativeControls ? const EdgeInsets.symmetric(horizontal: 14, vertical: 7) : null,
+        shape: controlShape,
+        side: BorderSide(color: border),
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(
+        foregroundColor: secondary,
+        minimumSize: windowsNativeControls ? const Size(0, 30) : null,
+        shape: controlShape,
+      ),
+    ),
+    iconButtonTheme: IconButtonThemeData(
+      style: ButtonStyle(
+        shape: WidgetStatePropertyAll(controlShape),
+        minimumSize: WidgetStatePropertyAll(windowsNativeControls ? const Size.square(32) : const Size.square(40)),
+        padding: WidgetStatePropertyAll(windowsNativeControls ? const EdgeInsets.all(6) : null),
+        backgroundColor: windowsNativeControls
+            ? WidgetStateProperty.resolveWith((states) {
+                if (states.contains(WidgetState.pressed)) return primary.withValues(alpha: dark ? 0.20 : 0.13);
+                if (states.contains(WidgetState.hovered)) return primary.withValues(alpha: dark ? 0.12 : 0.07);
+                return Colors.transparent;
+              })
+            : null,
+      ),
+    ),
     sliderTheme: SliderThemeData(
       activeTrackColor: primary,
       inactiveTrackColor: border,
       thumbColor: primary,
       overlayColor: primary.withValues(alpha: 0.15),
-      trackHeight: 3,
+      trackHeight: windowsNativeControls ? 2 : 3,
+      thumbShape: RoundSliderThumbShape(enabledThumbRadius: windowsNativeControls ? 6 : 10),
     ),
     dividerColor: border,
     dividerTheme: DividerThemeData(color: border, thickness: 1),
@@ -258,6 +367,98 @@ ThemeData buildResonanceTheme(ResonanceThemeStyle style, Brightness brightness, 
         (states) => states.contains(WidgetState.selected) ? Colors.white : textMuted,
       ),
       trackColor: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.selected) ? primary : border),
+      trackOutlineColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected) ? Colors.transparent : textMuted,
+      ),
+    ),
+    scrollbarTheme: ScrollbarThemeData(
+      thickness: WidgetStatePropertyAll(windowsNativeControls ? 5 : 7),
+      radius: Radius.circular(windowsNativeControls ? 2 : 8),
+      thumbVisibility: const WidgetStatePropertyAll(false),
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: appSurface,
+      surfaceTintColor: Colors.transparent,
+      elevation: windowsNativeControls ? 8 : null,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(windowsNativeControls ? 4 : 14),
+        side: windowsNativeControls ? BorderSide(color: border) : BorderSide.none,
+      ),
+      position: windowsNativeControls ? PopupMenuPosition.under : PopupMenuPosition.over,
+    ),
+    menuTheme: MenuThemeData(
+      style: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(appSurface),
+        elevation: WidgetStatePropertyAll(windowsNativeControls ? 8 : null),
+        padding: WidgetStatePropertyAll(windowsNativeControls ? const EdgeInsets.symmetric(vertical: 3) : null),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(windowsNativeControls ? 4 : 14),
+            side: windowsNativeControls ? BorderSide(color: border) : BorderSide.none,
+          ),
+        ),
+      ),
+    ),
+    menuButtonTheme: MenuButtonThemeData(
+      style: ButtonStyle(
+        minimumSize: WidgetStatePropertyAll(windowsNativeControls ? const Size(160, 32) : null),
+        padding: WidgetStatePropertyAll(
+          windowsNativeControls ? const EdgeInsets.symmetric(horizontal: 10, vertical: 6) : null,
+        ),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(windowsNativeControls ? 3 : controlRadius)),
+        ),
+        overlayColor: windowsNativeControls
+            ? WidgetStateProperty.resolveWith((states) {
+                if (states.contains(WidgetState.pressed)) return primary.withValues(alpha: 0.16);
+                if (states.contains(WidgetState.hovered)) return primary.withValues(alpha: 0.09);
+                return Colors.transparent;
+              })
+            : null,
+      ),
+    ),
+    checkboxTheme: CheckboxThemeData(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(windowsNativeControls ? 2 : 4)),
+      side: BorderSide(color: textMuted, width: 1),
+      visualDensity: windowsNativeControls ? VisualDensity.compact : VisualDensity.standard,
+    ),
+    tooltipTheme: TooltipThemeData(
+      waitDuration: windowsNativeControls ? const Duration(milliseconds: 550) : null,
+      decoration: windowsNativeControls
+          ? BoxDecoration(
+              color: dark ? const Color(0xFF2C2C2C) : const Color(0xFFF9F9F9),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: border),
+              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.18), blurRadius: 8)],
+            )
+          : null,
+      textStyle: windowsNativeControls ? TextStyle(color: textPrimary, fontSize: 12) : null,
+    ),
+    bottomSheetTheme: BottomSheetThemeData(
+      backgroundColor: appSurface,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(windowsNativeControls ? 8 : 20)),
+      ),
+    ),
+    navigationBarTheme: NavigationBarThemeData(
+      height: windowsNativeControls ? 48 : null,
+      backgroundColor: appSurface,
+      indicatorColor: primary.withValues(alpha: dark ? 0.22 : 0.12),
+      indicatorShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(windowsNativeControls ? 4 : 16)),
+    ),
+    navigationRailTheme: NavigationRailThemeData(
+      backgroundColor: appSurface,
+      minWidth: windowsNativeControls ? 54 : null,
+      indicatorColor: primary.withValues(alpha: dark ? 0.22 : 0.12),
+      indicatorShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(windowsNativeControls ? 4 : 16)),
+    ),
+    tabBarTheme: TabBarThemeData(
+      dividerColor: border,
+      indicatorSize: TabBarIndicatorSize.tab,
+      indicator: windowsNativeControls ? UnderlineTabIndicator(borderSide: BorderSide(color: primary, width: 2)) : null,
+      labelColor: textPrimary,
+      unselectedLabelColor: textMuted,
     ),
     radioTheme: RadioThemeData(
       fillColor: WidgetStateProperty.resolveWith(

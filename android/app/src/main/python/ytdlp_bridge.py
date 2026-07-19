@@ -90,6 +90,9 @@ def search(query: str) -> str:
             "url": url,
             "duration_seconds": int(duration) if duration else None,
             "thumbnail": thumbnail,
+            "live_status": entry.get("live_status"),
+            "availability": entry.get("availability"),
+            "is_short": "/shorts/" in str(entry.get("original_url") or entry.get("webpage_url") or ""),
         })
 
     return json.dumps(results, ensure_ascii=False)

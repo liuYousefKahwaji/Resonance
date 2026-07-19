@@ -96,4 +96,31 @@ void main() {
     await provider.updatePlayerArtwork(artwork.uri);
     expect(provider.hasArtworkPalette, isTrue);
   });
+
+  test('Windows-native mode changes control geometry without changing the palette', () {
+    final classic = buildResonanceTheme(ResonanceThemeStyle.cobalt, Brightness.dark);
+    final windows = buildResonanceTheme(ResonanceThemeStyle.cobalt, Brightness.dark, windowsNativeControls: true);
+
+    expect(windows.colorScheme.primary, classic.colorScheme.primary);
+    expect(windows.textTheme.bodyMedium?.fontFamily, 'Segoe UI');
+    expect(windows.visualDensity, isNot(classic.visualDensity));
+    expect(windows.sliderTheme.trackHeight, 2);
+    expect(windows.extension<ResonancePlatformTheme>()?.windowsNativeControls, isTrue);
+    expect(windows.appBarTheme.toolbarHeight, 46);
+    expect(windows.appBarTheme.centerTitle, isFalse);
+    expect(windows.inputDecorationTheme.contentPadding, const EdgeInsets.symmetric(horizontal: 11, vertical: 9));
+    expect((windows.checkboxTheme.shape as RoundedRectangleBorder).borderRadius, BorderRadius.circular(2));
+    expect(windows.popupMenuTheme.position, PopupMenuPosition.under);
+  });
+
+  test('Windows-native preference persists independently from the color theme', () async {
+    SharedPreferences.setMockInitialValues({'windows_native_controls': false});
+    final provider = ThemeProvider();
+    await Future<void>.delayed(Duration.zero);
+    expect(provider.windowsNativeControls, isFalse);
+
+    await provider.setWindowsNativeControls(true);
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getBool('windows_native_controls'), isTrue);
+  });
 }

@@ -2,11 +2,14 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:resonance/platform/desktop/hotkey_settings_tile.dart';
 import 'package:resonance/services/companion/companion_client_service.dart';
 import 'package:resonance/services/companion/companion_protocol.dart';
 import 'package:resonance/services/companion/companion_server_service.dart';
+import 'package:resonance/services/companion/discord_keybind_service.dart';
 
 class CompanionScreen extends StatelessWidget {
   const CompanionScreen({super.key});
@@ -28,12 +31,16 @@ class _CompanionServerScreen extends StatefulWidget {
 
 class _CompanionServerScreenState extends State<_CompanionServerScreen> {
   final _server = CompanionServerService.instance;
+  final _discordKeybinds = const DiscordKeybindService();
+  final Map<DiscordKeybindAction, HotKey> _shortcuts = {};
+  DiscordKeybindAction? _shortcutBusy;
 
   @override
   void initState() {
     super.initState();
     _server.addListener(_refresh);
     unawaited(_server.preparePairing());
+    unawaited(_loadShortcuts());
   }
 
   @override
@@ -44,6 +51,42 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
 
   void _refresh() {
     if (mounted) setState(() {});
+  }
+
+  Future<void> _loadShortcuts() async {
+    final loaded = <DiscordKeybindAction, HotKey>{};
+    for (final action in DiscordKeybindAction.values) {
+      loaded[action] = await _discordKeybinds.get(action);
+    }
+    if (mounted) setState(() => _shortcuts.addAll(loaded));
+  }
+
+  Future<void> _recordShortcut(DiscordKeybindAction action) async {
+    final recorded = await recordHotKey(context, requireModifier: false);
+    if (recorded == null) return;
+    await _discordKeybinds.set(action, recorded);
+    if (mounted) setState(() => _shortcuts[action] = recorded);
+  }
+
+  Future<void> _testShortcut(DiscordKeybindAction action) async {
+    if (_shortcutBusy != null) return;
+    setState(() => _shortcutBusy = action);
+    final sent = await _discordKeybinds.trigger(action);
+    if (!mounted) return;
+    setState(() => _shortcutBusy = null);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(sent ? '${action.label} shortcut sent' : 'Windows could not send ${action.label.toLowerCase()}'),
+      ),
+    );
+  }
+
+  Future<void> _resetShortcuts() async {
+    await _discordKeybinds.resetDefaults();
+    await _loadShortcuts();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Discord shortcuts restored')));
+    }
   }
 
   @override
@@ -78,6 +121,39 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
                       const SizedBox(height: 10),
                       Text(_server.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
                     ],
+                    const SizedBox(height: 24),
+                    Row(
+                      children: [
+                        Expanded(child: Text('Discord Controls', style: Theme.of(context).textTheme.titleLarge)),
+                        TextButton.icon(
+                          onPressed: _resetShortcuts,
+                          icon: const Icon(Icons.restore_rounded, size: 18),
+                          label: const Text('Restore defaults'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Card(
+                      child: Column(
+                        children: [
+                          for (var index = 0; index < DiscordKeybindAction.values.length; index++) ...[
+                            if (index > 0) const Divider(height: 1),
+                            _DiscordKeybindTile(
+                              action: DiscordKeybindAction.values[index],
+                              hotKey: _shortcuts[DiscordKeybindAction.values[index]],
+                              testing: _shortcutBusy == DiscordKeybindAction.values[index],
+                              onRecord: () => _recordShortcut(DiscordKeybindAction.values[index]),
+                              onTest: () => _testShortcut(DiscordKeybindAction.values[index]),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'These shortcuts are sent to Windows when the Android Companion buttons are tapped. Discord state is not read or tracked.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                     if (_server.running && payload != null) ...[
                       const SizedBox(height: 16),
                       Text('Pair an Android device', style: Theme.of(context).textTheme.titleLarge),
@@ -163,6 +239,51 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
     String two(int value) => value.toString().padLeft(2, '0');
     return '${local.year}-${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
   }
+}
+
+class _DiscordKeybindTile extends StatelessWidget {
+  final DiscordKeybindAction action;
+  final HotKey? hotKey;
+  final bool testing;
+  final VoidCallback onRecord;
+  final VoidCallback onTest;
+
+  const _DiscordKeybindTile({
+    required this.action,
+    required this.hotKey,
+    required this.testing,
+    required this.onRecord,
+    required this.onTest,
+  });
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    child: Row(
+      children: [
+        Icon(action == DiscordKeybindAction.toggleMute ? Icons.mic_off_rounded : Icons.headset_off_rounded),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(action.label, style: Theme.of(context).textTheme.titleMedium),
+              Text(hotKey == null ? 'Loading…' : formatHotKey(hotKey!), style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+        TextButton(onPressed: onRecord, child: const Text('Record')),
+        const SizedBox(width: 4),
+        OutlinedButton.icon(
+          onPressed: hotKey == null || testing ? null : onTest,
+          icon: testing
+              ? const SizedBox.square(dimension: 14, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.play_arrow_rounded, size: 18),
+          label: const Text('Test'),
+        ),
+      ],
+    ),
+  );
 }
 
 class _CompanionRemoteScreen extends StatefulWidget {
@@ -362,6 +483,28 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                             : null,
                         icon: const Icon(Icons.shuffle_rounded),
                         color: snapshot.shuffle ? Theme.of(context).colorScheme.primary : null,
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 20),
+                  Text('Discord', style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        key: const Key('companion-discord-mute'),
+                        onPressed: _client.connected ? () => _client.sendCommand(companionToggleMuteCommand) : null,
+                        icon: const Icon(Icons.mic_off_rounded),
+                        label: const Text('Toggle mute'),
+                      ),
+                      OutlinedButton.icon(
+                        key: const Key('companion-discord-deafen'),
+                        onPressed: _client.connected ? () => _client.sendCommand(companionToggleDeafenCommand) : null,
+                        icon: const Icon(Icons.headset_off_rounded),
+                        label: const Text('Toggle deafen'),
                       ),
                     ],
                   ),

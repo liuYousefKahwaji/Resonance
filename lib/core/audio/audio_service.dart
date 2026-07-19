@@ -39,6 +39,15 @@ class PlaybackVisualState {
   int get hashCode => Object.hash(trackId, playing, loading);
 }
 
+@visibleForTesting
+double fallbackVisualizerAmplitude(String trackId, Duration position) {
+  final seed = trackId.codeUnits.fold<int>(17, (value, unit) => (value * 31 + unit) & 0x7fffffff);
+  final seconds = position.inMilliseconds / 1000.0;
+  final primary = math.sin(seconds * (2.0 + (seed % 7) * 0.11) + (seed % 19));
+  final secondary = math.sin(seconds * (3.7 + (seed % 5) * 0.09) + (seed % 13) * 0.4);
+  return (0.22 + primary.abs() * 0.34 + secondary.abs() * 0.18).clamp(0.0, 0.82);
+}
+
 /// Loading and buffering are useful feedback for network streams, but local
 /// files must always feel immediately available in the UI. The platform audio
 /// backends may briefly report either state while swapping local sources, so
@@ -201,8 +210,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final envelope = _audioEnvelope;
     final trackId = _audioEnvelopeTrackId;
     final current = mediaItem.value;
-    if (envelope == null || trackId == null || current == null || !_sameTrackId(trackId, current.id)) return 0;
-    return envelope.amplitudeAt(_currentPosition);
+    if (envelope != null && trackId != null && current != null && _sameTrackId(trackId, current.id)) {
+      return envelope.amplitudeAt(_currentPosition);
+    }
+    return current == null ? 0 : fallbackVisualizerAmplitude(current.id, _currentPosition);
   }
 
   bool _sameTrackId(String first, String second) {
@@ -1815,7 +1826,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     String? thumbnailUrl,
   }) async {
     final artworkUri = thumbnailUrl == null || thumbnailUrl.isEmpty ? null : Uri.tryParse(thumbnailUrl);
-    await MetadataCacheService.set(url, title, artist);
+    await MetadataCacheService.set(url, title, artist, artworkUrl: thumbnailUrl);
     await loadTrack(url, title, artist, standalone: true, artworkUri: artworkUri);
     if (!isStandaloneMode ||
         mediaItem.value?.id != url ||
@@ -1965,7 +1976,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   Future<Uri?> _albumArtUri(String path) async {
     if (path.startsWith('http://') || path.startsWith('https://')) {
-      return null;
+      final cached = await MetadataCacheService.get(path);
+      return Uri.tryParse(cached?.artworkUrl ?? '');
     }
     if (_artUriCache.containsKey(path)) return _artUriCache[path];
 

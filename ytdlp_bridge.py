@@ -68,6 +68,9 @@ def search(query: str) -> str:
                 "url":              webpage_url or entry.get("url") or "",
                 "duration_seconds": int(duration) if duration is not None else None,
                 "thumbnail": entry.get("thumbnail") or "",
+                "live_status": entry.get("live_status"),
+                "availability": entry.get("availability"),
+                "is_short": "/shorts/" in str(entry.get("original_url") or entry.get("webpage_url") or ""),
             })
 
     return json.dumps(results)

@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 const int companionProtocolVersion = 1;
+const String companionToggleMuteCommand = 'toggle_mute';
+const String companionToggleDeafenCommand = 'toggle_deafen';
 
 class CompanionPairingInfo {
   final String host;

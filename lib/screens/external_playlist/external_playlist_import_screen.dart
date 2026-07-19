@@ -110,6 +110,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
             url: TrackSourceRepository.canonicalUrlFor(videoId),
             videoId: videoId,
             durationSeconds: track.duration?.inSeconds,
+            thumbnailUrl: TrackSourceRepository.thumbnailUrlFor(videoId),
           );
           matches.add(
             PlaylistSourceMatch(
@@ -176,6 +177,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
             videoId: match.selected!.videoId,
             title: match.selected!.title,
             artist: match.selected!.uploader,
+            thumbnailUrl: match.selected!.thumbnailUrl,
           ),
     ];
     setState(() {

@@ -589,14 +589,14 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     }
   }
 
-  Future<void> _startStream(String url, {String? title, String? artist}) async {
+  Future<void> _startStream(String url, {String? title, String? artist, String? thumbnailUrl}) async {
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     final snackBarBackground = Theme.of(context).colorScheme.surfaceContainerHigh;
     final targetTitle = title ?? 'Streaming Track';
     final targetArtist = artist ?? 'YouTube';
 
-    await MetadataCacheService.set(url, targetTitle, targetArtist);
+    await MetadataCacheService.set(url, targetTitle, targetArtist, artworkUrl: thumbnailUrl);
     final youtubeVideoId = TrackSourceRepository.videoIdFromUrlOrId(url);
     if (youtubeVideoId != null) {
       await const TrackSourceRepository().saveSource(
@@ -634,7 +634,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     }
   }
 
-  Future<({String title, String artist})> _fetchMetadata(String url) async {
+  Future<({String title, String artist, String? thumbnailUrl})> _fetchMetadata(String url) async {
     try {
       final binDir = await _downloader.binDirPath;
       final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
@@ -666,10 +666,16 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
         return (
           title: json['title'] as String? ?? 'Streaming Track',
           artist: json['uploader'] as String? ?? json['channel'] as String? ?? 'YouTube',
+          thumbnailUrl: json['thumbnail']?.toString(),
         );
       }
     } catch (_) {}
-    return (title: 'Streaming Track', artist: 'YouTube');
+    final videoId = TrackSourceRepository.videoIdFromUrlOrId(url);
+    return (
+      title: 'Streaming Track',
+      artist: 'YouTube',
+      thumbnailUrl: videoId == null ? null : TrackSourceRepository.thumbnailUrlFor(videoId),
+    );
   }
 
   Future<void> _startStreamUrl(String url) async {
@@ -684,7 +690,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
     final meta = await _fetchMetadata(url);
     if (!mounted) return;
-    await _startStream(url, title: meta.title, artist: meta.artist);
+    await _startStream(url, title: meta.title, artist: meta.artist, thumbnailUrl: meta.thumbnailUrl);
   }
 
   Future<void> _runSearch() async {
@@ -1022,7 +1028,12 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                     IconButton(
                       icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary),
                       tooltip: 'Stream Now',
-                      onPressed: () => _startStream(result.url, title: result.title, artist: result.artist),
+                      onPressed: () => _startStream(
+                        result.url,
+                        title: result.title,
+                        artist: result.artist,
+                        thumbnailUrl: result.thumbnailUrl,
+                      ),
                     ),
                     // ── Download button ────────────────────────────────
                     IconButton(
@@ -1033,7 +1044,12 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                   ],
                 ),
 
-                onTap: () => _startStream(result.url, title: result.title, artist: result.artist),
+                onTap: () => _startStream(
+                  result.url,
+                  title: result.title,
+                  artist: result.artist,
+                  thumbnailUrl: result.thumbnailUrl,
+                ),
               );
             },
           ),

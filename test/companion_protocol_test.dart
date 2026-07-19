@@ -2,6 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/services/companion/companion_protocol.dart';
 
 void main() {
+  test('Discord actions remain additive semantic protocol v1 commands', () {
+    expect(companionProtocolVersion, 1);
+    expect(companionToggleMuteCommand, 'toggle_mute');
+    expect(companionToggleDeafenCommand, 'toggle_deafen');
+  });
+
   test('pairing codes round-trip endpoint and temporary token', () {
     const source = CompanionPairingInfo(
       host: '192.168.1.25',

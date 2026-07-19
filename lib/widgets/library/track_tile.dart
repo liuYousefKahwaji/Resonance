@@ -21,6 +21,7 @@ import 'dart:typed_data';
 import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:resonance/app/theme.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
@@ -61,6 +62,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
   String? _title;
   String? _artist;
   Uint8List? _coverArt;
+  String? _artworkUrl;
   late final AnimationController _pulseController;
 
   @override
@@ -81,6 +83,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
           _title = null;
           _artist = null;
           _coverArt = null;
+          _artworkUrl = null;
         });
       }
       _loadMetadata();
@@ -133,6 +136,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
       setState(() {
         _title = cached.title;
         _artist = cached.artist;
+        _artworkUrl = cached.artworkUrl;
         _loading = false;
       });
       return;
@@ -381,6 +385,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
+    final tileRadius = useWindowsNativeControls(context) ? 4.0 : 14.0;
     // RepaintBoundary: this tile can redraw (e.g. playing state) without
     // triggering repaints of neighbouring tiles in the list.
     return RepaintBoundary(
@@ -392,7 +397,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
             scale: 1 + wave * 0.012,
             child: DecoratedBox(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(tileRadius),
                 boxShadow: [
                   if (wave > 0)
                     BoxShadow(
@@ -416,6 +421,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
           title: _title,
           artist: _artist,
           coverArt: _coverArt,
+          artworkUrl: _artworkUrl,
           onEditMetadata: _showMetadataEditor,
         ),
       ),
@@ -466,6 +472,7 @@ class _TrackTileContent extends StatelessWidget {
   final String? title;
   final String? artist;
   final Uint8List? coverArt;
+  final String? artworkUrl;
   final void Function(BuildContext, String, String) onEditMetadata;
 
   const _TrackTileContent({
@@ -478,6 +485,7 @@ class _TrackTileContent extends StatelessWidget {
     required this.title,
     required this.artist,
     required this.coverArt,
+    required this.artworkUrl,
     required this.onEditMetadata,
   });
 
@@ -517,6 +525,8 @@ class _TrackTileContent extends StatelessWidget {
     final handler = Provider.of<PlayerHandler>(context, listen: false);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = Theme.of(context).colorScheme.primary;
+    final windowsNative = useWindowsNativeControls(context);
+    final tileRadius = windowsNative ? 4.0 : 12.0;
     final fileName = p.basenameWithoutExtension(trackPath);
     final isStream = trackPath.startsWith('http://') || trackPath.startsWith('https://');
 
@@ -538,7 +548,7 @@ class _TrackTileContent extends StatelessWidget {
         final isPlaying = isCurrentTrack && playback.playing && !isLoading;
 
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: windowsNative ? 2 : 3),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 250),
             curve: Curves.easeOut,
@@ -546,12 +556,12 @@ class _TrackTileContent extends StatelessWidget {
               color: isCurrentTrack
                   ? (isDark ? primary.withValues(alpha: 0.12) : primary.withValues(alpha: 0.06))
                   : Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(tileRadius),
               border: Border.all(
                 color: isCurrentTrack ? primary.withValues(alpha: 0.45) : Theme.of(context).colorScheme.outline,
                 width: isCurrentTrack ? 1.5 : 1,
               ),
-              boxShadow: isCurrentTrack
+              boxShadow: isCurrentTrack && !windowsNative
                   ? [
                       BoxShadow(
                         color: primary.withValues(alpha: isDark ? 0.12 : 0.08),
@@ -566,9 +576,9 @@ class _TrackTileContent extends StatelessWidget {
               child: TrackTapRegion(
                 onTap: () => unawaited(_activateTrack(handler, resolvedTitle, resolvedArtist)),
                 onLongPress: isStream ? null : () => onEditMetadata(context, resolvedTitle, resolvedArtist),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(tileRadius),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  padding: EdgeInsets.symmetric(horizontal: windowsNative ? 10 : 12, vertical: windowsNative ? 8 : 10),
                   child: Row(
                     children: [
                       // ── Drag handle / shuffle cue ─────────────
@@ -599,7 +609,13 @@ class _TrackTileContent extends StatelessWidget {
                       ),
 
                       // ── Icon ─────────────────────────────────
-                      _TrackIcon(isPlaying: isPlaying, isStream: isStream, isLoading: isLoading, coverArt: coverArt),
+                      _TrackIcon(
+                        isPlaying: isPlaying,
+                        isStream: isStream,
+                        isLoading: isLoading,
+                        coverArt: coverArt,
+                        artworkUrl: artworkUrl,
+                      ),
                       const SizedBox(width: 12),
 
                       // ── Title + artist ────────────────────────
@@ -639,12 +655,17 @@ class _TrackTileContent extends StatelessWidget {
                       MenuAnchor(
                         alignmentOffset: const Offset(-196, 4),
                         style: MenuStyle(
-                          elevation: const WidgetStatePropertyAll(10),
+                          elevation: WidgetStatePropertyAll(windowsNative ? 8 : 10),
                           surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
                           shape: WidgetStatePropertyAll(
-                            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(windowsNative ? 4 : 14),
+                              side: windowsNative
+                                  ? BorderSide(color: Theme.of(context).colorScheme.outline)
+                                  : BorderSide.none,
+                            ),
                           ),
-                          padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
+                          padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: windowsNative ? 3 : 6)),
                         ),
                         menuChildren: [
                           MenuItemButton(
@@ -708,12 +729,13 @@ class _SkeletonTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final windowsNative = useWindowsNativeControls(context);
     return Container(
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(windowsNative ? 4 : 12),
         border: Border.all(color: Theme.of(context).colorScheme.outline, width: 1),
       ),
       child: Row(
@@ -765,8 +787,15 @@ class _TrackIcon extends StatelessWidget {
   final bool isStream;
   final bool isLoading;
   final Uint8List? coverArt;
+  final String? artworkUrl;
 
-  const _TrackIcon({required this.isPlaying, this.isStream = false, this.isLoading = false, this.coverArt});
+  const _TrackIcon({
+    required this.isPlaying,
+    this.isStream = false,
+    this.isLoading = false,
+    this.coverArt,
+    this.artworkUrl,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -794,6 +823,8 @@ class _TrackIcon extends StatelessWidget {
               )
             : coverArt != null
             ? ArtworkThumbnail(key: ValueKey('cover-${coverArt!.length}'), bytes: coverArt!, size: 34, borderRadius: 8)
+            : isStream && artworkUrl != null
+            ? _StreamArtworkThumbnail(url: artworkUrl!)
             : Icon(
                 isPlaying ? Icons.graphic_eq_rounded : (isStream ? Icons.sensors_rounded : Icons.music_note_rounded),
                 key: ValueKey(
@@ -809,6 +840,46 @@ class _TrackIcon extends StatelessWidget {
       ),
     );
   }
+}
+
+class _StreamArtworkThumbnail extends StatelessWidget {
+  final String url;
+
+  const _StreamArtworkThumbnail({required this.url});
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(8),
+    child: Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.network(
+          url,
+          fit: BoxFit.cover,
+          cacheWidth: 102,
+          cacheHeight: 102,
+          errorBuilder: (_, __, ___) => ColoredBox(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: const Icon(Icons.sensors_rounded, size: 17),
+          ),
+        ),
+        Positioned(
+          right: 2,
+          bottom: 2,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.88),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(2),
+              child: Icon(Icons.cloud_rounded, size: 9, color: Theme.of(context).colorScheme.primary),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _CoverArtCacheEntry {

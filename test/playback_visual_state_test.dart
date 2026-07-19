@@ -12,4 +12,15 @@ void main() {
     expect(visibleProcessingState(AudioProcessingState.loading, isStream: true), AudioProcessingState.loading);
     expect(visibleProcessingState(AudioProcessingState.buffering, isStream: true), AudioProcessingState.buffering);
   });
+
+  test('missing envelopes use a stable non-zero playback pulse', () {
+    final first = fallbackVisualizerAmplitude('https://youtube.test/watch?v=abcdefghijk', const Duration(seconds: 12));
+    final repeated = fallbackVisualizerAmplitude(
+      'https://youtube.test/watch?v=abcdefghijk',
+      const Duration(seconds: 12),
+    );
+    expect(first, greaterThan(0));
+    expect(repeated, first);
+    expect(first, lessThanOrEqualTo(0.82));
+  });
 }

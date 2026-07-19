@@ -12,6 +12,7 @@ import 'package:resonance/services/external_playlist_service.dart';
 import 'package:resonance/services/import_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
+import 'package:resonance/services/suggested_music_service.dart';
 import 'package:resonance/widgets/youtube/android_youtube.dart';
 import 'package:resonance/widgets/youtube/windows_youtube.dart';
 
@@ -37,29 +38,104 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   final _controller = TextEditingController();
   final MediaDownloader _windows = MediaDownloader();
   final AndroidYoutubeDownloader _android = AndroidYoutubeDownloader();
+  final SuggestedMusicService _suggestions = const SuggestedMusicService();
+  final PlaylistProfileBuilder _profileBuilder = PlaylistProfileBuilder();
   List<YoutubeTrack> _results = const [];
   bool _loading = false;
   String? _error;
   String? _busyUrl;
   String? _downloadingUrl;
   double _progress = 0;
+  PlaylistProfile? _suggestionProfile;
+  List<YoutubeTrack> _suggestionTracks = const [];
+  bool _suggestionLoading = false;
+  String? _suggestionError;
+  int _refreshGeneration = 0;
+  int _requestGeneration = 0;
 
   @override
   void initState() {
     super.initState();
+    _controller.addListener(_onQueryChanged);
     final initialQuery = widget.initialQuery?.trim() ?? '';
     if (initialQuery.isNotEmpty) {
       _controller.text = initialQuery;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _submit();
       });
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _loadSuggestions();
+      });
     }
   }
 
   @override
   void dispose() {
+    _requestGeneration++;
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onQueryChanged() {
+    final empty = _controller.text.trim().isEmpty;
+    if (!empty) {
+      _requestGeneration++;
+      if (mounted) setState(() {});
+      return;
+    }
+    if (mounted) setState(() {});
+    if (!_suggestionLoading && _suggestionProfile == null) _loadSuggestions();
+  }
+
+  Future<void> _loadSuggestions({bool refresh = false}) async {
+    if (_controller.text.trim().isNotEmpty) return;
+    if (refresh) _refreshGeneration++;
+    final generation = ++_requestGeneration;
+    setState(() {
+      _suggestionLoading = true;
+      _suggestionError = null;
+      if (refresh) _suggestionTracks = const [];
+    });
+    try {
+      final currentTrackId = context.read<PlayerHandler>().mediaItem.value?.id;
+      final profile = await _profileBuilder.build(
+        playlistNumber: widget.playlistNumber,
+        playlistName: widget.playlistName,
+        currentTrackId: currentTrackId,
+      );
+      if (!mounted || generation != _requestGeneration || _controller.text.trim().isNotEmpty) return;
+      if (profile.isEmpty) {
+        setState(() {
+          _suggestionProfile = profile;
+          _suggestionTracks = const [];
+          _suggestionLoading = false;
+        });
+        return;
+      }
+      if (Platform.isWindows) await _windows.initBinaries();
+      final result = await _suggestions.generate(
+        profile: profile,
+        refreshGeneration: _refreshGeneration,
+        search: Platform.isWindows ? _windows.search : _android.search,
+        isCancelled: () => !mounted || generation != _requestGeneration || _controller.text.trim().isNotEmpty,
+      );
+      if (!mounted || generation != _requestGeneration || _controller.text.trim().isNotEmpty) return;
+      setState(() {
+        _suggestionProfile = result.profile;
+        _suggestionTracks = result.tracks;
+        _suggestionLoading = false;
+      });
+    } on SuggestedMusicCancelled {
+      return;
+    } catch (error) {
+      if (!mounted || generation != _requestGeneration) return;
+      debugPrint('Suggested Music failed: $error');
+      setState(() {
+        _suggestionLoading = false;
+        _suggestionError = 'Could not build suggestions right now. Check the connection and try again.';
+      });
+    }
   }
 
   bool _isLink(String value) {
@@ -70,6 +146,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   Future<void> _submit() async {
     final input = _controller.text.trim();
     if (input.isEmpty || _loading) return;
+    _requestGeneration++;
     FocusScope.of(context).unfocus();
     setState(() {
       _loading = true;
@@ -122,7 +199,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         thumbnailUrl: track.thumbnailUrl,
       );
       if (!mounted) return;
-      await Navigator.pushReplacement<String?, String?>(
+      await Navigator.push<String?>(
         context,
         PageRouteBuilder<String?>(
           pageBuilder: (_, __, ___) => const StandalonePlayerScreen(),
@@ -142,7 +219,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     if (_busyUrl != null) return;
     setState(() => _busyUrl = track.url);
     try {
-      await MetadataCacheService.set(track.url, track.title, track.artist);
+      await MetadataCacheService.set(track.url, track.title, track.artist, artworkUrl: track.thumbnailUrl);
       await _rememberSource(track, TrackSourceMethod.manuallySelected);
       await FileService().addToPlaylist(widget.playlistNumber, track.url);
       if (mounted) Navigator.pop(context, track.url);
@@ -271,6 +348,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   }
 
   Widget _buildBody() {
+    if (_controller.text.trim().isEmpty && widget.recognitionLabel == null) return _buildSuggestions();
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) {
       return _MessageState(icon: Icons.error_outline_rounded, title: 'Search failed', message: _error!);
@@ -282,24 +360,92 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         message: 'Paste a video link or search by song, artist, or album.',
       );
     }
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-      itemCount: _results.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (_, index) {
-        final track = _results[index];
-        return _ResultCard(
-          track: track,
-          busy: _busyUrl == track.url,
-          downloading: _downloadingUrl == track.url,
-          progress: _downloadingUrl == track.url ? _progress : 0,
-          onPlay: () => _play(track),
-          onStream: () => _stream(track),
-          onDownload: () => _download(track),
-        );
-      },
+    return _buildResults(_results);
+  }
+
+  Widget _buildSuggestions() {
+    if (_suggestionLoading) {
+      return const _MessageState(
+        icon: Icons.auto_awesome_rounded,
+        title: 'Finding Suggested Music',
+        message: 'Building a profile from this playlist and ranking nearby music…',
+        loading: true,
+      );
+    }
+    final profile = _suggestionProfile;
+    if (profile?.isEmpty == true) {
+      return _MessageState(
+        icon: Icons.playlist_add_rounded,
+        title: 'Add songs first',
+        message: 'Suggested Music uses the songs in ${widget.playlistName} to find related tracks.',
+        actionLabel: 'Back to playlist',
+        onAction: () => Navigator.pop(context),
+      );
+    }
+    if (_suggestionError != null) {
+      return _MessageState(
+        icon: Icons.cloud_off_rounded,
+        title: 'Suggestions unavailable',
+        message: _suggestionError!,
+        actionLabel: 'Retry',
+        onAction: _loadSuggestions,
+      );
+    }
+    if (_suggestionTracks.isEmpty) {
+      return _MessageState(
+        icon: Icons.music_off_rounded,
+        title: 'No valid suggestions found',
+        message: 'The candidate searches did not return enough playable music outside this playlist.',
+        actionLabel: 'Try another set',
+        onAction: () => _loadSuggestions(refresh: true),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 4, 12, 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Suggested Music', style: Theme.of(context).textTheme.titleLarge),
+                    Text('Based on the songs in ${widget.playlistName}', style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => _loadSuggestions(refresh: true),
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Refresh suggestions'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(child: _buildResults(_suggestionTracks)),
+      ],
     );
   }
+
+  Widget _buildResults(List<YoutubeTrack> tracks) => ListView.separated(
+    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+    itemCount: tracks.length,
+    separatorBuilder: (_, __) => const SizedBox(height: 10),
+    itemBuilder: (_, index) {
+      final track = tracks[index];
+      return _ResultCard(
+        track: track,
+        busy: _busyUrl == track.url,
+        downloading: _downloadingUrl == track.url,
+        progress: _downloadingUrl == track.url ? _progress : 0,
+        onPlay: () => _play(track),
+        onStream: () => _stream(track),
+        onDownload: () => _download(track),
+      );
+    },
+  );
 }
 
 class _ResultCard extends StatelessWidget {
@@ -420,8 +566,18 @@ class _MessageState extends StatelessWidget {
   final IconData icon;
   final String title;
   final String message;
+  final bool loading;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
-  const _MessageState({required this.icon, required this.title, required this.message});
+  const _MessageState({
+    required this.icon,
+    required this.title,
+    required this.message,
+    this.loading = false,
+    this.actionLabel,
+    this.onAction,
+  });
 
   @override
   Widget build(BuildContext context) => Center(
@@ -430,11 +586,18 @@ class _MessageState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 52, color: Theme.of(context).colorScheme.primary),
+          if (loading)
+            const SizedBox.square(dimension: 44, child: CircularProgressIndicator())
+          else
+            Icon(icon, size: 52, color: Theme.of(context).colorScheme.primary),
           const SizedBox(height: 16),
           Text(title, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
           Text(message, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(height: 16),
+            FilledButton.icon(onPressed: onAction, icon: const Icon(Icons.refresh_rounded), label: Text(actionLabel!)),
+          ],
         ],
       ),
     ),

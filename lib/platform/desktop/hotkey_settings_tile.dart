@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:resonance/platform/desktop/hotkey_service.dart';
 
-String _hotkeyLabel(KeyboardKey key) {
+String hotkeyLabel(KeyboardKey key) {
   final numpadLabels = <LogicalKeyboardKey, String>{
     LogicalKeyboardKey.numpad0: 'Num 0',
     LogicalKeyboardKey.numpad1: 'Num 1',
@@ -33,6 +33,22 @@ String _hotkeyLabel(KeyboardKey key) {
       : label;
 }
 
+String formatHotKey(HotKey hotKey) {
+  final modifiers = <String>[];
+  if (hotKey.modifiers?.contains(HotKeyModifier.control) == true) modifiers.add('Ctrl');
+  if (hotKey.modifiers?.contains(HotKeyModifier.alt) == true) modifiers.add('Alt');
+  if (hotKey.modifiers?.contains(HotKeyModifier.shift) == true) modifiers.add('Shift');
+  if (hotKey.modifiers?.contains(HotKeyModifier.meta) == true) modifiers.add('Win');
+  final key = hotkeyLabel(hotKey.key);
+  return modifiers.isEmpty ? key : '${modifiers.join('+')}+$key';
+}
+
+Future<HotKey?> recordHotKey(BuildContext context, {bool requireModifier = true}) => showDialog<HotKey>(
+  context: context,
+  barrierDismissible: false,
+  builder: (dialogContext) => _HotkeyRecorderDialog(requireModifier: requireModifier),
+);
+
 class HotkeySettingsTile extends StatefulWidget {
   final String actionId;
   final String actionName;
@@ -58,28 +74,12 @@ class _HotkeySettingsTileState extends State<HotkeySettingsTile> {
   }
 
   Future<void> _startRecording() async {
-    final recorded = await showDialog<HotKey>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => const _HotkeyRecorderDialog(),
-    );
+    final recorded = await recordHotKey(context);
 
     if (recorded != null) {
       await HotkeyService.register(widget.actionId, recorded, widget.callback);
       setState(() => _currentHotkey = recorded);
     }
-  }
-
-  String _formatHotKey(HotKey hk) {
-    final mods = <String>[];
-    if (hk.modifiers != null) {
-      if (hk.modifiers!.contains(HotKeyModifier.control)) mods.add('Ctrl');
-      if (hk.modifiers!.contains(HotKeyModifier.alt)) mods.add('Alt');
-      if (hk.modifiers!.contains(HotKeyModifier.shift)) mods.add('Shift');
-      if (hk.modifiers!.contains(HotKeyModifier.meta)) mods.add('Win');
-    }
-    final key = _hotkeyLabel(hk.key);
-    return mods.isEmpty ? key : '${mods.join('+')}+$key';
   }
 
   @override
@@ -89,7 +89,7 @@ class _HotkeySettingsTileState extends State<HotkeySettingsTile> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (_currentHotkey != null) Text(_formatHotKey(_currentHotkey!)),
+          if (_currentHotkey != null) Text(formatHotKey(_currentHotkey!)),
           if (_currentHotkey != null)
             IconButton(
               icon: const Icon(Icons.clear, size: 18),
@@ -108,7 +108,9 @@ class _HotkeySettingsTileState extends State<HotkeySettingsTile> {
 
 // Dialog that captures a single hotkey using RawKeyboardListener
 class _HotkeyRecorderDialog extends StatefulWidget {
-  const _HotkeyRecorderDialog();
+  final bool requireModifier;
+
+  const _HotkeyRecorderDialog({required this.requireModifier});
 
   @override
   State<_HotkeyRecorderDialog> createState() => _HotkeyRecorderDialogState();
@@ -170,18 +172,6 @@ class _HotkeyRecorderDialogState extends State<_HotkeyRecorderDialog> {
     return KeyEventResult.ignored;
   }
 
-  String _formatHotKey(HotKey hk) {
-    final mods = <String>[];
-    if (hk.modifiers != null) {
-      if (hk.modifiers!.contains(HotKeyModifier.control)) mods.add('Ctrl');
-      if (hk.modifiers!.contains(HotKeyModifier.alt)) mods.add('Alt');
-      if (hk.modifiers!.contains(HotKeyModifier.shift)) mods.add('Shift');
-      if (hk.modifiers!.contains(HotKeyModifier.meta)) mods.add('Win');
-    }
-    final key = _hotkeyLabel(hk.key);
-    return mods.isEmpty ? key : '${mods.join('+')}+$key';
-  }
-
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -199,13 +189,14 @@ class _HotkeyRecorderDialogState extends State<_HotkeyRecorderDialog> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const Text('Press the desired key combination...'),
-                const Text(
-                  '(Must include Ctrl, Alt, Shift, or Win)',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
+                if (widget.requireModifier)
+                  const Text(
+                    '(Must include Ctrl, Alt, Shift, or Win)',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
                 const SizedBox(height: 16),
                 if (_recorded != null)
-                  Text('Recorded: ${_formatHotKey(_recorded!)}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text('Recorded: ${formatHotKey(_recorded!)}', style: const TextStyle(fontWeight: FontWeight.bold)),
               ],
             ),
           ),
@@ -214,7 +205,9 @@ class _HotkeyRecorderDialogState extends State<_HotkeyRecorderDialog> {
       actions: [
         TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel')),
         TextButton(
-          onPressed: (_recorded != null && _recorded!.modifiers != null && _recorded!.modifiers!.isNotEmpty)
+          onPressed:
+              (_recorded != null &&
+                  (!widget.requireModifier || (_recorded!.modifiers != null && _recorded!.modifiers!.isNotEmpty)))
               ? () => Navigator.pop(context, _recorded)
               : null,
           child: const Text('Save'),

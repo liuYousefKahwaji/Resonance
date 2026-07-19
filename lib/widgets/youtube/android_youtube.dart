@@ -306,12 +306,12 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     }
   }
 
-  Future<void> _startStream(String url, {required String title, required String artist}) async {
+  Future<void> _startStream(String url, {required String title, required String artist, String? thumbnailUrl}) async {
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     final snackBarBackground = Theme.of(context).colorScheme.surfaceContainerHigh;
 
-    await MetadataCacheService.set(url, title, artist);
+    await MetadataCacheService.set(url, title, artist, artworkUrl: thumbnailUrl);
     final youtubeVideoId = TrackSourceRepository.videoIdFromUrlOrId(url);
     if (youtubeVideoId != null) {
       await const TrackSourceRepository().saveSource(
@@ -359,6 +359,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
 
     String title;
     String artist;
+    String? thumbnailUrl;
 
     try {
       const channel = MethodChannel('resonance/android_youtube');
@@ -366,13 +367,14 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
       final data = jsonDecode(raw ?? '{}') as Map<String, dynamic>;
       title = (data['title'] as String?)?.trim().isNotEmpty == true ? data['title'] as String : _titleFromUrl(url);
       artist = (data['artist'] as String?)?.trim().isNotEmpty == true ? data['artist'] as String : 'YouTube';
+      thumbnailUrl = data['thumbnail']?.toString();
     } catch (_) {
       title = _titleFromUrl(url);
       artist = 'YouTube';
     }
 
     if (!mounted) return;
-    await _startStream(url, title: title, artist: artist);
+    await _startStream(url, title: title, artist: artist, thumbnailUrl: thumbnailUrl);
   }
 
   String _titleFromUrl(String url) {
@@ -652,7 +654,12 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                           padding: EdgeInsets.zero,
                           icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary, size: 20),
                           tooltip: 'Stream',
-                          onPressed: () => _startStream(result.url, title: result.title, artist: result.artist),
+                          onPressed: () => _startStream(
+                            result.url,
+                            title: result.title,
+                            artist: result.artist,
+                            thumbnailUrl: result.thumbnailUrl,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 2),
@@ -668,7 +675,12 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                       ),
                     ],
                   ),
-                  onTap: () => _startStream(result.url, title: result.title, artist: result.artist),
+                  onTap: () => _startStream(
+                    result.url,
+                    title: result.title,
+                    artist: result.artist,
+                    thumbnailUrl: result.thumbnailUrl,
+                  ),
                 );
               },
             ),

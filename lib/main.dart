@@ -255,6 +255,7 @@ class _MainAppState extends State<MainApp> {
   bool _exitInProgress = false;
   bool _uiVisible = true;
   bool _queueDrawerOpen = false;
+  bool? _windowsChromeEnabled;
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   bool _handlingAndroidAction = false;
 
@@ -901,19 +902,47 @@ class _MainAppState extends State<MainApp> {
   Widget build(BuildContext context) {
     return Consumer<ThemeProvider>(
       builder: (context, themeProvider, child) {
+        final windowsNativeControls = Platform.isWindows && themeProvider.windowsNativeControls;
+        _syncWindowsChrome(windowsNativeControls);
         return MaterialApp(
           navigatorKey: _navigatorKey,
           debugShowCheckedModeBanner: false,
+          builder: (context, child) {
+            if (!windowsNativeControls) return child ?? const SizedBox.shrink();
+            final theme = Theme.of(context);
+            return Column(
+              children: [
+                SizedBox(
+                  height: kWindowCaptionHeight,
+                  child: WindowCaption(
+                    brightness: theme.brightness,
+                    backgroundColor: theme.colorScheme.surface,
+                    title: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.graphic_eq_rounded, size: 15, color: theme.colorScheme.primary),
+                        const SizedBox(width: 7),
+                        const Text('Resonance', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(child: child ?? const SizedBox.shrink()),
+              ],
+            );
+          },
           themeMode: themeProvider.themeMode,
           theme: buildResonanceTheme(
             themeProvider.themeStyle,
             Brightness.light,
             fullPalette: themeProvider.fullThemePalette,
+            windowsNativeControls: windowsNativeControls,
           ),
           darkTheme: buildResonanceTheme(
             themeProvider.themeStyle,
             Brightness.dark,
             fullPalette: themeProvider.fullThemePalette,
+            windowsNativeControls: windowsNativeControls,
           ),
           themeAnimationDuration: const Duration(milliseconds: 360),
           themeAnimationCurve: Curves.easeInOutCubic,
@@ -936,8 +965,60 @@ class _MainAppState extends State<MainApp> {
     );
   }
 
+  void _syncWindowsChrome(bool enabled) {
+    if (!Platform.isWindows || _windowsChromeEnabled == enabled) return;
+    _windowsChromeEnabled = enabled;
+    unawaited(
+      windowManager
+          .setTitleBarStyle(enabled ? TitleBarStyle.hidden : TitleBarStyle.normal, windowButtonVisibility: !enabled)
+          .catchError((error) => _shutdownLog('Windows title bar update failed: $error')),
+    );
+  }
+
+  Future<void> _openSettings(BuildContext context) async {
+    await Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => const SettingsScreen(),
+        transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
+        transitionDuration: const Duration(milliseconds: 160),
+      ),
+    );
+    if (mounted) setState(() => _artworkRevision++);
+  }
+
   PreferredSizeWidget _buildAppBar(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    if (Platform.isWindows && useWindowsNativeControls(context)) {
+      final border = theme.colorScheme.outline;
+      final surface = theme.colorScheme.surface;
+      return PreferredSize(
+        preferredSize: const Size.fromHeight(46),
+        child: Material(
+          color: surface,
+          child: Container(
+            height: 46,
+            padding: const EdgeInsets.only(left: 14, right: 8),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: border)),
+            ),
+            child: Row(
+              children: [
+                Text('Library', style: theme.appBarTheme.titleTextStyle),
+                const Spacer(),
+                IconButton(
+                  key: const Key('windows-settings-command'),
+                  onPressed: () => _openSettings(context),
+                  icon: const Icon(Icons.settings_outlined, size: 18),
+                  tooltip: 'Settings',
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return AppBar(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       elevation: 0,
@@ -977,17 +1058,7 @@ class _MainAppState extends State<MainApp> {
       centerTitle: true,
       actions: [
         IconButton(
-          onPressed: () async {
-            await Navigator.push(
-              context,
-              PageRouteBuilder(
-                pageBuilder: (_, __, ___) => const SettingsScreen(),
-                transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
-                transitionDuration: const Duration(milliseconds: 200),
-              ),
-            );
-            if (mounted) setState(() => _artworkRevision++);
-          },
+          onPressed: () => _openSettings(context),
           icon: Icon(Icons.tune_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
           tooltip: 'Settings',
         ),
@@ -1137,9 +1208,16 @@ class _MainAppState extends State<MainApp> {
 
   Widget _buildToolbar(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final windowsNative = Platform.isWindows && useWindowsNativeControls(context);
     final trackCount = playlist.length;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 8, 8),
+    return Container(
+      padding: windowsNative ? const EdgeInsets.fromLTRB(14, 5, 8, 5) : const EdgeInsets.fromLTRB(16, 4, 8, 8),
+      decoration: windowsNative
+          ? BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              border: Border(bottom: BorderSide(color: Theme.of(context).colorScheme.outline)),
+            )
+          : null,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 680;

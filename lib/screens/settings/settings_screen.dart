@@ -431,6 +431,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     );
                   },
                 ),
+                if (Platform.isWindows) ...[
+                  _Divider(),
+                  Consumer<ThemeProvider>(
+                    builder: (context, themeProvider, child) => _SettingsTile(
+                      icon: Icons.desktop_windows_rounded,
+                      title: 'Windows-native controls',
+                      subtitle: 'Use a Windows 11 title bar, command surfaces, menus, fields, focus, and controls',
+                      trailing: Switch(
+                        value: themeProvider.windowsNativeControls,
+                        onChanged: themeProvider.setWindowsNativeControls,
+                      ),
+                    ),
+                  ),
+                ],
                 _Divider(),
                 Consumer<ThemeProvider>(
                   builder: (context, themeProvider, child) {

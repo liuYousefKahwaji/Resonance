@@ -4,6 +4,9 @@ class YoutubeTrack {
   final String url;
   final int? durationSeconds;
   final String? thumbnailUrl;
+  final bool isLive;
+  final bool isShort;
+  final String? availability;
 
   /// Compatibility alias for older transfer/search callers.
   String get uploader => artist;
@@ -14,7 +17,45 @@ class YoutubeTrack {
     required this.url,
     this.durationSeconds,
     this.thumbnailUrl,
+    this.isLive = false,
+    this.isShort = false,
+    this.availability,
   });
+
+  String? get videoId {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return null;
+    final host = uri.host.toLowerCase();
+    final candidate = host.contains('youtu.be')
+        ? uri.pathSegments.firstOrNull
+        : uri.queryParameters['v'] ??
+              (uri.pathSegments.length >= 2 && {'shorts', 'embed', 'live'}.contains(uri.pathSegments.first)
+                  ? uri.pathSegments[1]
+                  : null);
+    return candidate != null && RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(candidate) ? candidate : null;
+  }
+
+  Map<String, dynamic> toJson() => {
+    'title': title,
+    'artist': artist,
+    'url': url,
+    if (durationSeconds != null) 'durationSeconds': durationSeconds,
+    if (thumbnailUrl != null) 'thumbnailUrl': thumbnailUrl,
+    'isLive': isLive,
+    'isShort': isShort,
+    if (availability != null) 'availability': availability,
+  };
+
+  factory YoutubeTrack.fromCacheJson(Map<String, dynamic> json) => YoutubeTrack(
+    title: json['title']?.toString() ?? 'Unknown',
+    artist: json['artist']?.toString() ?? 'Unknown',
+    url: json['url']?.toString() ?? '',
+    durationSeconds: json['durationSeconds'] is num ? (json['durationSeconds'] as num).toInt() : null,
+    thumbnailUrl: json['thumbnailUrl']?.toString(),
+    isLive: json['isLive'] == true,
+    isShort: json['isShort'] == true,
+    availability: json['availability']?.toString(),
+  );
 
   String get formattedDuration {
     final duration = durationSeconds;
@@ -43,6 +84,12 @@ class YoutubeTrack {
       url: _canonicalYoutubeUrl(rawUrl, json['id']?.toString()),
       durationSeconds: rawDuration is num ? rawDuration.toInt() : int.tryParse(rawDuration?.toString() ?? ''),
       thumbnailUrl: thumbnail?.trim().isNotEmpty == true ? thumbnail : null,
+      isLive: json['is_live'] == true || json['live_status'] == 'is_live' || json['live_status'] == 'was_live',
+      isShort:
+          json['is_short'] == true ||
+          json['webpage_url']?.toString().contains('/shorts/') == true ||
+          json['original_url']?.toString().contains('/shorts/') == true,
+      availability: json['availability']?.toString(),
     );
   }
 
