@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -16,11 +17,18 @@ import 'package:resonance/services/suggested_music_service.dart';
 import 'package:resonance/widgets/youtube/android_youtube.dart';
 import 'package:resonance/widgets/youtube/windows_youtube.dart';
 
+typedef YoutubeSearchLoader = Future<List<YoutubeTrack>> Function(String input, int limit);
+typedef YoutubeSuggestionsLoader =
+    Future<SuggestedMusicResult> Function({required bool refresh, required bool Function() isCancelled});
+
 class YoutubeSearchScreen extends StatefulWidget {
   final int playlistNumber;
   final String playlistName;
   final String? initialQuery;
   final String? recognitionLabel;
+  final YoutubeSearchLoader? searchLoader;
+  final YoutubeSuggestionsLoader? suggestionsLoader;
+  final Duration previewDelay;
 
   const YoutubeSearchScreen({
     super.key,
@@ -28,6 +36,9 @@ class YoutubeSearchScreen extends StatefulWidget {
     required this.playlistName,
     this.initialQuery,
     this.recognitionLabel,
+    this.searchLoader,
+    this.suggestionsLoader,
+    this.previewDelay = const Duration(milliseconds: 500),
   });
 
   @override
@@ -51,7 +62,10 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   bool _suggestionLoading = false;
   String? _suggestionError;
   int _refreshGeneration = 0;
-  int _requestGeneration = 0;
+  int _searchGeneration = 0;
+  int _suggestionGeneration = 0;
+  Timer? _previewTimer;
+  bool _waitingForPreview = false;
 
   @override
   void initState() {
@@ -72,64 +86,94 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
 
   @override
   void dispose() {
-    _requestGeneration++;
+    _previewTimer?.cancel();
+    _searchGeneration++;
+    _suggestionGeneration++;
     _controller.dispose();
     super.dispose();
   }
 
   void _onQueryChanged() {
-    final empty = _controller.text.trim().isEmpty;
-    if (!empty) {
-      _requestGeneration++;
-      if (mounted) setState(() {});
+    _previewTimer?.cancel();
+    final input = _controller.text.trim();
+    final generation = ++_searchGeneration;
+    if (input.isNotEmpty) {
+      _suggestionGeneration++;
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _waitingForPreview = true;
+          _suggestionLoading = false;
+          _results = const [];
+          _error = null;
+        });
+      }
+      _previewTimer = Timer(widget.previewDelay, () => unawaited(_loadPreview(input, generation)));
       return;
     }
-    if (mounted) setState(() {});
-    if (!_suggestionLoading && _suggestionProfile == null) _loadSuggestions();
+    if (mounted) {
+      setState(() {
+        _loading = false;
+        _waitingForPreview = false;
+        _results = const [];
+        _error = null;
+      });
+    }
+    if (_suggestionProfile == null && !_suggestionLoading) _loadSuggestions();
   }
 
   Future<void> _loadSuggestions({bool refresh = false}) async {
     if (_controller.text.trim().isNotEmpty) return;
     if (refresh) _refreshGeneration++;
-    final generation = ++_requestGeneration;
+    final generation = ++_suggestionGeneration;
     setState(() {
       _suggestionLoading = true;
       _suggestionError = null;
       if (refresh) _suggestionTracks = const [];
     });
     try {
-      final currentTrackId = context.read<PlayerHandler>().mediaItem.value?.id;
-      final profile = await _profileBuilder.build(
-        playlistNumber: widget.playlistNumber,
-        playlistName: widget.playlistName,
-        currentTrackId: currentTrackId,
-      );
-      if (!mounted || generation != _requestGeneration || _controller.text.trim().isNotEmpty) return;
-      if (profile.isEmpty) {
-        setState(() {
-          _suggestionProfile = profile;
-          _suggestionTracks = const [];
-          _suggestionLoading = false;
-        });
-        return;
+      bool isCancelled() => !mounted || generation != _suggestionGeneration || _controller.text.trim().isNotEmpty;
+      final override = widget.suggestionsLoader;
+      late final SuggestedMusicResult result;
+      if (override != null) {
+        result = await override(refresh: refresh, isCancelled: isCancelled);
+      } else {
+        final currentTrackId = context.read<PlayerHandler>().mediaItem.value?.id;
+        final profile = await _profileBuilder.build(
+          playlistNumber: widget.playlistNumber,
+          playlistName: widget.playlistName,
+          currentTrackId: currentTrackId,
+        );
+        if (isCancelled()) return;
+        if (profile.isEmpty) {
+          setState(() {
+            _suggestionProfile = profile;
+            _suggestionTracks = const [];
+            _suggestionLoading = false;
+          });
+          return;
+        }
+        if (Platform.isWindows) await _windows.initBinaries();
+        result = await _suggestions.generate(
+          profile: profile,
+          refreshGeneration: _refreshGeneration,
+          search: Platform.isWindows ? _windows.search : _android.search,
+          isCancelled: isCancelled,
+        );
       }
-      if (Platform.isWindows) await _windows.initBinaries();
-      final result = await _suggestions.generate(
-        profile: profile,
-        refreshGeneration: _refreshGeneration,
-        search: Platform.isWindows ? _windows.search : _android.search,
-        isCancelled: () => !mounted || generation != _requestGeneration || _controller.text.trim().isNotEmpty,
-      );
-      if (!mounted || generation != _requestGeneration || _controller.text.trim().isNotEmpty) return;
+      if (isCancelled()) return;
       setState(() {
         _suggestionProfile = result.profile;
         _suggestionTracks = result.tracks;
         _suggestionLoading = false;
       });
     } on SuggestedMusicCancelled {
+      if (mounted && generation == _suggestionGeneration) {
+        setState(() => _suggestionLoading = false);
+      }
       return;
     } catch (error) {
-      if (!mounted || generation != _requestGeneration) return;
+      if (!mounted || generation != _suggestionGeneration || _controller.text.trim().isNotEmpty) return;
       debugPrint('Suggested Music failed: $error');
       setState(() {
         _suggestionLoading = false;
@@ -143,13 +187,40 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     return uri != null && (uri.scheme == 'http' || uri.scheme == 'https') && uri.host.isNotEmpty;
   }
 
+  Future<List<YoutubeTrack>> _search(String input, {int limit = 10}) async {
+    final loader = widget.searchLoader;
+    if (loader != null) return loader(input, limit);
+    if (Platform.isWindows) await _windows.initBinaries();
+    if (_isLink(input)) {
+      return [await (Platform.isWindows ? _windows.lookup(input) : _android.lookup(input))];
+    }
+    return Platform.isWindows ? _windows.search(input, limit: limit) : _android.search(input, limit: limit);
+  }
+
+  Future<void> _loadPreview(String input, int generation) async {
+    if (!mounted || generation != _searchGeneration || input != _controller.text.trim()) return;
+    try {
+      final results = await _search(input, limit: 2);
+      if (!mounted || generation != _searchGeneration || input != _controller.text.trim()) return;
+      setState(() {
+        _results = results.take(2).toList(growable: false);
+        _waitingForPreview = false;
+      });
+    } catch (_) {
+      if (!mounted || generation != _searchGeneration || input != _controller.text.trim()) return;
+      setState(() => _waitingForPreview = false);
+    }
+  }
+
   Future<void> _submit() async {
     final input = _controller.text.trim();
     if (input.isEmpty || _loading) return;
-    _requestGeneration++;
+    _previewTimer?.cancel();
+    final generation = ++_searchGeneration;
     FocusScope.of(context).unfocus();
     setState(() {
       _loading = true;
+      _waitingForPreview = false;
       _error = null;
       _results = const [];
     });
@@ -163,15 +234,16 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         if (imported == true && mounted) Navigator.pop(context);
         return;
       }
-      if (Platform.isWindows) await _windows.initBinaries();
-      final results = _isLink(input)
-          ? [await (Platform.isWindows ? _windows.lookup(input) : _android.lookup(input))]
-          : await (Platform.isWindows ? _windows.search(input) : _android.search(input));
-      if (mounted) setState(() => _results = results.take(10).toList(growable: false));
+      final results = await _search(input);
+      if (mounted && generation == _searchGeneration && input == _controller.text.trim()) {
+        setState(() => _results = results.take(10).toList(growable: false));
+      }
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString().replaceFirst('Bad state: ', ''));
+      if (mounted && generation == _searchGeneration && input == _controller.text.trim()) {
+        setState(() => _error = error.toString().replaceFirst('Bad state: ', ''));
+      }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && generation == _searchGeneration) setState(() => _loading = false);
     }
   }
 
@@ -321,28 +393,34 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
           ),
         ),
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-            child: TextField(
-              controller: _controller,
-              autofocus: true,
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _submit(),
-              decoration: InputDecoration(
-                hintText: 'Search YouTube or paste a link',
-                prefixIcon: const Icon(Icons.search_rounded),
-                suffixIcon: IconButton(
-                  onPressed: _loading ? null : _submit,
-                  tooltip: 'Search',
-                  icon: const Icon(Icons.arrow_forward_rounded),
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+              child: TextField(
+                key: const Key('youtube-search-field'),
+                controller: _controller,
+                autofocus: true,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => _submit(),
+                onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
+                decoration: InputDecoration(
+                  hintText: 'Search YouTube or paste a link',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: IconButton(
+                    onPressed: _loading ? null : _submit,
+                    tooltip: 'Search',
+                    icon: const Icon(Icons.arrow_forward_rounded),
+                  ),
                 ),
               ),
             ),
-          ),
-          Expanded(child: _buildBody()),
-        ],
+            Expanded(child: _buildBody()),
+          ],
+        ),
       ),
     );
   }
@@ -353,6 +431,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     if (_error != null) {
       return _MessageState(icon: Icons.error_outline_rounded, title: 'Search failed', message: _error!);
     }
+    if (_waitingForPreview) return const SizedBox.shrink();
     if (_results.isEmpty) {
       return const _MessageState(
         icon: Icons.travel_explore_rounded,

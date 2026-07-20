@@ -32,8 +32,8 @@ class AndroidYoutubeDownloader {
   static const _method = MethodChannel('resonance/android_youtube');
   static const _event = EventChannel('resonance/android_youtube/events');
 
-  Future<List<YoutubeTrack>> search(String query) async {
-    final raw = await _method.invokeMethod<String>('search', {'query': query});
+  Future<List<YoutubeTrack>> search(String query, {int limit = 10}) async {
+    final raw = await _method.invokeMethod<String>('search', {'query': query, 'limit': limit.clamp(1, 10)});
     final decoded = jsonDecode(raw ?? '[]') as List;
     return decoded.map((e) => YoutubeTrack.fromJson(Map<String, dynamic>.from(e as Map))).toList();
   }

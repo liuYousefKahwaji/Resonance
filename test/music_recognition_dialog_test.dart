@@ -59,6 +59,20 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('closes when the user taps outside the dialog', (tester) async {
+    final service = _FakeRecognitionService();
+    final entrypoint = _FakeDialogEntrypoint();
+    await _pumpDialogLauncher(tester, service: service, entrypoint: entrypoint);
+
+    await tester.tap(find.text('Identify'));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('music-recognition-dialog')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('is compact at a 1080x2400 Android logical viewport', (tester) async {
     await tester.binding.setSurfaceSize(const Size(360, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));

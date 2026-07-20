@@ -73,7 +73,7 @@ Future<MusicRecognitionResult?> showMusicRecognitionDialog(
   bool? androidOverride,
 }) => showDialog<MusicRecognitionResult>(
   context: context,
-  barrierDismissible: false,
+  barrierDismissible: true,
   builder: (_) => MusicRecognitionDialog(
     service: service,
     entrypoint: entrypoint,

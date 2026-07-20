@@ -43,7 +43,8 @@ class MediaDownloader {
     }
   }
 
-  Future<List<YoutubeTrack>> search(String query) async {
+  Future<List<YoutubeTrack>> search(String query, {int limit = 10}) async {
+    final resultLimit = limit.clamp(1, 10);
     final binDir = await binDirPath;
 
     final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
@@ -66,7 +67,7 @@ class MediaDownloader {
 
         '--no-download',
 
-        'ytsearch10:$query',
+        'ytsearch$resultLimit:$query',
       ],
       environment: windowsYtDlpUtf8Environment,
       includeParentEnvironment: true,

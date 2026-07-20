@@ -61,13 +61,14 @@ def _extract_info(target, extra=None, download=False):
 
 # ── search ─────────────────────────────────────────────────────────────────────
 
-def search(query: str) -> str:
-    """Return JSON array of up to 10 search results."""
+def search(query: str, limit: int = 10) -> str:
+    """Return a JSON array capped to the requested search result count."""
+    result_limit = max(1, min(int(limit), 10))
     opts = {
         "extract_flat": True,
         "skip_download": True,
     }
-    info, _ = _extract_info(f"ytsearch10:{query}", opts)
+    info, _ = _extract_info(f"ytsearch{result_limit}:{query}", opts)
 
     results = []
     for entry in (info.get("entries") or []):
