@@ -29,6 +29,8 @@ void main() {
       ),
     );
 
+    expect(find.byKey(pocketVinylKey), findsOneWidget);
+
     await tester.tap(find.byKey(nowPlayingArtworkTapKey));
     await tester.pump();
     expect(artworkTaps, 1);
@@ -38,5 +40,75 @@ void main() {
     await tester.pump();
     expect(artworkTaps, 1);
     expect(bodyTaps, 1);
+  });
+
+  testWidgets('Pocket Vinyl rotates, reacts to playback, and slides out', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 480,
+              child: NowPlayingCard(
+                title: 'Current track',
+                artist: 'Artist',
+                artworkUri: null,
+                isPlaying: true,
+                isLoading: false,
+                hasTrack: true,
+                isDark: false,
+                amplitudeProvider: () => 0.8,
+                onTap: () {},
+                onArtworkTap: () {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final vinyl = find.byKey(pocketVinylKey);
+    final rotation = find.descendant(of: vinyl, matching: find.byType(Transform)).first;
+    final before = List<double>.from(tester.widget<Transform>(rotation).transform.storage);
+    expect(
+      tester.widget<AnimatedPositioned>(find.descendant(of: vinyl, matching: find.byType(AnimatedPositioned))).left,
+      17,
+    );
+
+    await tester.pump(const Duration(milliseconds: 550));
+    final after = tester.widget<Transform>(rotation).transform.storage;
+    expect(after, isNot(equals(before)));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('Pocket Vinyl remains static when reduced motion is enabled', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: Scaffold(
+            body: NowPlayingCard(
+              title: 'Current track',
+              artist: 'Artist',
+              artworkUri: null,
+              isPlaying: true,
+              isLoading: false,
+              hasTrack: true,
+              isDark: false,
+              onTap: () {},
+              onArtworkTap: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final vinyl = find.byKey(pocketVinylKey);
+    final rotation = find.descendant(of: vinyl, matching: find.byType(Transform)).first;
+    final before = List<double>.from(tester.widget<Transform>(rotation).transform.storage);
+    await tester.pump(const Duration(seconds: 1));
+    final after = tester.widget<Transform>(rotation).transform.storage;
+    expect(after, equals(before));
   });
 }

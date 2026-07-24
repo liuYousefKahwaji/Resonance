@@ -12,10 +12,10 @@ import 'package:media_kit/media_kit.dart' as mk;
 import 'package:audio_service/audio_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:resonance/core/audio/audio_envelope_analyzer.dart';
+import 'package:resonance/core/audio/loudness_normalization.dart';
 import 'package:resonance/core/audio/playback_preferences.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/playback_queue_snapshot.dart';
-import 'package:resonance/platform/android/android_bass_boost.dart';
 import 'package:resonance/services/discord_presence_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -59,6 +59,27 @@ AudioProcessingState visibleProcessingState(AudioProcessingState state, {require
   return state;
 }
 
+@visibleForTesting
+bool playbackPositionAdvanced(Duration initial, Duration current) =>
+    current - initial >= const Duration(milliseconds: 250);
+
+@visibleForTesting
+int nextPlayablePlaylistIndex({
+  required List<String> playlist,
+  required int currentIndex,
+  required bool allowWrap,
+  required bool Function(String path) hasFailed,
+}) {
+  if (currentIndex < 0 || currentIndex >= playlist.length) return -1;
+  for (var offset = 1; offset < playlist.length; offset++) {
+    final candidate = currentIndex + offset;
+    if (!allowWrap && candidate >= playlist.length) return -1;
+    final index = candidate % playlist.length;
+    if (!hasFailed(playlist[index])) return index;
+  }
+  return -1;
+}
+
 enum TrackTransitionDirection { none, next, previous }
 
 @visibleForTesting
@@ -69,51 +90,31 @@ Map<String, dynamic>? standalonePresentationExtras(bool enabled) =>
 bool restoredTrackIsExternal({required bool? persistedValue, required bool trackIsInPlaylist}) =>
     persistedValue ?? !trackIsInPlaylist;
 
-/// Maps the device-reported Android equalizer band layout to a low-shelf-like
-/// curve. Android vendors expose different band counts and centre frequencies,
-/// so the reported lower/upper range is preferred over assuming a fixed layout.
-@visibleForTesting
-double androidBassBandWeight({
-  required double lowerFrequency,
-  required double upperFrequency,
-  required double centerFrequency,
-}) {
-  final lower = math.max(0.0, lowerFrequency);
-  final upper = math.max(lower, upperFrequency);
-  final center = math.max(0.0, centerFrequency);
-
-  if (center <= 120 || (upper > lower && lower < 80)) return 1.0;
-  if (center <= 320 || (upper > lower && lower < 250)) return 0.58;
-  if (center <= 600 || (upper > lower && lower < 500)) return 0.18;
-  return 0.0;
-}
-
 /// Builds the complete libmpv audio-filter chain.
 ///
 /// media_kit implements independent Windows speed and pitch with scaletempo.
-/// Replacing `af` with only a bass filter silently removes scaletempo, coupling
-/// speed and pitch even at 0% bass. Always preserve that filter, then append a
-/// low shelf and peak limiter when bass is enabled.
+/// Replacing `af` with only an EQ filter silently removes scaletempo, coupling
+/// speed and pitch even at 0% bass. The audio-only Windows libmpv build exposes
+/// FFmpeg's equalizer but not its automatic sample-format converter, so the
+/// combined `lavfi` graph and native `format` filters around it are required.
 @visibleForTesting
 String buildWindowsAudioFilter(PlaybackAdjustments adjustments) {
   final tempoScale = (adjustments.speed / adjustments.pitch).clamp(0.25, 4.0).toStringAsFixed(8);
   final pitchCorrection = 'scaletempo:scale=$tempoScale';
-  if (adjustments.bass <= 0) return pitchCorrection;
-  final gain = (adjustments.bass.clamp(0.0, 1.0) * 14.0).toStringAsFixed(2);
-  return '$pitchCorrection,lavfi=[bass=g=$gain:f=105:t=q:w=0.75,'
-      'alimiter=limit=0.95:attack=5:release=50:level=false]';
+  if (!adjustments.equalizer.isActive) return pitchCorrection;
+  final filters = List<String>.generate(equalizerBandFrequencies.length, (index) {
+    final frequency = equalizerBandFrequencies[index].toStringAsFixed(0);
+    final gain = adjustments.equalizer.gainsDb[index].toStringAsFixed(2);
+    return 'equalizer=f=$frequency:t=q:w=0.70:g=$gain';
+  }).join(',');
+  return '$pitchCorrection,format=format=floatp,'
+      'lavfi=[$filters],'
+      'format=format=float';
 }
 
-/// Keeps modest clipping headroom without making the whole mix sound like a
-/// volume control. Windows needs little extra attenuation because its filter
-/// chain includes a peak limiter; Android's native equalizer does not.
 @visibleForTesting
-double bassOutputHeadroomMultiplier(double bass, {required bool limiterAvailable}) {
-  final strength = bass.clamp(0.0, 1.0);
-  if (strength <= 0) return 1.0;
-  final attenuationDecibels = strength * (limiterAvailable ? 0.0 : 0.6);
-  return math.pow(10.0, -attenuationDecibels / 20.0).toDouble();
-}
+double equalizerOutputHeadroomMultiplier(EqualizerSettings settings, {required bool effectApplied}) =>
+    effectApplied ? settings.automaticPreampMultiplier : 1.0;
 
 @immutable
 class TrackTransitionState {
@@ -152,11 +153,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   final ValueNotifier<double> volumeNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<double> speedNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<double> pitchNotifier = ValueNotifier<double>(1.0);
-  final ValueNotifier<double> bassBoostNotifier = ValueNotifier<double>(0.0);
-  final ValueNotifier<bool> bassBoostSupportedNotifier = ValueNotifier<bool>(Platform.isAndroid || Platform.isWindows);
+  final ValueNotifier<EqualizerSettings> equalizerNotifier = ValueNotifier<EqualizerSettings>(EqualizerSettings.flat);
+  final ValueNotifier<bool> equalizerSupportedNotifier = ValueNotifier<bool>(Platform.isAndroid || Platform.isWindows);
   final ValueNotifier<bool> crossfadeEnabledNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<double> crossfadeDurationSecondsNotifier = ValueNotifier<double>(3.0);
   final ValueNotifier<bool> resumeLongTracksNotifier = ValueNotifier<bool>(true);
+  final ValueNotifier<bool> volumeNormalizationEnabledNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<LoudnessScanProgress> loudnessScanProgressNotifier = ValueNotifier<LoudnessScanProgress>(
+    const LoudnessScanProgress(),
+  );
   final ValueNotifier<PlaybackSettingsScope> playbackSettingsScopeNotifier = ValueNotifier<PlaybackSettingsScope>(
     PlaybackSettingsScope.global,
   );
@@ -189,14 +194,27 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> _seekOperationQueue = Future<void>.value();
   int _crossfadeGeneration = 0;
   bool _crossfadeInProgress = false;
-  bool _bassEffectApplied = false;
+  bool _equalizerEffectApplied = false;
   double _transitionVolumeMultiplier = 1.0;
+  double _normalizationMultiplier = 1.0;
+  late final Future<LoudnessProfileCache> _loudnessCacheFuture;
+  LoudnessProfileCache? _loudnessCache;
+  final LoudnessAnalyzer _loudnessAnalyzer = LoudnessAnalyzer();
+  final List<String> _loudnessQueue = <String>[];
+  final Set<String> _queuedLoudnessPaths = <String>{};
+  bool _loudnessWorkerRunning = false;
   late final Future<PlaybackPreferenceStore> _playbackPreferenceStore;
   PlaybackAdjustments _globalPlaybackAdjustments = PlaybackAdjustments.neutral;
   PlaybackAdjustments _requestedPlaybackAdjustments = PlaybackAdjustments.neutral;
   Future<void> _playbackAdjustmentQueue = Future<void>.value();
   Timer? _periodicPositionSaveTimer;
+  Timer? _playbackHealthTimer;
   bool? _lastPresencePlaying;
+  bool _playbackRequested = false;
+  bool _playbackUnavailable = false;
+  int? _retryLoadGeneration;
+  int? _handledFailureGeneration;
+  final Set<String> _failedTrackIds = <String>{};
 
   final StreamController<Duration> _positionController = StreamController<Duration>.broadcast();
   final StreamController<Duration?> _durationController = StreamController<Duration?>.broadcast();
@@ -293,6 +311,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   PlayerHandler() {
     _playbackPreferenceStore = PlaybackPreferenceStore.load();
+    _loudnessCacheFuture = LoudnessProfileCache.load();
     if (Platform.isWindows) {
       final player = mk.Player(configuration: const mk.PlayerConfiguration(pitch: true));
       _windowsPlayer = player;
@@ -373,12 +392,24 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     player.stream.pitch.listen((pitch) {
       if (identical(player, _windowsPlayer)) pitchNotifier.value = pitch;
     });
+    player.stream.error.listen((error) {
+      if (!identical(player, _windowsPlayer) || _activeTrackLoadGeneration != null) return;
+      debugPrint('[PlayerHandler] Windows playback backend reported: $error');
+      _armPlaybackHealthCheck(_loadGeneration, grace: const Duration(milliseconds: 1200), reason: error);
+    });
   }
 
   void _attachJustAudioPlayer(AudioPlayer player) {
-    player.playbackEventStream.listen((_) {
-      if (identical(player, _player)) _updatePlaybackState();
-    });
+    player.playbackEventStream.listen(
+      (_) {
+        if (identical(player, _player)) _updatePlaybackState();
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!identical(player, _player) || _activeTrackLoadGeneration != null) return;
+        debugPrint('[PlayerHandler] Android playback backend reported: $error\n$stackTrace');
+        _armPlaybackHealthCheck(_loadGeneration, grace: const Duration(milliseconds: 1200), reason: error);
+      },
+    );
     player.speedStream.listen((speed) {
       if (identical(player, _player)) speedNotifier.value = speed;
     });
@@ -542,6 +573,125 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   Duration? get currentDuration => _currentDuration;
 
+  String _failureTrackKey(String trackId) {
+    if (trackId.startsWith('http://') || trackId.startsWith('https://')) return trackId;
+    final normalized = p.normalize(p.absolute(trackId));
+    return Platform.isWindows ? normalized.toLowerCase() : normalized;
+  }
+
+  void _armPlaybackHealthCheck(int generation, {Duration grace = const Duration(seconds: 5), Object? reason}) {
+    _playbackHealthTimer?.cancel();
+    if (_currentTrackIsStream || !_playbackRequested || _playbackUnavailable) return;
+    final initialPosition = _currentPosition;
+    final windowsPlayer = Platform.isWindows ? _windowsPlayer : null;
+    final justAudioPlayer = Platform.isWindows ? null : _player;
+    _playbackHealthTimer = Timer(grace, () {
+      if (_loadGeneration != generation || !_playbackRequested || _playbackUnavailable || _currentTrackIsStream) {
+        return;
+      }
+      if (Platform.isWindows) {
+        if (!identical(windowsPlayer, _windowsPlayer)) return;
+      } else if (!identical(justAudioPlayer, _player)) {
+        return;
+      }
+      final completed = Platform.isWindows ? _windowsIsCompleted : _player.processingState == ProcessingState.completed;
+      if (completed || playbackPositionAdvanced(initialPosition, _currentPosition)) {
+        _failedTrackIds.clear();
+        _retryLoadGeneration = null;
+        return;
+      }
+      unawaited(_handlePlaybackFailure(generation, reason ?? 'playback made no progress'));
+    });
+  }
+
+  Future<void> _handlePlaybackFailure(int generation, Object reason) async {
+    if (_loadGeneration != generation ||
+        _handledFailureGeneration == generation ||
+        !_playbackRequested ||
+        _currentTrackIsStream) {
+      return;
+    }
+    final current = mediaItem.value;
+    if (current == null) return;
+    _handledFailureGeneration = generation;
+    _playbackHealthTimer?.cancel();
+    debugPrint('[PlayerHandler] Playback failed for "${current.id}" (generation $generation): $reason');
+
+    if (_retryLoadGeneration != generation) {
+      _retryLoadGeneration = _loadGeneration + 1;
+      await loadTrack(
+        current.id,
+        current.title,
+        current.artist ?? 'Unknown Artist',
+        standalone: isStandaloneMode,
+        artworkUri: current.artUri,
+        standalonePlaylistNumber: _standalonePlaylistNumber,
+        standalonePlaylistIndex: _standalonePlaylistIndex,
+        preserveFailureHistory: true,
+      );
+      return;
+    }
+
+    _failedTrackIds.add(_failureTrackKey(current.id));
+    _retryLoadGeneration = null;
+    await _advanceAfterPlaybackFailure(current, generation);
+  }
+
+  Future<void> _advanceAfterPlaybackFailure(MediaItem failedItem, int generation) async {
+    final playlistNumber = _standalonePlaylistNumber;
+    if (isStandaloneMode && playlistNumber == null) {
+      await _markPlaybackUnavailable(generation);
+      return;
+    }
+    final playlist = playlistNumber != null
+        ? await _getCleanPlaylist(playlistNumber: playlistNumber)
+        : isShuffle
+        ? shuffledList
+        : await _getCleanPlaylist();
+    if (_loadGeneration != generation) return;
+    final currentIndex = _currentPlaylistIndex(playlist, failedItem.id);
+    final nextIndex = nextPlayablePlaylistIndex(
+      playlist: playlist,
+      currentIndex: currentIndex,
+      allowWrap: currentLoopMode != LoopMode.off,
+      hasFailed: (path) => _failedTrackIds.contains(_failureTrackKey(path)),
+    );
+    if (nextIndex < 0) {
+      await _markPlaybackUnavailable(generation);
+      return;
+    }
+    final path = playlist[nextIndex];
+    final metadata = await _getTrackMetadata(path);
+    if (_loadGeneration != generation) return;
+    await loadTrack(
+      path,
+      metadata.title,
+      metadata.artist,
+      standalone: playlistNumber != null,
+      standalonePlaylistNumber: playlistNumber,
+      standalonePlaylistIndex: nextIndex,
+      transitionDirection: TrackTransitionDirection.next,
+      preserveFailureHistory: true,
+    );
+  }
+
+  Future<void> _markPlaybackUnavailable([int? generation]) async {
+    if (generation != null && _loadGeneration != generation) return;
+    _playbackRequested = false;
+    _playbackUnavailable = true;
+    try {
+      if (Platform.isWindows) {
+        await _windowsPlayer!.pause();
+      } else {
+        await _player.pause();
+      }
+    } catch (error) {
+      debugPrint('[PlayerHandler] Could not pause failed playback: $error');
+    }
+    playbackVisualNotifier.value = PlaybackVisualState(trackId: mediaItem.value?.id);
+    _updatePlaybackState(force: true);
+  }
+
   void setUiVisible(bool visible) {
     if (uiVisibleNotifier.value == visible) return;
     uiVisibleNotifier.value = visible;
@@ -587,8 +737,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   void _updatePlaybackState({bool force = false}) {
-    final playing = Platform.isWindows ? _isWindowsPlaying : _player.playing;
-    final backendProcessingState = Platform.isWindows
+    final playing = !_playbackUnavailable && (Platform.isWindows ? _isWindowsPlaying : _player.playing);
+    final backendProcessingState = _playbackUnavailable
+        ? AudioProcessingState.idle
+        : Platform.isWindows
         ? _windowsIsCompleted
               ? AudioProcessingState.completed
               : _windowsIsBuffering
@@ -641,14 +793,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     try {
       final prefs = await SharedPreferences.getInstance();
       await _playbackPreferenceStore;
+      _loudnessCache = await _loudnessCacheFuture;
 
       final vol = prefs.getDouble('last_volume') ?? 0.5;
       await changeVolume(vol);
 
       final speed = prefs.getDouble('last_speed') ?? 1.0;
       final pitch = prefs.getDouble('last_pitch') ?? 1.0;
-      final bass = prefs.getDouble('last_bass_boost') ?? 0.0;
-      _globalPlaybackAdjustments = PlaybackAdjustments(speed: speed, pitch: pitch, bass: bass);
+      final encodedEqualizer = prefs.getString('last_equalizer_settings_v1');
+      final equalizer = encodedEqualizer == null
+          ? EqualizerSettings.fromLegacyBass(prefs.getDouble('last_bass_boost') ?? 0)
+          : EqualizerSettings.fromJson(jsonDecode(encodedEqualizer));
+      _globalPlaybackAdjustments = PlaybackAdjustments(speed: speed, pitch: pitch, equalizer: equalizer);
 
       final scopeName = prefs.getString('playback_settings_scope');
       playbackSettingsScopeNotifier.value = PlaybackSettingsScope.values.firstWhere(
@@ -658,6 +814,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       crossfadeEnabledNotifier.value = prefs.getBool('crossfade_enabled') ?? false;
       crossfadeDurationSecondsNotifier.value = (prefs.getDouble('crossfade_duration_seconds') ?? 3.0).clamp(0.0, 8.0);
       resumeLongTracksNotifier.value = prefs.getBool('resume_long_tracks') ?? true;
+      volumeNormalizationEnabledNotifier.value = prefs.getBool('volume_normalization_enabled') ?? false;
       seekStepNotifier.value = (prefs.getInt('seek_step_seconds') ?? 5).clamp(1, 15);
 
       await _applyPlaybackAdjustments(
@@ -680,6 +837,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
       if (trackPath != null && trackTitle != null && trackArtist != null) {
         await _preloadTrack(trackPath, trackTitle, trackArtist, externalSource: trackWasExternal);
+      }
+      if (volumeNormalizationEnabledNotifier.value) {
+        unawaited(_queueLibraryLoudnessAnalysis());
       }
     } catch (e) {
       debugPrint('Error initializing saved state: $e');
@@ -840,7 +1000,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       await Future.wait([
         prefs.setDouble('last_speed', adjustments.speed),
         prefs.setDouble('last_pitch', adjustments.pitch),
-        prefs.setDouble('last_bass_boost', adjustments.bass),
+        prefs.setString('last_equalizer_settings_v1', jsonEncode(adjustments.equalizer.toJson())),
+        // Keep the legacy scalar for one release so downgrades remain usable.
+        prefs.setDouble('last_bass_boost', adjustments.equalizer.legacyBassEquivalent),
       ]);
       return;
     }
@@ -850,13 +1012,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   PlaybackAdjustments get _currentAdjustments =>
-      PlaybackAdjustments(speed: speedNotifier.value, pitch: pitchNotifier.value, bass: bassBoostNotifier.value);
+      PlaybackAdjustments(speed: speedNotifier.value, pitch: pitchNotifier.value, equalizer: equalizerNotifier.value);
 
   Future<void> _applyPlaybackAdjustments(PlaybackAdjustments adjustments, {required bool persist}) {
     final normalized = PlaybackAdjustments(
       speed: adjustments.speed.clamp(0.5, 2.0),
       pitch: adjustments.pitch.clamp(0.5, 2.0),
-      bass: adjustments.bass.clamp(0.0, 1.0),
+      equalizer: adjustments.equalizer,
     );
     _requestedPlaybackAdjustments = normalized;
     final persistenceScope = playbackSettingsScopeNotifier.value;
@@ -887,20 +1049,20 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     required PlaybackSettingsScope persistenceScope,
     required String? persistenceTrackId,
   }) async {
-    var bassApplied = false;
+    var equalizerApplied = false;
     if (Platform.isWindows) {
-      bassApplied = await _applyWindowsPlaybackAdjustments(_windowsPlayer!, normalized);
+      equalizerApplied = await _applyWindowsPlaybackAdjustments(_windowsPlayer!, normalized);
     } else {
       await _player.setSpeed(normalized.speed);
       await _player.setPitch(normalized.pitch);
-      if (mediaItem.value != null || normalized.bass == 0) {
-        bassApplied = await _applyAndroidBass(_player, _androidEqualizer, normalized.bass);
+      if (mediaItem.value != null || !normalized.equalizer.isActive) {
+        equalizerApplied = await _applyAndroidEqualizer(_androidEqualizer, normalized.equalizer);
       }
     }
     speedNotifier.value = normalized.speed;
     pitchNotifier.value = normalized.pitch;
-    bassBoostNotifier.value = normalized.bass;
-    _bassEffectApplied = bassApplied;
+    equalizerNotifier.value = normalized.equalizer;
+    _equalizerEffectApplied = equalizerApplied;
     await _applyOutputVolume();
     if (persist) {
       await _persistPlaybackAdjustments(normalized, scope: persistenceScope, trackId: persistenceTrackId);
@@ -908,84 +1070,44 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _updatePlaybackState();
   }
 
-  Future<bool> _applyAndroidBass(
-    AudioPlayer player,
+  Future<bool> _applyAndroidEqualizer(
     AndroidEqualizer equalizer,
-    double strength, {
+    EqualizerSettings settings, {
     bool updateSupport = true,
   }) async {
     if (!Platform.isAndroid) {
-      if (updateSupport && strength > 0) bassBoostSupportedNotifier.value = false;
+      if (updateSupport && settings.isActive) equalizerSupportedNotifier.value = false;
       return false;
     }
     try {
-      final sessionId = player.androidAudioSessionId;
-      if (strength <= 0) {
-        if (sessionId != null) {
-          await AndroidBassBoost.release(sessionId).catchError((_) {});
-        }
+      if (!settings.isActive) {
         await equalizer.setEnabled(false);
         return false;
       }
-      if (sessionId != null) {
-        try {
-          if (await AndroidBassBoost.setStrength(
-            audioSessionId: sessionId,
-            strength: strength,
-          ).timeout(const Duration(seconds: 2))) {
-            await equalizer.setEnabled(false);
-            if (updateSupport) bassBoostSupportedNotifier.value = true;
-            return true;
-          }
-        } catch (error) {
-          debugPrint('[PlayerHandler] Native Android BassBoost unavailable, using EQ fallback: $error');
-        }
-      }
 
-      // BassBoost is optional on Android. Fall back to the equalizer tied to
-      // the same just_audio session rather than faking bass with volume.
       final parameters = await equalizer.parameters.timeout(const Duration(seconds: 2));
-      if (parameters.bands.isEmpty || parameters.maxDecibels <= 0) {
-        throw StateError('The active Android audio session exposes no boost-capable equalizer bands');
+      if (parameters.bands.isEmpty) {
+        throw StateError('The active Android audio session exposes no equalizer bands');
       }
-      final maximumGain = math.min(10.0, parameters.maxDecibels);
-      var hasLowBand = false;
       for (final band in parameters.bands) {
-        final weight = androidBassBandWeight(
-          lowerFrequency: band.lowerFrequency,
-          upperFrequency: band.upperFrequency,
-          centerFrequency: band.centerFrequency,
-        );
-        hasLowBand = hasLowBand || weight > 0;
-        await band.setGain((maximumGain * strength * weight).clamp(parameters.minDecibels, parameters.maxDecibels));
-      }
-      if (!hasLowBand) {
-        // Defensive fallback for vendor implementations that report unusable
-        // frequency metadata: the first band is still the lowest band.
-        await parameters.bands.first.setGain(
-          (maximumGain * strength).clamp(parameters.minDecibels, parameters.maxDecibels),
+        await band.setGain(
+          interpolatedEqualizerGain(
+            band.centerFrequency,
+            settings,
+          ).clamp(parameters.minDecibels, parameters.maxDecibels),
         );
       }
       await equalizer.setEnabled(true);
-      if (updateSupport) bassBoostSupportedNotifier.value = true;
+      if (updateSupport) equalizerSupportedNotifier.value = true;
       return true;
     } catch (error) {
       debugPrint('[PlayerHandler] Android equalizer unavailable: $error');
       try {
         await equalizer.setEnabled(false);
       } catch (_) {}
-      if (updateSupport) bassBoostSupportedNotifier.value = false;
-      return false;
     }
-  }
-
-  Future<void> _releaseAndroidBass(AudioPlayer player) async {
-    if (!Platform.isAndroid) return;
-    final sessionId = player.androidAudioSessionId;
-    if (sessionId == null) return;
-    try {
-      await AndroidBassBoost.release(sessionId);
-    } catch (_) {}
+    if (updateSupport) equalizerSupportedNotifier.value = false;
+    return false;
   }
 
   Future<bool> _applyWindowsPlaybackAdjustments(
@@ -999,27 +1121,25 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       final platform = player.platform;
       if (platform is! mk.NativePlayer) throw UnsupportedError('Native libmpv filters are unavailable');
       await platform.setProperty('af', buildWindowsAudioFilter(adjustments));
-      if (updateSupport) bassBoostSupportedNotifier.value = true;
-      return adjustments.bass > 0;
+      if (updateSupport) equalizerSupportedNotifier.value = true;
+      return adjustments.equalizer.isActive;
     } catch (error) {
-      debugPrint('[PlayerHandler] Windows bass filter unavailable: $error');
-      if (updateSupport && adjustments.bass > 0) bassBoostSupportedNotifier.value = false;
+      debugPrint('[PlayerHandler] Windows equalizer filter unavailable: $error');
+      if (updateSupport && adjustments.equalizer.isActive) equalizerSupportedNotifier.value = false;
       return false;
     }
   }
-
-  double _bassHeadroomMultiplier(double bass, bool applied) =>
-      applied ? bassOutputHeadroomMultiplier(bass, limiterAvailable: Platform.isWindows) : 1.0;
 
   Future<void> _setJustAudioOutputVolume(
     AudioPlayer player,
     AndroidLoudnessEnhancer loudnessEnhancer,
     double multiplier,
-    double bass,
-    bool bassApplied,
+    EqualizerSettings equalizer,
+    bool equalizerApplied,
+    double normalizationMultiplier,
   ) async {
-    final raw = volumeNotifier.value * multiplier;
-    final headroom = _bassHeadroomMultiplier(bass, bassApplied);
+    final raw = volumeNotifier.value * multiplier * normalizationMultiplier;
+    final headroom = equalizerOutputHeadroomMultiplier(equalizer, effectApplied: equalizerApplied);
     if (Platform.isAndroid) {
       final effectiveRaw = raw * headroom;
       await player.setVolume(effectiveRaw.clamp(0.0, 1.0));
@@ -1030,8 +1150,19 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     }
   }
 
-  Future<void> _setWindowsOutputVolume(mk.Player player, double multiplier, double bass, bool bassApplied) =>
-      player.setVolume(volumeNotifier.value * multiplier * _bassHeadroomMultiplier(bass, bassApplied) * 100.0);
+  Future<void> _setWindowsOutputVolume(
+    mk.Player player,
+    double multiplier,
+    EqualizerSettings equalizer,
+    bool equalizerApplied,
+    double normalizationMultiplier,
+  ) => player.setVolume(
+    volumeNotifier.value *
+        multiplier *
+        normalizationMultiplier *
+        equalizerOutputHeadroomMultiplier(equalizer, effectApplied: equalizerApplied) *
+        100.0,
+  );
 
   Future<void> _applyOutputVolume() async {
     try {
@@ -1039,20 +1170,131 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         await _setWindowsOutputVolume(
           _windowsPlayer!,
           _transitionVolumeMultiplier,
-          bassBoostNotifier.value,
-          _bassEffectApplied,
+          equalizerNotifier.value,
+          _equalizerEffectApplied,
+          _normalizationMultiplier,
         );
       } else {
         await _setJustAudioOutputVolume(
           _player,
           _loudnessEnhancer,
           _transitionVolumeMultiplier,
-          bassBoostNotifier.value,
-          _bassEffectApplied,
+          equalizerNotifier.value,
+          _equalizerEffectApplied,
+          _normalizationMultiplier,
         );
       }
     } catch (error) {
       debugPrint('[PlayerHandler] Could not apply output volume: $error');
+    }
+  }
+
+  double _normalizationMultiplierFor(String filePath) {
+    if (!volumeNormalizationEnabledNotifier.value ||
+        filePath.startsWith('http://') ||
+        filePath.startsWith('https://')) {
+      return 1.0;
+    }
+    return _loudnessCache?.profileFor(filePath)?.multiplier ?? 1.0;
+  }
+
+  Future<void> setVolumeNormalizationEnabled(bool enabled) async {
+    if (volumeNormalizationEnabledNotifier.value == enabled) return;
+    volumeNormalizationEnabledNotifier.value = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('volume_normalization_enabled', enabled);
+
+    final currentPath = mediaItem.value?.id;
+    final target = currentPath == null ? 1.0 : _normalizationMultiplierFor(currentPath);
+    await _rampNormalizationMultiplier(target);
+    if (!enabled) return;
+    if (currentPath != null) _scheduleLoudnessAnalysis(currentPath, priority: true);
+    unawaited(_queueLibraryLoudnessAnalysis());
+  }
+
+  Future<void> _rampNormalizationMultiplier(double target) async {
+    final initial = _normalizationMultiplier;
+    if ((target - initial).abs() < 0.0001) return;
+    const steps = 8;
+    for (var step = 1; step <= steps; step++) {
+      _normalizationMultiplier = initial + (target - initial) * step / steps;
+      await _applyOutputVolume();
+      if (step < steps) await Future<void>.delayed(const Duration(milliseconds: 30));
+    }
+  }
+
+  void _scheduleLoudnessAnalysis(String filePath, {bool priority = false}) {
+    if (!volumeNormalizationEnabledNotifier.value ||
+        filePath.startsWith('http://') ||
+        filePath.startsWith('https://') ||
+        _loudnessCache?.profileFor(filePath) != null) {
+      return;
+    }
+    final identity = playbackLoudnessIdentity(filePath);
+    if (!_queuedLoudnessPaths.add(identity)) return;
+    if (priority) {
+      _loudnessQueue.insert(0, filePath);
+    } else {
+      _loudnessQueue.add(filePath);
+    }
+    final progress = loudnessScanProgressNotifier.value;
+    loudnessScanProgressNotifier.value = LoudnessScanProgress(
+      scanning: true,
+      completed: progress.scanning ? progress.completed : 0,
+      total: (progress.scanning ? progress.total : 0) + 1,
+    );
+    unawaited(_runLoudnessWorker());
+  }
+
+  Future<void> _queueLibraryLoudnessAnalysis() async {
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (!volumeNormalizationEnabledNotifier.value) return;
+    try {
+      final current = mediaItem.value?.id;
+      final playlist = await _getCleanPlaylist();
+      if (current != null) _scheduleLoudnessAnalysis(current, priority: true);
+      for (final path in playlist) {
+        if (!_sameTrackId(path, current ?? '')) _scheduleLoudnessAnalysis(path);
+      }
+    } catch (error) {
+      debugPrint('[PlayerHandler] Could not queue loudness analysis: $error');
+    }
+  }
+
+  Future<void> _runLoudnessWorker() async {
+    if (_loudnessWorkerRunning) return;
+    _loudnessWorkerRunning = true;
+    final cache = _loudnessCache ?? await _loudnessCacheFuture;
+    _loudnessCache = cache;
+    try {
+      while (_loudnessQueue.isNotEmpty && volumeNormalizationEnabledNotifier.value) {
+        final filePath = _loudnessQueue.removeAt(0);
+        final identity = playbackLoudnessIdentity(filePath);
+        try {
+          if (cache.profileFor(filePath) == null) {
+            final profile = await _loudnessAnalyzer.analyze(filePath);
+            if (profile != null) await cache.store(filePath, profile);
+          }
+        } finally {
+          _queuedLoudnessPaths.remove(identity);
+          final progress = loudnessScanProgressNotifier.value;
+          loudnessScanProgressNotifier.value = LoudnessScanProgress(
+            scanning: _loudnessQueue.isNotEmpty,
+            completed: progress.completed + 1,
+            total: progress.total,
+          );
+        }
+      }
+    } finally {
+      _loudnessWorkerRunning = false;
+      if (!volumeNormalizationEnabledNotifier.value) {
+        _loudnessQueue.clear();
+        _queuedLoudnessPaths.clear();
+        loudnessScanProgressNotifier.value = const LoudnessScanProgress();
+      } else if (_loudnessQueue.isEmpty) {
+        final progress = loudnessScanProgressNotifier.value;
+        loudnessScanProgressNotifier.value = LoudnessScanProgress(completed: progress.completed, total: progress.total);
+      }
     }
   }
 
@@ -1185,7 +1427,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   ) async {
     final outgoing = _windowsPlayer!;
     final outgoingAdjustments = _currentAdjustments;
-    final outgoingBassApplied = _bassEffectApplied;
+    final outgoingEqualizerApplied = _equalizerEffectApplied;
+    final outgoingNormalization = _normalizationMultiplier;
+    final incomingNormalization = _normalizationMultiplierFor(target.path);
     final incoming = mk.Player(configuration: const mk.PlayerConfiguration(pitch: true));
     _attachWindowsPlayer(incoming);
     var adopted = false;
@@ -1193,22 +1437,40 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       final uri = await _buildMediaKitUri(target.path);
       if (generation != _crossfadeGeneration) return;
       await incoming.open(mk.Media(uri), play: false);
-      final incomingBassApplied = await _applyWindowsPlaybackAdjustments(
+      final incomingEqualizerApplied = await _applyWindowsPlaybackAdjustments(
         incoming,
         incomingAdjustments,
         updateSupport: false,
       );
       final resume = await _incomingResumePosition(target.path, incoming.state.duration);
       if (resume != null) await incoming.seek(resume);
-      await _setWindowsOutputVolume(incoming, 0, incomingAdjustments.bass, incomingBassApplied);
+      await _setWindowsOutputVolume(
+        incoming,
+        0,
+        incomingAdjustments.equalizer,
+        incomingEqualizerApplied,
+        incomingNormalization,
+      );
       await incoming.play();
       final completed = await _runEqualPowerFade(generation, _availableCrossfadeDuration(fade), (
         outgoingVolume,
         incomingVolume,
       ) async {
         await Future.wait([
-          _setWindowsOutputVolume(outgoing, outgoingVolume, outgoingAdjustments.bass, outgoingBassApplied),
-          _setWindowsOutputVolume(incoming, incomingVolume, incomingAdjustments.bass, incomingBassApplied),
+          _setWindowsOutputVolume(
+            outgoing,
+            outgoingVolume,
+            outgoingAdjustments.equalizer,
+            outgoingEqualizerApplied,
+            outgoingNormalization,
+          ),
+          _setWindowsOutputVolume(
+            incoming,
+            incomingVolume,
+            incomingAdjustments.equalizer,
+            incomingEqualizerApplied,
+            incomingNormalization,
+          ),
         ]);
       });
       if (!completed || !identical(outgoing, _windowsPlayer)) return;
@@ -1220,7 +1482,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _windowsBufferedPosition = incoming.state.buffer;
       _windowsIsBuffering = incoming.state.buffering;
       _windowsIsCompleted = incoming.state.completed;
-      _bassEffectApplied = incomingBassApplied;
+      _equalizerEffectApplied = incomingEqualizerApplied;
+      _normalizationMultiplier = incomingNormalization;
       await _finishAutomaticCrossfade(outgoingItem, target, incomingAdjustments);
       unawaited(outgoing.stop().catchError((_) {}));
       unawaited(outgoing.dispose().catchError((_) {}));
@@ -1230,7 +1493,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         await incoming.dispose().catchError((_) {});
         if (identical(outgoing, _windowsPlayer)) {
           _crossfadeInProgress = false;
-          await _setWindowsOutputVolume(outgoing, 1.0, outgoingAdjustments.bass, outgoingBassApplied);
+          await _setWindowsOutputVolume(
+            outgoing,
+            1.0,
+            outgoingAdjustments.equalizer,
+            outgoingEqualizerApplied,
+            outgoingNormalization,
+          );
         }
       }
     }
@@ -1246,7 +1515,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final outgoing = _player;
     final outgoingLoudnessEnhancer = _loudnessEnhancer;
     final outgoingAdjustments = _currentAdjustments;
-    final outgoingBassApplied = _bassEffectApplied;
+    final outgoingEqualizerApplied = _equalizerEffectApplied;
+    final outgoingNormalization = _normalizationMultiplier;
+    final incomingNormalization = _normalizationMultiplierFor(target.path);
     final backend = _createJustAudioBackend();
     final incoming = backend.player;
     _attachJustAudioPlayer(incoming);
@@ -1257,10 +1528,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       await incoming.setAudioSource(source);
       await incoming.setSpeed(incomingAdjustments.speed);
       await incoming.setPitch(incomingAdjustments.pitch);
-      final incomingBassApplied = await _applyAndroidBass(
-        incoming,
+      final incomingEqualizerApplied = await _applyAndroidEqualizer(
         backend.equalizer,
-        incomingAdjustments.bass,
+        incomingAdjustments.equalizer,
         updateSupport: false,
       );
       final resume = await _incomingResumePosition(target.path, incoming.duration);
@@ -1269,8 +1539,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         incoming,
         backend.loudnessEnhancer,
         0,
-        incomingAdjustments.bass,
-        incomingBassApplied,
+        incomingAdjustments.equalizer,
+        incomingEqualizerApplied,
+        incomingNormalization,
       );
       // just_audio's play Future remains pending until playback is paused,
       // stopped, or completes. Awaiting it would leave the incoming player at
@@ -1290,15 +1561,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             outgoing,
             outgoingLoudnessEnhancer,
             outgoingVolume,
-            outgoingAdjustments.bass,
-            outgoingBassApplied,
+            outgoingAdjustments.equalizer,
+            outgoingEqualizerApplied,
+            outgoingNormalization,
           ),
           _setJustAudioOutputVolume(
             incoming,
             backend.loudnessEnhancer,
             incomingVolume,
-            incomingAdjustments.bass,
-            incomingBassApplied,
+            incomingAdjustments.equalizer,
+            incomingEqualizerApplied,
+            incomingNormalization,
           ),
         ]);
       });
@@ -1307,15 +1580,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _player = incoming;
       _loudnessEnhancer = backend.loudnessEnhancer;
       _androidEqualizer = backend.equalizer;
-      _bassEffectApplied = incomingBassApplied;
+      _equalizerEffectApplied = incomingEqualizerApplied;
+      _normalizationMultiplier = incomingNormalization;
       adopted = true;
       await _finishAutomaticCrossfade(outgoingItem, target, incomingAdjustments);
-      unawaited(_releaseAndroidBass(outgoing));
       unawaited(outgoing.stop().catchError((_) {}));
       unawaited(outgoing.dispose().catchError((_) {}));
     } finally {
       if (!adopted) {
-        await _releaseAndroidBass(incoming);
         await incoming.stop().catchError((_) {});
         await incoming.dispose().catchError((_) {});
         if (identical(outgoing, _player)) {
@@ -1324,8 +1596,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             outgoing,
             outgoingLoudnessEnhancer,
             1.0,
-            outgoingAdjustments.bass,
-            outgoingBassApplied,
+            outgoingAdjustments.equalizer,
+            outgoingEqualizerApplied,
+            outgoingNormalization,
           );
         }
       }
@@ -1354,7 +1627,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _standalonePlaylistIndex = target.playlistIndex;
     speedNotifier.value = adjustments.speed;
     pitchNotifier.value = adjustments.pitch;
-    bassBoostNotifier.value = adjustments.bass;
+    equalizerNotifier.value = adjustments.equalizer;
     _requestedPlaybackAdjustments = adjustments;
     trackTransitionNotifier.value = TrackTransitionState(
       revision: trackTransitionNotifier.value.revision + 1,
@@ -1387,6 +1660,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       ),
     );
     unawaited(_prepareAudioEnvelope(generation: generation, filePath: target.path));
+    unawaited(_prepareLoudnessAnalysis(generation: generation, filePath: target.path));
   }
 
   // ─── Core playback ────────────────────────────────────────────────
@@ -1403,19 +1677,49 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       );
       return;
     }
-    if (Platform.isWindows) {
-      if (_isWindowsPlaying) return;
-      await _windowsPlayer!.play();
-      _updatePlaybackState();
+    final current = mediaItem.value;
+    if (_playbackUnavailable && current != null) {
+      _failedTrackIds.clear();
+      _retryLoadGeneration = null;
+      await loadTrack(
+        current.id,
+        current.title,
+        current.artist ?? 'Unknown Artist',
+        standalone: isStandaloneMode,
+        artworkUri: current.artUri,
+        standalonePlaylistNumber: _standalonePlaylistNumber,
+        standalonePlaylistIndex: _standalonePlaylistIndex,
+      );
       return;
     }
-    if (_player.playing) return;
-    await _player.play();
+    _playbackRequested = true;
+    if (Platform.isWindows) {
+      try {
+        if (!_isWindowsPlaying) await _windowsPlayer!.play();
+      } catch (error) {
+        await _handlePlaybackFailure(_loadGeneration, error);
+        return;
+      }
+      _updatePlaybackState();
+      _armPlaybackHealthCheck(_loadGeneration);
+      return;
+    }
+    if (!_player.playing) {
+      unawaited(
+        _player.play().catchError((Object error, StackTrace stackTrace) async {
+          debugPrint('[PlayerHandler] Playback start failed: $error\n$stackTrace');
+          await _handlePlaybackFailure(_loadGeneration, error);
+        }),
+      );
+    }
     _updatePlaybackState();
+    _armPlaybackHealthCheck(_loadGeneration);
   }
 
   @override
   Future<void> pause() async {
+    _playbackRequested = false;
+    _playbackHealthTimer?.cancel();
     await saveCurrentPlaybackPosition();
     if (Platform.isWindows) {
       if (!_isWindowsPlaying) return;
@@ -1503,6 +1807,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     await _seekOperationQueue;
     await saveCurrentPlaybackPosition();
     _pendingRestoredTrack = null;
+    _playbackRequested = false;
+    _playbackUnavailable = false;
+    _playbackHealthTimer?.cancel();
+    _failedTrackIds.clear();
+    _retryLoadGeneration = null;
+    _handledFailureGeneration = null;
     _loadGeneration++;
     _crossfadeGeneration++;
     _crossfadeInProgress = false;
@@ -1525,7 +1835,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         _windowsIsBuffering = false;
         _windowsIsCompleted = false;
       } else {
-        await _releaseAndroidBass(_player);
         await _player.stop();
       }
     } catch (e) {
@@ -1571,12 +1880,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     );
   }
 
-  Future<void> setBassBoost(double strength) async {
-    await _applyPlaybackAdjustments(
-      _requestedPlaybackAdjustments.copyWith(bass: strength.clamp(0.0, 1.0)),
-      persist: true,
-    );
+  Future<void> setEqualizer(EqualizerSettings settings) async {
+    await _applyPlaybackAdjustments(_requestedPlaybackAdjustments.copyWith(equalizer: settings), persist: true);
   }
+
+  /// Compatibility shim for older companion clients during the protocol
+  /// transition. New UI uses [setEqualizer].
+  Future<void> setBassBoost(double strength) => setEqualizer(EqualizerSettings.fromLegacyBass(strength));
 
   Future<void> resetPlaybackAdjustments() => _applyPlaybackAdjustments(PlaybackAdjustments.neutral, persist: true);
 
@@ -1590,8 +1900,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     int? standalonePlaylistNumber,
     int? standalonePlaylistIndex,
     TrackTransitionDirection transitionDirection = TrackTransitionDirection.none,
+    bool preserveFailureHistory = false,
   }) async {
     final generation = ++_loadGeneration;
+    _playbackRequested = false;
+    _playbackUnavailable = false;
+    _playbackHealthTimer?.cancel();
+    _handledFailureGeneration = null;
+    if (!preserveFailureHistory) {
+      _failedTrackIds.clear();
+      _retryLoadGeneration = null;
+    }
     _activeTrackLoadGeneration = generation;
     try {
       await _loadTrackRequest(
@@ -1648,6 +1967,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_loadGeneration != myGen) return;
 
     _currentTrackIsStream = isStream;
+    _normalizationMultiplier = _normalizationMultiplierFor(filePath);
 
     // Optimistic UI update
     mediaItem.add(
@@ -1666,6 +1986,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       ),
     );
     playbackVisualNotifier.value = PlaybackVisualState(trackId: filePath, loading: isStream);
+    _playbackRequested = true;
 
     try {
       // Resolving a stream can take time, so silence the previous source while
@@ -1699,7 +2020,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         _windowsBufferedPosition = Duration.zero;
 
         final player = _windowsPlayer!;
-        await player.open(mk.Media(uri), play: false);
+        // Keep source replacement and playback start in one media_kit command.
+        // Splitting this into open(play: false) followed by play() regressed in
+        // v2.3.0: mpv can acknowledge the open before the replacement source is
+        // ready to accept play, leaving an otherwise valid local track at 0:00.
+        await player.open(mk.Media(uri), play: true);
         if (_loadGeneration != myGen) {
           await player.stop();
           return;
@@ -1724,11 +2049,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (_loadGeneration != myGen) return;
       await _restorePlaybackPosition(filePath, myGen);
       if (_loadGeneration != myGen) return;
-      if (Platform.isWindows) {
-        await _windowsPlayer!.play();
-      } else {
-        unawaited(_player.play());
+      if (!Platform.isWindows) {
+        unawaited(
+          _player.play().catchError((Object error, StackTrace stackTrace) async {
+            debugPrint('[PlayerHandler] Playback start failed: $error\n$stackTrace');
+            await _handlePlaybackFailure(myGen, error);
+          }),
+        );
       }
+      _armPlaybackHealthCheck(myGen);
 
       // Do not stop the background visualizer decoder until the new source is
       // already ready (and Windows is already playing). Process cancellation
@@ -1763,6 +2092,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         ),
       );
       unawaited(_prepareAudioEnvelope(generation: myGen, filePath: filePath));
+      unawaited(_prepareLoudnessAnalysis(generation: myGen, filePath: filePath));
     } catch (e, st) {
       if (_loadGeneration == myGen) {
         debugPrint('[PlayerHandler] Error loading track "$filePath": $e\n$st');
@@ -1770,6 +2100,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         if (standalone) setStandalonePresentation(false);
         playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
         _updatePlaybackState();
+        await _handlePlaybackFailure(myGen, e);
       }
     }
   }
@@ -1817,6 +2148,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_loadGeneration != generation || envelope == null) return;
     _audioEnvelope = envelope;
     _audioEnvelopeTrackId = filePath;
+  }
+
+  Future<void> _prepareLoudnessAnalysis({required int generation, required String filePath}) async {
+    if (!volumeNormalizationEnabledNotifier.value) return;
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (_loadGeneration != generation) return;
+    _scheduleLoudnessAnalysis(filePath, priority: true);
   }
 
   Future<void> playStandaloneStream({
@@ -2207,9 +2545,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       prefs.setDouble('last_volume', volumeNotifier.value),
       prefs.setDouble('last_speed', _globalPlaybackAdjustments.speed),
       prefs.setDouble('last_pitch', _globalPlaybackAdjustments.pitch),
-      prefs.setDouble('last_bass_boost', _globalPlaybackAdjustments.bass),
+      prefs.setString('last_equalizer_settings_v1', jsonEncode(_globalPlaybackAdjustments.equalizer.toJson())),
+      prefs.setDouble('last_bass_boost', _globalPlaybackAdjustments.equalizer.legacyBassEquivalent),
       prefs.setString('last_loop_mode', currentLoopMode.name),
       prefs.setBool('last_shuffle', isShuffle),
+      prefs.setBool('volume_normalization_enabled', volumeNormalizationEnabledNotifier.value),
     ]);
     final current = mediaItem.value;
     if (current != null) {
@@ -2301,18 +2641,19 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> dispose() async {
     WidgetsBinding.instance.removeObserver(this);
     _periodicPositionSaveTimer?.cancel();
+    _playbackHealthTimer?.cancel();
     await _seekOperationQueue;
     _loadGeneration++;
     _activeTrackLoadGeneration = null;
     _crossfadeGeneration++;
     _crossfadeInProgress = false;
     _envelopeAnalyzer.dispose();
+    _loudnessAnalyzer.dispose();
     await saveState();
     await _windowsStreamProxy.dispose();
     if (Platform.isWindows) {
       await _windowsPlayer?.dispose();
     } else {
-      await _releaseAndroidBass(_player);
       await _player.dispose();
     }
     await DiscordPresenceService().clearPresence();
@@ -2322,11 +2663,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     volumeNotifier.dispose();
     speedNotifier.dispose();
     pitchNotifier.dispose();
-    bassBoostNotifier.dispose();
-    bassBoostSupportedNotifier.dispose();
+    equalizerNotifier.dispose();
+    equalizerSupportedNotifier.dispose();
     crossfadeEnabledNotifier.dispose();
     crossfadeDurationSecondsNotifier.dispose();
     resumeLongTracksNotifier.dispose();
+    volumeNormalizationEnabledNotifier.dispose();
+    loudnessScanProgressNotifier.dispose();
     playbackSettingsScopeNotifier.dispose();
     seekStepNotifier.dispose();
     playbackModeRevision.dispose();

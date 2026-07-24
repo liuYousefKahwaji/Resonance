@@ -43,6 +43,10 @@ void main() {
       'pitch': 0.9,
       'bass': 0.7,
       'bassSupported': true,
+      'equalizerEnabled': true,
+      'equalizerPreset': 'rock',
+      'equalizerGainsDb': [4, 2, -2, 3, 4],
+      'equalizerSupported': true,
       'queue': [
         {'id': 'current', 'title': 'Current', 'artist': 'Artist', 'current': true},
         {'id': 'next', 'title': 'Next', 'artist': 'Artist', 'current': false},
@@ -54,6 +58,9 @@ void main() {
     expect(snapshot.volume, 1.4);
     expect(snapshot.seekStepSeconds, 9);
     expect(snapshot.bassSupported, isTrue);
+    expect(snapshot.equalizerPreset, 'rock');
+    expect(snapshot.equalizerGainsDb, [4, 2, -2, 3, 4]);
+    expect(snapshot.equalizerSupported, isTrue);
   });
 
   test('playback snapshot clamps remote volume and Windows seek step', () {

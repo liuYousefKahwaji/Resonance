@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/core/audio/equalizer_settings.dart';
+import 'package:resonance/screens/settings/equalizer_screen.dart';
 
 class PlaybackSettings extends StatelessWidget {
   const PlaybackSettings({super.key});
@@ -34,14 +36,12 @@ class _PlaybackSettingsDialog extends StatefulWidget {
 class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
   late double speed;
   late double pitch;
-  late double bass;
 
   @override
   void initState() {
     super.initState();
     speed = widget.handler.speedNotifier.value;
     pitch = widget.handler.pitchNotifier.value;
-    bass = widget.handler.bassBoostNotifier.value;
   }
 
   @override
@@ -50,7 +50,7 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
       title: const Text('Playback Settings'),
       content: SizedBox(
         width: 300,
-        height: 270,
+        height: 240,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -102,39 +102,29 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
               ],
             ),
             const SizedBox(height: 20),
-            ValueListenableBuilder<bool>(
-              valueListenable: widget.handler.bassBoostSupportedNotifier,
-              builder: (context, supported, _) => Row(
-                children: [
-                  Tooltip(
-                    message: supported ? 'Low-frequency equalizer boost' : 'Bass EQ is unavailable on this device',
-                    child: const Text('Bass', style: TextStyle(fontWeight: FontWeight.bold)),
+            ValueListenableBuilder<EqualizerSettings>(
+              valueListenable: widget.handler.equalizerNotifier,
+              builder: (context, equalizer, _) => Semantics(
+                button: true,
+                label: 'Open equalizer, current preset ${equalizer.preset.label}',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.equalizer_rounded),
+                  title: const Text('Equalizer', style: TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text(
+                    equalizer.enabled ? equalizer.preset.label : 'Off',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Slider(
-                      value: bass,
-                      min: 0,
-                      max: 1,
-                      divisions: 10,
-                      label: '${(bass * 100).round()}%',
-                      onChanged: supported
-                          ? (newBass) {
-                              setState(() => bass = newBass);
-                              widget.handler.setBassBoost(newBass);
-                            }
-                          : null,
-                    ),
-                  ),
-                  SizedBox(
-                    width: 42,
-                    child: Text(
-                      supported ? '${(bass * 100).round()}%' : 'N/A',
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(builder: (_) => EqualizerScreen(handler: widget.handler)),
+                    );
+                  },
+                ),
               ),
             ),
           ],
@@ -146,7 +136,6 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
             setState(() {
               speed = 1.0;
               pitch = 1.0;
-              bass = 0.0;
             });
             await widget.handler.resetPlaybackAdjustments();
           },

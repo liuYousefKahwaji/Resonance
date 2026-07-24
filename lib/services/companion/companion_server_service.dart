@@ -8,6 +8,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart' show LoopMode;
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/core/audio/equalizer_settings.dart';
 import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/services/companion/companion_protocol.dart';
 import 'package:resonance/services/companion/discord_keybind_service.dart';
@@ -217,8 +218,8 @@ class CompanionServerService extends ChangeNotifier {
     handler.seekStepNotifier.addListener(_scheduleBroadcast);
     handler.speedNotifier.addListener(_scheduleBroadcast);
     handler.pitchNotifier.addListener(_scheduleBroadcast);
-    handler.bassBoostNotifier.addListener(_scheduleBroadcast);
-    handler.bassBoostSupportedNotifier.addListener(_scheduleBroadcast);
+    handler.equalizerNotifier.addListener(_scheduleBroadcast);
+    handler.equalizerSupportedNotifier.addListener(_scheduleBroadcast);
   }
 
   void _detachNotifierListeners() {
@@ -230,8 +231,8 @@ class CompanionServerService extends ChangeNotifier {
     handler.seekStepNotifier.removeListener(_scheduleBroadcast);
     handler.speedNotifier.removeListener(_scheduleBroadcast);
     handler.pitchNotifier.removeListener(_scheduleBroadcast);
-    handler.bassBoostNotifier.removeListener(_scheduleBroadcast);
-    handler.bassBoostSupportedNotifier.removeListener(_scheduleBroadcast);
+    handler.equalizerNotifier.removeListener(_scheduleBroadcast);
+    handler.equalizerSupportedNotifier.removeListener(_scheduleBroadcast);
   }
 
   void _handleRequest(HttpRequest request) async {
@@ -352,6 +353,10 @@ class CompanionServerService extends ChangeNotifier {
         await handler.setPitch(_commandNumber(message).clamp(0.5, 2));
       case 'setBass':
         await handler.setBassBoost(_commandNumber(message).clamp(0, 1));
+      case 'setEqualizer':
+        final value = message['value'];
+        if (value is! Map) throw const FormatException('The equalizer command needs an object');
+        await handler.setEqualizer(EqualizerSettings.fromJson(value));
       case 'playTrack':
         final id = message['id'] as String? ?? '';
         final entry = _queueEntries[id];
@@ -408,8 +413,13 @@ class CompanionServerService extends ChangeNotifier {
       'seekStepSeconds': handler.seekStepNotifier.value,
       'speed': handler.speedNotifier.value,
       'pitch': handler.pitchNotifier.value,
-      'bass': handler.bassBoostNotifier.value,
-      'bassSupported': handler.bassBoostSupportedNotifier.value,
+      // Legacy fields keep older Android remotes useful during rollout.
+      'bass': handler.equalizerNotifier.value.legacyBassEquivalent,
+      'bassSupported': handler.equalizerSupportedNotifier.value,
+      'equalizerEnabled': handler.equalizerNotifier.value.enabled,
+      'equalizerPreset': handler.equalizerNotifier.value.preset.name,
+      'equalizerGainsDb': handler.equalizerNotifier.value.gainsDb,
+      'equalizerSupported': handler.equalizerSupportedNotifier.value,
       'queue': [
         for (var index = 0; index < queue.length; index++)
           {

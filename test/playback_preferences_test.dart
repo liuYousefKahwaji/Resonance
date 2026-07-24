@@ -49,14 +49,31 @@ void main() {
 
   test('per-track adjustments persist without deleting neutral or global state', () async {
     var store = await PlaybackPreferenceStore.load();
-    await store.saveAdjustments(r'C:\Music\podcast.mp3', const PlaybackAdjustments(speed: 1.4, pitch: 0.9, bass: 0.6));
+    final equalizer = EqualizerSettings.forPreset(EqualizerPreset.vocal);
+    await store.saveAdjustments(
+      r'C:\Music\podcast.mp3',
+      PlaybackAdjustments(speed: 1.4, pitch: 0.9, equalizer: equalizer),
+    );
 
     store = await PlaybackPreferenceStore.load();
     expect(store.adjustmentsFor(r'c:\music\podcast.mp3').speed, 1.4);
     expect(store.adjustmentsFor(r'c:\music\podcast.mp3').pitch, 0.9);
-    expect(store.adjustmentsFor(r'c:\music\podcast.mp3').bass, 0.6);
+    expect(store.adjustmentsFor(r'c:\music\podcast.mp3').equalizer, equalizer);
     expect(store.adjustmentsFor(r'C:\Music\new.mp3'), PlaybackAdjustments.neutral);
     await store.clearAdjustments(r'c:\music\podcast.mp3');
     expect(store.adjustmentsFor(r'C:\Music\podcast.mp3'), PlaybackAdjustments.neutral);
+  });
+
+  test('v1 bass preferences migrate to a two-band custom equalizer', () async {
+    SharedPreferences.setMockInitialValues({
+      'per_track_playback_settings_v1': '{"c:\\\\music\\\\old.mp3":{"speed":1.0,"pitch":1.0,"bass":0.6}}',
+    });
+    final store = await PlaybackPreferenceStore.load();
+    final equalizer = store.adjustmentsFor(r'c:\music\old.mp3').equalizer;
+
+    expect(equalizer.preset, EqualizerPreset.custom);
+    expect(equalizer.gainsDb[0], 6);
+    expect(equalizer.gainsDb[1], closeTo(3.6, 0.0001));
+    expect(equalizer.gainsDb.skip(2), everyElement(0));
   });
 }

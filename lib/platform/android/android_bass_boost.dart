@@ -8,7 +8,11 @@ class AndroidBassBoost {
       'audioSessionId': audioSessionId,
       'strength': strength.clamp(0.0, 1.0),
     });
-    return result?['applied'] == true;
+    final roundedStrength = result?['roundedStrength'];
+    return result?['applied'] == true &&
+        result?['strengthSupported'] == true &&
+        roundedStrength is num &&
+        roundedStrength > 0;
   }
 
   static Future<void> release(int audioSessionId) =>

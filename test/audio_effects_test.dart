@@ -3,40 +3,50 @@ import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/audio/playback_preferences.dart';
 
 void main() {
-  test('Android bass curve follows the device-reported band ranges', () {
-    final subBass = androidBassBandWeight(lowerFrequency: 30, upperFrequency: 120, centerFrequency: 60);
-    final lowMid = androidBassBandWeight(lowerFrequency: 120, upperFrequency: 460, centerFrequency: 230);
-    final treble = androidBassBandWeight(lowerFrequency: 3600, upperFrequency: 14000, centerFrequency: 7000);
+  test('Android equalizer interpolates logical bands in logarithmic frequency space', () {
+    final settings = EqualizerSettings(gainsDb: const [10, 6, 0, -4, -8]);
+    final subBass = interpolatedEqualizerGain(60, settings);
+    final lowMid = interpolatedEqualizerGain(230, settings);
+    final between = interpolatedEqualizerGain(465, settings);
+    final treble = interpolatedEqualizerGain(12000, settings);
 
-    expect(subBass, 1.0);
-    expect(lowMid, greaterThan(0));
-    expect(lowMid, lessThan(subBass));
-    expect(treble, 0.0);
+    expect(subBass, 10);
+    expect(lowMid, 6);
+    expect(between, inInclusiveRange(0, 6));
+    expect(treble, -8);
   });
 
-  test('Windows bass filter uses a strong low shelf and peak limiter', () {
+  test('Windows five-band filter uses one lavfi graph with explicit format conversion', () {
     expect(
       buildWindowsAudioFilter(PlaybackAdjustments.neutral),
       'scaletempo:scale=1.00000000',
-      reason: 'the pitch-correction filter must remain installed even at 0% bass',
+      reason: 'the pitch-correction filter must remain installed with a flat equalizer',
     );
 
-    final filter = buildWindowsAudioFilter(const PlaybackAdjustments(speed: 1.5, pitch: 0.75, bass: 1.0));
+    final filter = buildWindowsAudioFilter(
+      PlaybackAdjustments(speed: 1.5, pitch: 0.75, equalizer: EqualizerSettings.forPreset(EqualizerPreset.bassBoost)),
+    );
     expect(
       filter,
       'scaletempo:scale=2.00000000,'
-      'lavfi=[bass=g=14.00:f=105:t=q:w=0.75,'
-      'alimiter=limit=0.95:attack=5:release=50:level=false]',
+      'format=format=floatp,'
+      'lavfi=['
+      'equalizer=f=60:t=q:w=0.70:g=7.00,'
+      'equalizer=f=230:t=q:w=0.70:g=4.00,'
+      'equalizer=f=910:t=q:w=0.70:g=0.00,'
+      'equalizer=f=3600:t=q:w=0.70:g=-1.00,'
+      'equalizer=f=12000:t=q:w=0.70:g=-2.00'
+      '],'
+      'format=format=float',
     );
   });
 
-  test('bass headroom is modest and accounts for a downstream limiter', () {
-    expect(bassOutputHeadroomMultiplier(0, limiterAvailable: false), 1.0);
-    final android = bassOutputHeadroomMultiplier(1, limiterAvailable: false);
-    final windows = bassOutputHeadroomMultiplier(1, limiterAvailable: true);
+  test('equalizer automatically reserves headroom for the largest positive band', () {
+    expect(equalizerOutputHeadroomMultiplier(EqualizerSettings.flat, effectApplied: false), 1.0);
+    final boosted = EqualizerSettings.forPreset(EqualizerPreset.bassBoost);
+    final multiplier = equalizerOutputHeadroomMultiplier(boosted, effectApplied: true);
 
-    expect(android, greaterThan(0.8));
-    expect(windows, greaterThan(android));
-    expect(windows, 1.0, reason: 'Windows uses a downstream peak limiter instead of lowering all audio');
+    expect(boosted.automaticPreampDb, -7);
+    expect(multiplier, closeTo(0.447, 0.001));
   });
 }

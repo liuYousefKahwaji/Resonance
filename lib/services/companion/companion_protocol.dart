@@ -82,6 +82,10 @@ class CompanionPlaybackSnapshot {
   final double pitch;
   final double bass;
   final bool bassSupported;
+  final bool equalizerEnabled;
+  final String equalizerPreset;
+  final List<double> equalizerGainsDb;
+  final bool equalizerSupported;
   final List<CompanionTrack> queue;
 
   const CompanionPlaybackSnapshot({
@@ -96,6 +100,10 @@ class CompanionPlaybackSnapshot {
     this.pitch = 1,
     this.bass = 0,
     this.bassSupported = false,
+    this.equalizerEnabled = true,
+    this.equalizerPreset = 'flat',
+    this.equalizerGainsDb = const <double>[0, 0, 0, 0, 0],
+    this.equalizerSupported = false,
     this.queue = const [],
   });
 
@@ -120,6 +128,10 @@ class CompanionPlaybackSnapshot {
       pitch: _number(json['pitch'], 1).clamp(0.5, 2),
       bass: _number(json['bass'], 0).clamp(0, 1),
       bassSupported: json['bassSupported'] == true,
+      equalizerEnabled: json['equalizerEnabled'] as bool? ?? true,
+      equalizerPreset: json['equalizerPreset'] as String? ?? 'flat',
+      equalizerGainsDb: _equalizerGains(json['equalizerGainsDb'], json['bass']),
+      equalizerSupported: json['equalizerSupported'] == true || json['bassSupported'] == true,
       queue: rawQueue is List
           ? rawQueue
                 .whereType<Map>()
@@ -129,6 +141,14 @@ class CompanionPlaybackSnapshot {
           : const [],
     );
   }
+}
+
+List<double> _equalizerGains(Object? value, Object? legacyBass) {
+  if (value is List && value.length == 5) {
+    return value.map((gain) => _number(gain, 0).clamp(-10.0, 10.0)).toList(growable: false);
+  }
+  final bass = _number(legacyBass, 0).clamp(0.0, 1.0);
+  return <double>[bass * 10, bass * 6, 0, 0, 0];
 }
 
 double _number(Object? value, double fallback) => value is num ? value.toDouble() : fallback;

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:resonance/core/audio/equalizer_settings.dart';
 import 'package:resonance/platform/desktop/hotkey_settings_tile.dart';
 import 'package:resonance/services/companion/companion_client_service.dart';
 import 'package:resonance/services/companion/companion_protocol.dart';
@@ -301,7 +302,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
   double? _volumeDraft;
   double? _speedDraft;
   double? _pitchDraft;
-  double? _bassDraft;
+  List<double>? _equalizerDraft;
 
   @override
   void initState() {
@@ -324,6 +325,25 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
   void _refresh() {
     if (mounted) setState(() {});
   }
+
+  void _sendEqualizer(
+    CompanionPlaybackSnapshot snapshot, {
+    bool? enabled,
+    EqualizerPreset? preset,
+    List<double>? gainsDb,
+  }) {
+    final settings = preset == null
+        ? EqualizerSettings(
+            enabled: enabled ?? snapshot.equalizerEnabled,
+            preset: gainsDb == null ? _equalizerPreset(snapshot.equalizerPreset) : EqualizerPreset.custom,
+            gainsDb: gainsDb ?? snapshot.equalizerGainsDb,
+          )
+        : EqualizerSettings.forPreset(preset).copyWith(enabled: enabled ?? snapshot.equalizerEnabled);
+    _client.sendCommand('setEqualizer', value: settings.toJson());
+  }
+
+  EqualizerPreset _equalizerPreset(String value) =>
+      EqualizerPreset.values.firstWhere((preset) => preset.name == value, orElse: () => EqualizerPreset.custom);
 
   void _openScanner() {
     unawaited(_scanner?.dispose());
@@ -560,21 +580,49 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                       setState(() => _pitchDraft = null);
                     },
                   ),
-                  if (snapshot.bassSupported)
-                    _RemoteSlider(
-                      label: 'Bass',
-                      value: (_bassDraft ?? snapshot.bass).clamp(0, 1),
-                      min: 0,
-                      max: 1,
-                      divisions: 10,
-                      valueLabel: '${((_bassDraft ?? snapshot.bass) * 100).round()}%',
-                      enabled: _client.connected,
-                      onChanged: (value) => setState(() => _bassDraft = value),
-                      onChangeEnd: (value) {
-                        _client.sendCommand('setBass', value: value);
-                        setState(() => _bassDraft = null);
-                      },
+                  if (snapshot.equalizerSupported) ...[
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Equalizer'),
+                      subtitle: Text(_equalizerPreset(snapshot.equalizerPreset).label),
+                      value: snapshot.equalizerEnabled,
+                      onChanged: _client.connected ? (enabled) => _sendEqualizer(snapshot, enabled: enabled) : null,
                     ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: DropdownButton<EqualizerPreset>(
+                        value: _equalizerPreset(snapshot.equalizerPreset),
+                        onChanged: _client.connected
+                            ? (preset) {
+                                if (preset != null) _sendEqualizer(snapshot, preset: preset);
+                              }
+                            : null,
+                        items: EqualizerPreset.values
+                            .map((preset) => DropdownMenuItem(value: preset, child: Text(preset.label)))
+                            .toList(growable: false),
+                      ),
+                    ),
+                    for (var index = 0; index < equalizerBandLabels.length; index++)
+                      _RemoteSlider(
+                        label: equalizerBandLabels[index],
+                        value: (_equalizerDraft ?? snapshot.equalizerGainsDb)[index],
+                        min: -10,
+                        max: 10,
+                        divisions: 40,
+                        valueLabel:
+                            '${((_equalizerDraft ?? snapshot.equalizerGainsDb)[index] >= 0 ? '+' : '')}${(_equalizerDraft ?? snapshot.equalizerGainsDb)[index].toStringAsFixed(1)} dB',
+                        enabled: _client.connected && snapshot.equalizerEnabled,
+                        onChanged: (value) {
+                          final updated = List<double>.from(_equalizerDraft ?? snapshot.equalizerGainsDb);
+                          updated[index] = value;
+                          setState(() => _equalizerDraft = updated);
+                        },
+                        onChangeEnd: (_) {
+                          _sendEqualizer(snapshot, gainsDb: _equalizerDraft ?? snapshot.equalizerGainsDb);
+                          setState(() => _equalizerDraft = null);
+                        },
+                      ),
+                  ],
                 ],
               ),
             ),

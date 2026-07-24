@@ -74,6 +74,7 @@ class AlbumCover extends StatelessWidget {
                         tintSurface: themeProvider.hasArtworkPalette && !themeProvider.preserveOledPlayerSurface,
                         showQueueButton: Platform.isWindows && item != null && onQueueRequested != null,
                         onQueueTap: onQueueRequested,
+                        amplitudeProvider: () => handler.visualizerAmplitude,
                         onTap: item == null ? null : () => onTap?.call(path),
                         onArtworkTap: item == null ? null : () => onArtworkTap?.call(path),
                       ),
@@ -111,6 +112,7 @@ class NowPlayingCard extends StatelessWidget {
   final bool tintSurface;
   final bool showQueueButton;
   final VoidCallback? onQueueTap;
+  final double Function()? amplitudeProvider;
 
   const NowPlayingCard({
     super.key,
@@ -128,6 +130,7 @@ class NowPlayingCard extends StatelessWidget {
     this.tintSurface = false,
     this.showQueueButton = false,
     this.onQueueTap,
+    this.amplitudeProvider,
   });
 
   @override
@@ -178,13 +181,18 @@ class NowPlayingCard extends StatelessWidget {
                   key: nowPlayingArtworkTapKey,
                   onTap: onArtworkTap,
                   borderRadius: BorderRadius.circular(10),
-                  child: Hero(
-                    tag: nowPlayingArtworkHeroTag,
-                    child: _AlbumIcon(
-                      isPlaying: isPlaying,
-                      hasTrack: hasTrack,
-                      isLoading: isLoading,
-                      artworkUri: artworkUri,
+                  child: _PocketVinyl(
+                    isPlaying: isPlaying && !isLoading,
+                    accent: primary,
+                    amplitudeProvider: amplitudeProvider,
+                    child: Hero(
+                      tag: nowPlayingArtworkHeroTag,
+                      child: _AlbumIcon(
+                        isPlaying: isPlaying,
+                        hasTrack: hasTrack,
+                        isLoading: isLoading,
+                        artworkUri: artworkUri,
+                      ),
                     ),
                   ),
                 ),
@@ -245,6 +253,214 @@ class NowPlayingCard extends StatelessWidget {
       ),
     );
   }
+}
+
+@visibleForTesting
+const pocketVinylKey = Key('pocket-vinyl');
+
+class _PocketVinyl extends StatefulWidget {
+  final bool isPlaying;
+  final Color accent;
+  final double Function()? amplitudeProvider;
+  final Widget child;
+
+  const _PocketVinyl({required this.isPlaying, required this.accent, required this.child, this.amplitudeProvider});
+
+  @override
+  State<_PocketVinyl> createState() => _PocketVinylState();
+}
+
+class _PocketVinylState extends State<_PocketVinyl> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(vsync: this, duration: const Duration(seconds: 11));
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isPlaying) _controller.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PocketVinyl oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isPlaying == oldWidget.isPlaying) return;
+    if (widget.isPlaying) {
+      _controller.repeat();
+    } else {
+      _controller.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reducedMotion = MediaQuery.disableAnimationsOf(context);
+    if (reducedMotion) {
+      _controller.stop();
+    } else if (widget.isPlaying && !_controller.isAnimating) {
+      _controller.repeat();
+    }
+    final recordLeft = widget.isPlaying && !reducedMotion ? 17.0 : 12.0;
+    return SizedBox(
+      key: pocketVinylKey,
+      width: 58,
+      height: 42,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          AnimatedPositioned(
+            duration: reducedMotion ? Duration.zero : const Duration(milliseconds: 520),
+            curve: Curves.easeOutBack,
+            left: recordLeft,
+            top: 1,
+            child: ExcludeSemantics(
+              child: IgnorePointer(
+                child: RepaintBoundary(
+                  child: AnimatedBuilder(
+                    animation: _controller,
+                    builder: (context, _) {
+                      final rawAmplitude = widget.isPlaying ? (widget.amplitudeProvider?.call() ?? 0.28) : 0.0;
+                      final amplitude = math.sqrt(rawAmplitude.clamp(0.0, 1.0));
+                      return Transform.rotate(
+                        angle: _controller.value * math.pi * 2,
+                        child: CustomPaint(
+                          size: const Size.square(40),
+                          painter: _PocketVinylPainter(
+                            accent: widget.accent,
+                            phase: _controller.value,
+                            amplitude: amplitude,
+                            active: widget.isPlaying && !reducedMotion,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(left: 0, top: 0, child: widget.child),
+        ],
+      ),
+    );
+  }
+}
+
+class _PocketVinylPainter extends CustomPainter {
+  final Color accent;
+  final double phase;
+  final double amplitude;
+  final bool active;
+
+  const _PocketVinylPainter({required this.accent, required this.phase, required this.amplitude, required this.active});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = size.shortestSide / 2;
+
+    if (active) {
+      canvas.drawCircle(
+        center,
+        radius - 0.5,
+        Paint()
+          ..color = accent.withValues(alpha: 0.13 + amplitude * 0.17)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 4 + amplitude * 3.5),
+      );
+    }
+
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..shader = const RadialGradient(
+          center: Alignment(-0.30, -0.35),
+          radius: 1.05,
+          colors: <Color>[Color(0xFF393941), Color(0xFF15151A), Color(0xFF08080B)],
+          stops: <double>[0, 0.48, 1],
+        ).createShader(Offset.zero & size),
+    );
+    final groove = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.55
+      ..color = const Color(0xFF666672).withValues(alpha: 0.62);
+    for (final fraction in <double>[0.41, 0.50, 0.59, 0.68, 0.77, 0.86]) {
+      canvas.drawCircle(center, radius * fraction, groove);
+    }
+
+    // A diagonal lacquer reflection rotates with the record, making the spin
+    // readable even when the label artwork is visually symmetrical.
+    canvas.save();
+    canvas.clipPath(Path()..addOval(Offset.zero & size));
+    canvas.rotate(-0.16);
+    canvas.drawRect(
+      Rect.fromLTWH(size.width * 0.39, -5, size.width * 0.20, size.height + 10),
+      Paint()
+        ..shader = LinearGradient(
+          colors: <Color>[
+            Colors.white.withValues(alpha: 0),
+            Colors.white.withValues(alpha: 0.16 + amplitude * 0.10),
+            Colors.white.withValues(alpha: 0),
+          ],
+        ).createShader(Rect.fromLTWH(size.width * 0.39, 0, size.width * 0.20, size.height)),
+    );
+    canvas.restore();
+
+    final highlight = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = 0.9
+      ..color = Colors.white.withValues(alpha: 0.18 + amplitude * 0.14);
+    canvas.drawArc(Rect.fromCircle(center: center, radius: radius * 0.73), -1.12, 0.72, false, highlight);
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius * 0.55),
+      2.02,
+      0.48,
+      false,
+      highlight..color = Colors.white.withValues(alpha: 0.10 + amplitude * 0.08),
+    );
+
+    canvas.drawCircle(center, radius * 0.32, Paint()..color = accent);
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius * 0.25),
+      -math.pi / 2,
+      math.pi * 0.72,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = Colors.white.withValues(alpha: 0.75),
+    );
+    canvas.drawCircle(center, radius * 0.07, Paint()..color = const Color(0xFF111116));
+
+    // Three brief glints per revolution mimic dust catching the light. The
+    // high exponent keeps them rare instead of turning into a constant strobe.
+    if (active) {
+      final sparkle = math.pow(math.max(0.0, math.sin(phase * math.pi * 6)), 20).toDouble();
+      if (sparkle > 0.02) {
+        final point = Offset(size.width * 0.88, size.height * 0.22);
+        final sparklePaint = Paint()
+          ..color = Colors.white.withValues(alpha: sparkle * (0.55 + amplitude * 0.35))
+          ..strokeWidth = 0.8
+          ..strokeCap = StrokeCap.round;
+        final reach = 1.2 + sparkle * 1.8;
+        canvas.drawLine(point.translate(-reach, 0), point.translate(reach, 0), sparklePaint);
+        canvas.drawLine(point.translate(0, -reach), point.translate(0, reach), sparklePaint);
+        canvas.drawCircle(point, 0.7 + sparkle * 0.6, Paint()..color = accent.withValues(alpha: sparkle * 0.8));
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PocketVinylPainter oldDelegate) =>
+      oldDelegate.accent != accent ||
+      oldDelegate.phase != phase ||
+      oldDelegate.amplitude != amplitude ||
+      oldDelegate.active != active;
 }
 
 class _AlbumIcon extends StatelessWidget {

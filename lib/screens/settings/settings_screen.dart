@@ -12,6 +12,7 @@ import 'package:metadata_god/metadata_god.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/core/audio/loudness_normalization.dart';
 import 'package:resonance/core/audio/playback_preferences.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/platform/android/storage_permission_service.dart';
@@ -25,6 +26,7 @@ import 'package:resonance/app/theme.dart';
 import 'package:resonance/screens/settings/app_version_label.dart';
 import 'package:resonance/screens/settings/download_history_screen.dart';
 import 'package:resonance/screens/settings/companion_screen.dart';
+import 'package:resonance/screens/settings/equalizer_screen.dart';
 import 'package:resonance/services/companion/companion_client_service.dart';
 import 'package:resonance/services/companion/companion_server_service.dart';
 import 'package:resonance/services/scroll_effects_preferences.dart';
@@ -611,12 +613,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 _Divider(),
+                ValueListenableBuilder<EqualizerSettings>(
+                  valueListenable: handler.equalizerNotifier,
+                  builder: (context, equalizer, _) => _SettingsTile(
+                    icon: Icons.equalizer_rounded,
+                    title: 'Equalizer',
+                    subtitle: equalizer.enabled
+                        ? '${equalizer.preset.label} · five adjustable bands'
+                        : 'Off · five adjustable bands and presets',
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(builder: (_) => EqualizerScreen(handler: handler)),
+                    ),
+                  ),
+                ),
+                _Divider(),
+                ValueListenableBuilder<bool>(
+                  valueListenable: handler.volumeNormalizationEnabledNotifier,
+                  builder: (context, enabled, _) => ValueListenableBuilder<LoudnessScanProgress>(
+                    valueListenable: handler.loudnessScanProgressNotifier,
+                    builder: (context, progress, _) => _SettingsTile(
+                      icon: Icons.waves_rounded,
+                      title: 'Volume Normalization',
+                      subtitle: progress.scanning
+                          ? 'Analyzing in background · ${progress.completed}/${progress.total}'
+                          : 'Balance track loudness without delaying playback',
+                      trailing: Switch(value: enabled, onChanged: handler.setVolumeNormalizationEnabled),
+                    ),
+                  ),
+                ),
+                _Divider(),
                 _SettingsTile(
                   icon: Icons.tune_rounded,
                   title: 'Playback Settings Scope',
                   subtitle: _playbackSettingsScope == PlaybackSettingsScope.global
-                      ? 'Use the same speed, pitch, and bass for every track'
-                      : 'Remember speed, pitch, and bass separately for each track',
+                      ? 'Use the same speed, pitch, and equalizer for every track'
+                      : 'Remember speed, pitch, and equalizer separately for each track',
                   trailing: DropdownButtonHideUnderline(
                     child: DropdownButton<PlaybackSettingsScope>(
                       value: _playbackSettingsScope,

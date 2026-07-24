@@ -5,38 +5,47 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'equalizer_settings.dart';
+export 'equalizer_settings.dart';
+
 enum PlaybackSettingsScope { global, perTrack }
 
 @immutable
 class PlaybackAdjustments {
   final double speed;
   final double pitch;
-  final double bass;
+  final EqualizerSettings equalizer;
 
-  const PlaybackAdjustments({this.speed = 1.0, this.pitch = 1.0, this.bass = 0.0});
+  PlaybackAdjustments({this.speed = 1.0, this.pitch = 1.0, EqualizerSettings? equalizer})
+    : equalizer = equalizer ?? EqualizerSettings.flat;
 
-  static const neutral = PlaybackAdjustments();
+  static final neutral = PlaybackAdjustments();
 
-  PlaybackAdjustments copyWith({double? speed, double? pitch, double? bass}) =>
-      PlaybackAdjustments(speed: speed ?? this.speed, pitch: pitch ?? this.pitch, bass: bass ?? this.bass);
+  PlaybackAdjustments copyWith({double? speed, double? pitch, EqualizerSettings? equalizer}) => PlaybackAdjustments(
+    speed: speed ?? this.speed,
+    pitch: pitch ?? this.pitch,
+    equalizer: equalizer ?? this.equalizer,
+  );
 
-  Map<String, double> toJson() => {'speed': speed, 'pitch': pitch, 'bass': bass};
+  Map<String, Object?> toJson() => {'speed': speed, 'pitch': pitch, 'equalizer': equalizer.toJson()};
 
   factory PlaybackAdjustments.fromJson(Object? value) {
     if (value is! Map) return neutral;
     final speed = (value['speed'] as num?)?.toDouble() ?? 1.0;
     final pitch = (value['pitch'] as num?)?.toDouble() ?? 1.0;
-    final bass = (value['bass'] as num?)?.toDouble() ?? 0.0;
-    return PlaybackAdjustments(speed: speed.clamp(0.5, 2.0), pitch: pitch.clamp(0.5, 2.0), bass: bass.clamp(0.0, 1.0));
+    final equalizer = value.containsKey('equalizer')
+        ? EqualizerSettings.fromJson(value['equalizer'])
+        : EqualizerSettings.fromLegacyBass((value['bass'] as num?)?.toDouble() ?? 0);
+    return PlaybackAdjustments(speed: speed.clamp(0.5, 2.0), pitch: pitch.clamp(0.5, 2.0), equalizer: equalizer);
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is PlaybackAdjustments && speed == other.speed && pitch == other.pitch && bass == other.bass;
+      other is PlaybackAdjustments && speed == other.speed && pitch == other.pitch && equalizer == other.equalizer;
 
   @override
-  int get hashCode => Object.hash(speed, pitch, bass);
+  int get hashCode => Object.hash(speed, pitch, equalizer);
 }
 
 /// Returns a stable identity for preference data shared by local and streamed
@@ -71,7 +80,8 @@ bool isResumablePosition(Duration position, Duration duration) {
 
 class PlaybackPreferenceStore {
   static const _positionsKey = 'long_track_positions_v1';
-  static const _adjustmentsKey = 'per_track_playback_settings_v1';
+  static const _adjustmentsKey = 'per_track_playback_settings_v2';
+  static const _legacyAdjustmentsKey = 'per_track_playback_settings_v1';
   static const _maximumEntries = 512;
 
   final SharedPreferences _preferences;
@@ -87,7 +97,7 @@ class PlaybackPreferenceStore {
     return PlaybackPreferenceStore._(
       prefs,
       _decodePositions(prefs.getString(_positionsKey)),
-      _decodeAdjustments(prefs.getString(_adjustmentsKey)),
+      _decodeAdjustments(prefs.getString(_adjustmentsKey) ?? prefs.getString(_legacyAdjustmentsKey)),
     );
   }
 
