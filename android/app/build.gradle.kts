@@ -52,6 +52,10 @@ android {
     }
 }
 
+dependencies {
+    implementation("androidx.media:media:1.7.0")
+}
+
 // ── Chaquopy ──────────────────────────────────────────────────────────────────
 // IMPORTANT: In KTS this MUST be a top-level block — not inside android {} or
 // defaultConfig {}. The old Groovy DSL had python {} inside defaultConfig but

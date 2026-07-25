@@ -19,6 +19,7 @@ import androidx.annotation.Keep
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.ryanheise.audioservice.AudioServiceFragmentActivity
+import com.example.resonance.widget.ResonancePlaybackWidgetBridge
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -110,6 +111,7 @@ class MainActivity : AudioServiceFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         AndroidBassBoostBridge.register(flutterEngine)
+        ResonancePlaybackWidgetBridge.register(flutterEngine, applicationContext)
 
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(this))

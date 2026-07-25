@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="80dp"
+    android:background="@drawable/widget_preview_background"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="12dp"
+    android:paddingTop="8dp"
+    android:paddingEnd="12dp"
+    android:paddingBottom="8dp">
+
+    <ImageView
+        android:layout_width="54dp"
+        android:layout_height="54dp"
+        android:background="#242430"
+        android:contentDescription="@string/playback_widget_preview_artwork"
+        android:padding="7dp"
+        android:src="@drawable/ic_widget_artwork_fallback" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="9dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="@string/playback_widget_preview_title"
+            android:textColor="#E2E8F0"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="@string/playback_widget_preview_artist"
+            android:textColor="#94A3B8"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <ImageView
+        android:layout_width="34dp"
+        android:layout_height="34dp"
+        android:contentDescription="@string/playback_widget_previous"
+        android:padding="8dp"
+        android:src="@drawable/ic_widget_previous"
+        android:tint="#94A3B8" />
+
+    <ImageView
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:background="@drawable/widget_preview_control_background"
+        android:contentDescription="@string/playback_widget_play"
+        android:padding="9dp"
+        android:src="@drawable/ic_widget_play"
+        android:tint="#FFFFFF" />
+
+    <ImageView
+        android:layout_width="34dp"
+        android:layout_height="34dp"
+        android:contentDescription="@string/playback_widget_next"
+        android:padding="8dp"
+        android:src="@drawable/ic_widget_next"
+        android:tint="#94A3B8" />
+</LinearLayout>

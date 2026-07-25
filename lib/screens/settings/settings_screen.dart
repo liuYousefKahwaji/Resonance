@@ -655,7 +655,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       value: _playbackSettingsScope,
                       onChanged: (scope) => _setPlaybackSettingsScope(scope, handler),
                       items: const [
-                        DropdownMenuItem(value: PlaybackSettingsScope.global, child: Text('Global')),
+                        DropdownMenuItem(value: PlaybackSettingsScope.global, child: Text('All tracks')),
                         DropdownMenuItem(value: PlaybackSettingsScope.perTrack, child: Text('Per track')),
                       ],
                     ),

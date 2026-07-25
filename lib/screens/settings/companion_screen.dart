@@ -77,7 +77,11 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
     setState(() => _shortcutBusy = null);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(sent ? '${action.label} shortcut sent' : 'Windows could not send ${action.label.toLowerCase()}'),
+        content: Text(
+          sent
+              ? '${action.label} shortcut delivered to Discord'
+              : 'Discord did not accept ${action.label.toLowerCase()}',
+        ),
       ),
     );
   }

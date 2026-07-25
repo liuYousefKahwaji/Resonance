@@ -1803,6 +1803,31 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> skipToPrevious() async => previous();
 
   @override
+  Future<dynamic> customAction(String name, [Map<String, dynamic>? extras]) async {
+    switch (name) {
+      case 'resonance.toggleShuffle':
+        await toggleShuffle();
+        return getShuffleMode();
+      case 'resonance.toggleRepeat':
+        await toggleLoopMode();
+        return getLoopMode().name;
+      default:
+        return super.customAction(name, extras);
+    }
+  }
+
+  @override
+  Future<void> setShuffleMode(AudioServiceShuffleMode shuffleMode) =>
+      setShuffleEnabled(shuffleMode != AudioServiceShuffleMode.none);
+
+  @override
+  Future<void> setRepeatMode(AudioServiceRepeatMode repeatMode) => setLoopMode(switch (repeatMode) {
+    AudioServiceRepeatMode.none => LoopMode.off,
+    AudioServiceRepeatMode.one => LoopMode.one,
+    AudioServiceRepeatMode.all || AudioServiceRepeatMode.group => LoopMode.all,
+  });
+
+  @override
   Future<void> stop() async {
     await _seekOperationQueue;
     await saveCurrentPlaybackPosition();

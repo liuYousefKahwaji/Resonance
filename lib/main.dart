@@ -20,6 +20,7 @@ import 'package:resonance/services/playlist_transfer_codec.dart';
 import 'package:resonance/services/playlist_transfer_export_service.dart';
 import 'package:resonance/services/discord_presence_service.dart';
 import 'package:resonance/services/android_shared_content_service.dart';
+import 'package:resonance/services/android_playback_widget_service.dart';
 import 'package:resonance/widgets/library/import_track_button.dart';
 import 'package:resonance/widgets/library/track_list.dart';
 import 'package:resonance/widgets/player/album_cover.dart';
@@ -90,6 +91,10 @@ Future<void> main() async {
       androidStopForegroundOnPause: false,
     ),
   );
+  final themeProvider = ThemeProvider();
+  if (Platform.isAndroid) {
+    unawaited(AndroidPlaybackWidgetService.instance.attach(handler, themeProvider));
+  }
   await ScrollEffectsPreferences.instance.initialize();
   if (Platform.isWindows) {
     unawaited(CompanionServerService.instance.initialize(handler));
@@ -138,7 +143,7 @@ Future<void> main() async {
     MultiProvider(
       providers: [
         Provider<PlayerHandler>.value(value: handler),
-        ChangeNotifierProvider(create: (_) => ThemeProvider()),
+        ChangeNotifierProvider<ThemeProvider>.value(value: themeProvider),
       ],
       child: MainApp(handler: handler),
     ),

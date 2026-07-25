@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="playback_widget_name">Resonance playback</string>
+    <string name="playback_widget_description">Control Resonance playback from your home screen</string>
+    <string name="playback_widget_preview_title">Midnight Echo</string>
+    <string name="playback_widget_preview_artist">Resonance</string>
+    <string name="playback_widget_preview_artwork">Album artwork</string>
+    <string name="playback_widget_previous">Previous</string>
+    <string name="playback_widget_play">Play</string>
+    <string name="playback_widget_next">Next</string>
+    <string name="playback_widget_repeat">Repeat</string>
+    <string name="playback_widget_shuffle">Shuffle</string>
+</resources>

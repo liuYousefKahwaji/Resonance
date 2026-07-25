@@ -11,8 +11,15 @@ import 'package:resonance/widgets/common/overflowing_text.dart';
 import 'package:resonance/widgets/player/audio_visualizer.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
 import 'package:resonance/widgets/player/upcoming_queue.dart';
+import 'package:resonance/widgets/player/vinyl_disc.dart';
 
 const nowPlayingArtworkHeroTag = 'resonance-now-playing-artwork';
+
+@visibleForTesting
+const standaloneArtworkFlipKey = Key('standalone-artwork-flip');
+
+@visibleForTesting
+const standaloneVinylKey = Key('standalone-vinyl');
 
 @visibleForTesting
 double standaloneArtworkSize(BoxConstraints constraints) {
@@ -345,7 +352,11 @@ class _ArtworkBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SizedBox.square(
     dimension: math.max(0, size),
-    child: _VisualizedArtwork(item: item, isPlaying: isPlaying),
+    child: StandaloneArtworkFlip(
+      item: item,
+      isPlaying: isPlaying,
+      amplitudeProvider: () => context.read<PlayerHandler>().visualizerAmplitude,
+    ),
   );
 }
 
@@ -398,22 +409,106 @@ class _StandaloneMetadata extends StatelessWidget {
   }
 }
 
-class _VisualizedArtwork extends StatelessWidget {
+@visibleForTesting
+class StandaloneArtworkFlip extends StatefulWidget {
   final MediaItem? item;
   final bool isPlaying;
+  final double Function() amplitudeProvider;
 
-  const _VisualizedArtwork({required this.item, required this.isPlaying});
+  const StandaloneArtworkFlip({
+    super.key,
+    required this.item,
+    required this.isPlaying,
+    required this.amplitudeProvider,
+  });
+
+  @override
+  State<StandaloneArtworkFlip> createState() => _StandaloneArtworkFlipState();
+}
+
+class _StandaloneArtworkFlipState extends State<StandaloneArtworkFlip> with SingleTickerProviderStateMixin {
+  late final AnimationController _flipController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 620),
+  );
+  bool _vinylRequested = false;
+
+  bool get _showingVinyl => _flipController.value >= 0.5;
+
+  @override
+  void didUpdateWidget(covariant StandaloneArtworkFlip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item?.id != widget.item?.id) {
+      _flipController.value = 0;
+      _vinylRequested = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _flipController.dispose();
+    super.dispose();
+  }
+
+  void _toggleFace() {
+    if (widget.item == null) return;
+    if (_flipController.status == AnimationStatus.completed || _flipController.value > 0.5) {
+      setState(() => _vinylRequested = false);
+      _flipController.reverse();
+    } else {
+      setState(() => _vinylRequested = true);
+      _flipController.forward();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.primary;
     return PlaybackPulse(
-      active: isPlaying,
-      borderRadius: 28,
+      active: widget.isPlaying,
+      borderRadius: _vinylRequested ? 999 : 28,
       reach: 22,
-      amplitudeProvider: () => context.read<PlayerHandler>().visualizerAmplitude,
+      amplitudeProvider: widget.amplitudeProvider,
       child: Hero(
         tag: nowPlayingArtworkHeroTag,
-        child: _LargeArtwork(item: item),
+        child: Semantics(
+          button: widget.item != null,
+          label: _vinylRequested ? 'Spinning vinyl. Tap to show album cover' : 'Album cover. Tap for vinyl',
+          child: GestureDetector(
+            key: standaloneArtworkFlipKey,
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.item == null ? null : _toggleFace,
+            child: AnimatedBuilder(
+              animation: _flipController,
+              builder: (context, _) {
+                final vinylFace = _showingVinyl;
+                final angle = vinylFace ? (_flipController.value - 1) * math.pi : _flipController.value * math.pi;
+                return Transform(
+                  alignment: Alignment.center,
+                  transform: Matrix4.identity()
+                    ..setEntry(3, 2, 0.0012)
+                    ..rotateY(angle),
+                  child: vinylFace
+                      ? LayoutBuilder(
+                          builder: (context, constraints) {
+                            final size = math.min(constraints.maxWidth, constraints.maxHeight);
+                            return Center(
+                              child: ResonanceVinylDisc(
+                                key: standaloneVinylKey,
+                                size: size,
+                                spinning: widget.isPlaying,
+                                accent: accent,
+                                amplitudeProvider: widget.amplitudeProvider,
+                              ),
+                            );
+                          },
+                        )
+                      : _LargeArtwork(item: widget.item),
+                );
+              },
+            ),
+          ),
+        ),
       ),
     );
   }
