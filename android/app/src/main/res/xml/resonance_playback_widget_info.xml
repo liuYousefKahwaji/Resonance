@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- API 31+ launchers use these conservative bounds to cap the widget near 4x2. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/playback_widget_description"
     android:initialLayout="@layout/resonance_widget_standard"
@@ -6,6 +7,8 @@
     android:minHeight="56dp"
     android:minResizeWidth="110dp"
     android:minResizeHeight="56dp"
+    android:maxResizeWidth="245dp"
+    android:maxResizeHeight="115dp"
     android:previewImage="@mipmap/ic_launcher"
     android:previewLayout="@layout/resonance_widget_preview"
     android:resizeMode="horizontal|vertical"

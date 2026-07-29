@@ -80,10 +80,11 @@ class _OverflowingTextState extends State<OverflowingText> with SingleTickerProv
     final effectiveStyle = widget.style ?? DefaultTextStyle.of(context).style;
     return LayoutBuilder(
       builder: (context, constraints) {
+        final textDirection = Directionality.of(context);
         final painter = TextPainter(
           text: TextSpan(text: widget.text, style: effectiveStyle),
           maxLines: 1,
-          textDirection: Directionality.of(context),
+          textDirection: textDirection,
           textScaler: MediaQuery.textScalerOf(context),
         )..layout();
         final availableWidth = constraints.maxWidth.isFinite ? constraints.maxWidth : painter.width;
@@ -102,13 +103,24 @@ class _OverflowingTextState extends State<OverflowingText> with SingleTickerProv
                 animation: _controller,
                 builder: (context, child) => Transform.translate(
                   key: const ValueKey('overflowing-text-motion'),
-                  offset: Offset(_offset.value, 0),
+                  offset: Offset(textDirection == TextDirection.rtl ? -_offset.value : _offset.value, 0),
                   child: child,
                 ),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  widthFactor: 1,
-                  child: Text(widget.text, style: effectiveStyle, maxLines: 1, softWrap: false),
+                child: OverflowBox(
+                  alignment: AlignmentDirectional.centerStart,
+                  minWidth: painter.width,
+                  maxWidth: painter.width,
+                  child: SizedBox(
+                    key: const ValueKey('overflowing-text-content'),
+                    width: painter.width,
+                    child: Text(
+                      widget.text,
+                      style: effectiveStyle,
+                      maxLines: 1,
+                      softWrap: false,
+                      textDirection: textDirection,
+                    ),
+                  ),
                 ),
               ),
             ),

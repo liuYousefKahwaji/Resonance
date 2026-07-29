@@ -356,7 +356,14 @@ class CompanionServerService extends ChangeNotifier {
       case 'setEqualizer':
         final value = message['value'];
         if (value is! Map) throw const FormatException('The equalizer command needs an object');
-        await handler.setEqualizer(EqualizerSettings.fromJson(value));
+        var settings = EqualizerSettings.fromJson(value);
+        final current = handler.equalizerNotifier.value;
+        if (!value.containsKey('customGainsDb') &&
+            settings.preset != EqualizerPreset.custom &&
+            current.customGainsDb != null) {
+          settings = settings.copyWith(customGainsDb: current.customGainsDb);
+        }
+        await handler.setEqualizer(settings);
       case 'playTrack':
         final id = message['id'] as String? ?? '';
         final entry = _queueEntries[id];
@@ -419,6 +426,7 @@ class CompanionServerService extends ChangeNotifier {
       'equalizerEnabled': handler.equalizerNotifier.value.enabled,
       'equalizerPreset': handler.equalizerNotifier.value.preset.name,
       'equalizerGainsDb': handler.equalizerNotifier.value.gainsDb,
+      if (handler.equalizerNotifier.value.customGainsDb case final customGains?) 'equalizerCustomGainsDb': customGains,
       'equalizerSupported': handler.equalizerSupportedNotifier.value,
       'queue': [
         for (var index = 0; index < queue.length; index++)

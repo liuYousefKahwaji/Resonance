@@ -180,6 +180,9 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
   }
 
   void _showMetadataEditor(BuildContext context, String currentTitle, String currentArtist) async {
+    final trackPath = widget.trackPath;
+    final artworkRevision = widget.artworkRevision;
+    final handler = Provider.of<PlayerHandler>(context, listen: false);
     final titleController = TextEditingController(text: currentTitle);
     final artistController = TextEditingController(text: currentArtist);
     Metadata? existingMetadata;
@@ -188,7 +191,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
     var coverRemoved = false;
 
     try {
-      existingMetadata = await MetadataGod.readMetadata(file: widget.trackPath);
+      existingMetadata = await MetadataGod.readMetadata(file: trackPath);
       final picture = existingMetadata.picture;
       if (picture != null && picture.data.isNotEmpty) {
         coverBytes = Uint8List.fromList(picture.data);
@@ -202,149 +205,184 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
       return;
     }
 
-    await showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            Future<void> pickCover() async {
-              final result = await FilePicker.pickFiles(type: FileType.image, withData: true);
-              final file = result?.files.single;
-              if (file == null) return;
-              final bytes = file.bytes ?? (file.path == null ? null : await File(file.path!).readAsBytes());
-              if (bytes == null || bytes.isEmpty) return;
-              setDialogState(() {
-                coverBytes = Uint8List.fromList(bytes);
-                coverMimeType = _mimeTypeForImage(file.path ?? file.name, bytes);
-                coverRemoved = false;
-              });
-            }
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          var saving = false;
+          String? saveError;
+          return StatefulBuilder(
+            builder: (dialogContext, setDialogState) {
+              Future<void> pickCover() async {
+                final result = await FilePicker.pickFiles(type: FileType.image, withData: true);
+                final file = result?.files.single;
+                if (file == null) return;
+                final bytes = file.bytes ?? (file.path == null ? null : await File(file.path!).readAsBytes());
+                if (bytes == null || bytes.isEmpty) return;
+                setDialogState(() {
+                  coverBytes = Uint8List.fromList(bytes);
+                  coverMimeType = _mimeTypeForImage(file.path ?? file.name, bytes);
+                  coverRemoved = false;
+                });
+              }
 
-            return AlertDialog(
-              title: Row(
-                children: [
-                  Icon(Icons.edit_rounded, size: 18, color: Theme.of(context).colorScheme.primary),
-                  const SizedBox(width: 10),
-                  const Text('Edit Metadata'),
-                ],
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: titleController,
-                      decoration: const InputDecoration(
-                        labelText: 'Title',
-                        prefixIcon: Icon(Icons.music_note_rounded, size: 18),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: artistController,
-                      decoration: const InputDecoration(
-                        labelText: 'Artist',
-                        prefixIcon: Icon(Icons.person_rounded, size: 18),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
+              return PopScope(
+                canPop: !saving,
+                child: AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.edit_rounded, size: 18, color: Theme.of(dialogContext).colorScheme.primary),
+                      const SizedBox(width: 10),
+                      const Text('Edit Metadata'),
+                    ],
+                  ),
+                  content: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Container(
-                            width: 58,
-                            height: 58,
-                            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                            child: coverBytes == null
-                                ? const Icon(Icons.image_rounded)
-                                : Image.memory(coverBytes!, fit: BoxFit.cover),
+                        TextField(
+                          controller: titleController,
+                          decoration: const InputDecoration(
+                            labelText: 'Title',
+                            prefixIcon: Icon(Icons.music_note_rounded, size: 18),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              OutlinedButton.icon(
-                                onPressed: pickCover,
-                                icon: const Icon(Icons.image_search_rounded, size: 18),
-                                label: Text(coverBytes == null ? 'Choose cover' : 'Change cover'),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: artistController,
+                          decoration: const InputDecoration(
+                            labelText: 'Artist',
+                            prefixIcon: Icon(Icons.person_rounded, size: 18),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: Container(
+                                width: 58,
+                                height: 58,
+                                color: Theme.of(dialogContext).colorScheme.surfaceContainerHighest,
+                                child: coverBytes == null
+                                    ? const Icon(Icons.image_rounded)
+                                    : Image.memory(coverBytes!, fit: BoxFit.cover),
                               ),
-                              if (coverBytes != null)
-                                TextButton.icon(
-                                  onPressed: () => setDialogState(() {
-                                    coverBytes = null;
-                                    coverMimeType = null;
-                                    coverRemoved = true;
-                                  }),
-                                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                                  label: const Text('Remove cover'),
-                                ),
-                            ],
-                          ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  OutlinedButton.icon(
+                                    onPressed: saving ? null : pickCover,
+                                    icon: const Icon(Icons.image_search_rounded, size: 18),
+                                    label: Text(coverBytes == null ? 'Choose cover' : 'Change cover'),
+                                  ),
+                                  if (coverBytes != null)
+                                    TextButton.icon(
+                                      onPressed: saving
+                                          ? null
+                                          : () => setDialogState(() {
+                                              coverBytes = null;
+                                              coverMimeType = null;
+                                              coverRemoved = true;
+                                            }),
+                                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                                      label: const Text('Remove cover'),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
+                        if (saveError != null) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            saveError!,
+                            key: const Key('metadata-save-error'),
+                            style: TextStyle(color: Theme.of(dialogContext).colorScheme.error, fontSize: 12),
+                          ),
+                        ],
                       ],
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: saving ? null : () => Navigator.pop(dialogContext),
+                      child: const Text('Cancel'),
+                    ),
+                    ElevatedButton(
+                      onPressed: saving
+                          ? null
+                          : () async {
+                              final title = titleController.text.trim();
+                              final artist = artistController.text.trim();
+                              final picture = coverRemoved
+                                  ? null
+                                  : coverBytes == null
+                                  ? existingMetadata?.picture
+                                  : Picture(mimeType: coverMimeType ?? 'image/jpeg', data: coverBytes!);
+                              setDialogState(() {
+                                saving = true;
+                                saveError = null;
+                              });
+                              try {
+                                final updatedMetadata = _updatedMetadata(
+                                  existingMetadata,
+                                  title: title,
+                                  artist: artist,
+                                  picture: picture,
+                                );
+                                await handler.withTrackFileReleased(
+                                  trackPath,
+                                  () => MetadataGod.writeMetadata(file: trackPath, metadata: updatedMetadata),
+                                  updatedTitle: title,
+                                  updatedArtist: artist,
+                                );
+                                await MetadataCacheService.set(trackPath, title, artist);
+                                final modified = (await File(trackPath).lastModified()).millisecondsSinceEpoch;
+                                final updatedCover = picture == null ? null : Uint8List.fromList(picture.data);
+                                _CoverArtMemoryCache.set(trackPath, modified, artworkRevision, updatedCover);
+                                if (mounted && widget.trackPath == trackPath) {
+                                  setState(() {
+                                    _title = title;
+                                    _artist = artist;
+                                    _coverArt = updatedCover;
+                                  });
+                                }
+                                if (dialogContext.mounted) {
+                                  Navigator.pop(dialogContext);
+                                }
+                              } catch (error) {
+                                if (dialogContext.mounted) {
+                                  setDialogState(() {
+                                    saving = false;
+                                    saveError = 'Failed to update metadata: $error';
+                                  });
+                                }
+                              }
+                            },
+                      child: saving
+                          ? const SizedBox.square(
+                              key: Key('metadata-save-progress'),
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Save'),
                     ),
                   ],
                 ),
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-                ElevatedButton(
-                  onPressed: () async {
-                    Navigator.pop(context);
-                    try {
-                      final title = titleController.text.trim();
-                      final artist = artistController.text.trim();
-                      final picture = coverRemoved
-                          ? null
-                          : coverBytes == null
-                          ? existingMetadata?.picture
-                          : Picture(mimeType: coverMimeType ?? 'image/jpeg', data: coverBytes!);
-                      final handler = Provider.of<PlayerHandler>(this.context, listen: false);
-                      await handler.withTrackFileReleased(
-                        widget.trackPath,
-                        () => MetadataGod.writeMetadata(
-                          file: widget.trackPath,
-                          metadata: _updatedMetadata(existingMetadata, title: title, artist: artist, picture: picture),
-                        ),
-                        updatedTitle: title,
-                        updatedArtist: artist,
-                      );
-                      await MetadataCacheService.set(widget.trackPath, title, artist);
-                      final modified = (await File(widget.trackPath).lastModified()).millisecondsSinceEpoch;
-                      _CoverArtMemoryCache.set(
-                        widget.trackPath,
-                        modified,
-                        widget.artworkRevision,
-                        picture == null ? null : coverBytes,
-                      );
-                      if (mounted) {
-                        setState(() {
-                          _title = title;
-                          _artist = artist;
-                          _coverArt = picture == null ? null : coverBytes;
-                        });
-                      }
-                    } catch (e) {
-                      if (mounted) {
-                        ScaffoldMessenger.of(
-                          context,
-                        ).showSnackBar(SnackBar(content: Text('Failed to update metadata: $e')));
-                      }
-                    }
-                  },
-                  child: const Text('Save'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-    titleController.dispose();
-    artistController.dispose();
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      titleController.dispose();
+      artistController.dispose();
+    }
   }
 
   Metadata _updatedMetadata(Metadata? existing, {required String title, required String artist, Picture? picture}) {

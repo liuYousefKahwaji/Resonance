@@ -64,6 +64,17 @@ void main() {
     expect(store.adjustmentsFor(r'C:\Music\podcast.mp3'), PlaybackAdjustments.neutral);
   });
 
+  test('per-track adjustments persist a remembered Custom curve behind another preset', () async {
+    var store = await PlaybackPreferenceStore.load();
+    final equalizer = EqualizerSettings.flat.withBandGain(3, 5).selectPreset(EqualizerPreset.rock);
+    await store.saveAdjustments(r'C:\Music\custom.mp3', PlaybackAdjustments(equalizer: equalizer));
+
+    store = await PlaybackPreferenceStore.load();
+    final restored = store.adjustmentsFor(r'C:\Music\custom.mp3').equalizer;
+    expect(restored.preset, EqualizerPreset.rock);
+    expect(restored.selectPreset(EqualizerPreset.custom).gainsDb, [0, 0, 0, 5, 0]);
+  });
+
   test('v1 bass preferences migrate to a two-band custom equalizer', () async {
     SharedPreferences.setMockInitialValues({
       'per_track_playback_settings_v1': '{"c:\\\\music\\\\old.mp3":{"speed":1.0,"pitch":1.0,"bass":0.6}}',

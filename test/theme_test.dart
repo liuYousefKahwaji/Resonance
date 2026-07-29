@@ -53,6 +53,39 @@ void main() {
     expect(jade.colorScheme.primary, isNot(cobalt.colorScheme.primary));
   });
 
+  test('Obsidian full styling is purple while accent-only mode uses classic surfaces', () {
+    for (final brightness in Brightness.values) {
+      final full = buildResonanceTheme(ResonanceThemeStyle.obsidian, brightness);
+      final classic = buildResonanceTheme(ResonanceThemeStyle.obsidian, brightness, fullPalette: false);
+      final classicJade = buildResonanceTheme(ResonanceThemeStyle.jade, brightness, fullPalette: false);
+
+      expect(full.colorScheme.primary, classic.colorScheme.primary);
+      expect(full.scaffoldBackgroundColor, isNot(classic.scaffoldBackgroundColor));
+      expect(full.colorScheme.surface, isNot(classic.colorScheme.surface));
+      expect(full.colorScheme.surfaceContainerHigh, isNot(classic.colorScheme.surfaceContainerHigh));
+      expect(full.colorScheme.outline, isNot(classic.colorScheme.outline));
+      expect(classic.scaffoldBackgroundColor, classicJade.scaffoldBackgroundColor);
+      expect(classic.colorScheme.surface, classicJade.colorScheme.surface);
+    }
+  });
+
+  test('Quartz and Aurum labels, storage names, and primary contrast are stable', () {
+    expect(ResonanceThemeStyle.quartz.label, 'Quartz');
+    expect(ResonanceThemeStyle.aurum.label, 'Aurum');
+    expect(ResonanceThemeStyle.quartz.storageName, 'quartz');
+    expect(ResonanceThemeStyle.aurum.storageName, 'aurum');
+    expect(ResonanceThemeStyleLabel.fromStorage('quartz'), ResonanceThemeStyle.quartz);
+    expect(ResonanceThemeStyleLabel.fromStorage('aurum'), ResonanceThemeStyle.aurum);
+
+    for (final style in [ResonanceThemeStyle.quartz, ResonanceThemeStyle.aurum]) {
+      for (final brightness in Brightness.values) {
+        final scheme = buildResonanceTheme(style, brightness).colorScheme;
+        expect(_contrastRatio(scheme.primary, scheme.onPrimary), greaterThanOrEqualTo(4.5));
+        expect(scheme.primary, isNot(scheme.onPrimary));
+      }
+    }
+  });
+
   test('theme style loads and persists independently from brightness', () async {
     SharedPreferences.setMockInitialValues({'theme_style': 'magma', 'is_dark_mode': true});
     final provider = ThemeProvider();
@@ -123,4 +156,10 @@ void main() {
     final preferences = await SharedPreferences.getInstance();
     expect(preferences.getBool('windows_native_controls'), isTrue);
   });
+}
+
+double _contrastRatio(Color a, Color b) {
+  final lighter = a.computeLuminance() > b.computeLuminance() ? a : b;
+  final darker = identical(lighter, a) ? b : a;
+  return (lighter.computeLuminance() + 0.05) / (darker.computeLuminance() + 0.05);
 }

@@ -336,13 +336,22 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
     EqualizerPreset? preset,
     List<double>? gainsDb,
   }) {
-    final settings = preset == null
+    final current = EqualizerSettings(
+      enabled: snapshot.equalizerEnabled,
+      preset: _equalizerPreset(snapshot.equalizerPreset),
+      gainsDb: snapshot.equalizerGainsDb,
+      customGainsDb: snapshot.equalizerCustomGainsDb,
+    );
+    final settings = gainsDb != null
         ? EqualizerSettings(
             enabled: enabled ?? snapshot.equalizerEnabled,
-            preset: gainsDb == null ? _equalizerPreset(snapshot.equalizerPreset) : EqualizerPreset.custom,
-            gainsDb: gainsDb ?? snapshot.equalizerGainsDb,
+            preset: EqualizerPreset.custom,
+            gainsDb: gainsDb,
+            customGainsDb: gainsDb,
           )
-        : EqualizerSettings.forPreset(preset).copyWith(enabled: enabled ?? snapshot.equalizerEnabled);
+        : (preset == null ? current : current.selectPreset(preset)).copyWith(
+            enabled: enabled ?? snapshot.equalizerEnabled,
+          );
     _client.sendCommand('setEqualizer', value: settings.toJson());
   }
 
@@ -602,6 +611,12 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                               }
                             : null,
                         items: EqualizerPreset.values
+                            .where(
+                              (preset) =>
+                                  preset != EqualizerPreset.custom ||
+                                  _equalizerPreset(snapshot.equalizerPreset) == EqualizerPreset.custom ||
+                                  snapshot.equalizerCustomGainsDb != null,
+                            )
                             .map((preset) => DropdownMenuItem(value: preset, child: Text(preset.label)))
                             .toList(growable: false),
                       ),

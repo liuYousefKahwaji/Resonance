@@ -19,6 +19,28 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
   void initState() {
     super.initState();
     _settings = widget.handler.equalizerNotifier.value;
+    widget.handler.equalizerNotifier.addListener(_syncSettings);
+  }
+
+  @override
+  void didUpdateWidget(covariant EqualizerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.handler == widget.handler) return;
+    oldWidget.handler.equalizerNotifier.removeListener(_syncSettings);
+    _settings = widget.handler.equalizerNotifier.value;
+    widget.handler.equalizerNotifier.addListener(_syncSettings);
+  }
+
+  void _syncSettings() {
+    if (mounted && !_applying) {
+      setState(() => _settings = widget.handler.equalizerNotifier.value);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.handler.equalizerNotifier.removeListener(_syncSettings);
+    super.dispose();
   }
 
   Future<void> _apply(EqualizerSettings settings) async {
@@ -89,9 +111,14 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
                   ChoiceChip(
                     label: Text(preset.label),
                     selected: _settings.preset == preset,
-                    onSelected: (_) => _apply(EqualizerSettings.forPreset(preset).copyWith(enabled: _settings.enabled)),
+                    onSelected: (_) => _apply(_settings.selectPreset(preset)),
                   ),
-                if (_settings.preset == EqualizerPreset.custom) const ChoiceChip(label: Text('Custom'), selected: true),
+                if (_settings.preset == EqualizerPreset.custom || _settings.hasRememberedCustom)
+                  ChoiceChip(
+                    label: const Text('Custom'),
+                    selected: _settings.preset == EqualizerPreset.custom,
+                    onSelected: (_) => _apply(_settings.selectPreset(EqualizerPreset.custom)),
+                  ),
               ],
             ),
             const SizedBox(height: 22),

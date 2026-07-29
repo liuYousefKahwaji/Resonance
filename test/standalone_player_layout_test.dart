@@ -63,4 +63,71 @@ void main() {
 
     expect(colors, everyElement(Colors.black));
   });
+
+  test('standalone gradient fields move visibly and loop without a seam', () {
+    final start = standaloneGradientFrame(0);
+    final quarter = standaloneGradientFrame(0.25);
+    final end = standaloneGradientFrame(1);
+
+    expect(start.primaryCenter.dx, closeTo(end.primaryCenter.dx, 0.000001));
+    expect(start.primaryCenter.dy, closeTo(end.primaryCenter.dy, 0.000001));
+    expect(start.secondaryCenter.dx, closeTo(end.secondaryCenter.dx, 0.000001));
+    expect(start.secondaryCenter.dy, closeTo(end.secondaryCenter.dy, 0.000001));
+    expect(start.tertiaryCenter.dx, closeTo(end.tertiaryCenter.dx, 0.000001));
+    expect(start.tertiaryCenter.dy, closeTo(end.tertiaryCenter.dy, 0.000001));
+    expect(start.primaryRadius, closeTo(end.primaryRadius, 0.000001));
+    expect(start.secondaryRadius, closeTo(end.secondaryRadius, 0.000001));
+    expect(start.tertiaryRadius, closeTo(end.tertiaryRadius, 0.000001));
+    expect((quarter.primaryCenter - start.primaryCenter).distance, greaterThan(0.35));
+    expect((quarter.secondaryCenter - start.secondaryCenter).distance, greaterThan(0.35));
+
+    final justBeforeWrap = standaloneGradientFrame(0.999);
+    final justAfterWrap = standaloneGradientFrame(0.001);
+    expect((justAfterWrap.primaryCenter - justBeforeWrap.primaryCenter).distance, lessThan(0.01));
+    expect((justAfterWrap.secondaryCenter - justBeforeWrap.secondaryCenter).distance, lessThan(0.01));
+  });
+
+  testWidgets('standalone gradient remains static when reduced motion is enabled', (tester) async {
+    const colors = <Color>[Color(0xFF321050), Color(0xFF21152E), Color(0xFF0F0918)];
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(disableAnimations: true),
+          child: StandaloneGradientSurface(colors: colors, child: SizedBox.expand()),
+        ),
+      ),
+    );
+
+    StandaloneGradientFrame frame() {
+      final paint = tester.widget<CustomPaint>(find.byKey(const Key('standalone-animated-gradient')));
+      return (paint.painter! as StandaloneGradientPainter).frame;
+    }
+
+    final before = frame();
+    await tester.pump(const Duration(seconds: 6));
+    final after = frame();
+    expect(after.primaryCenter, before.primaryCenter);
+    expect(after.secondaryCenter, before.secondaryCenter);
+    expect(after.tertiaryCenter, before.tertiaryCenter);
+  });
+
+  testWidgets('standalone gradient moves while animations are enabled', (tester) async {
+    const colors = <Color>[Color(0xFF321050), Color(0xFF21152E), Color(0xFF0F0918)];
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: StandaloneGradientSurface(colors: colors, child: SizedBox.expand()),
+      ),
+    );
+
+    StandaloneGradientFrame frame() {
+      final paint = tester.widget<CustomPaint>(find.byKey(const Key('standalone-animated-gradient')));
+      return (paint.painter! as StandaloneGradientPainter).frame;
+    }
+
+    final before = frame();
+    await tester.pump(const Duration(seconds: 4));
+    final after = frame();
+    expect((after.primaryCenter - before.primaryCenter).distance, greaterThan(0.35));
+    expect(after.secondaryCenter, isNot(before.secondaryCenter));
+  });
 }

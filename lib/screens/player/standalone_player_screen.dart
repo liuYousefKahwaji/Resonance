@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:audio_service/audio_service.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -16,10 +17,16 @@ import 'package:resonance/widgets/player/vinyl_disc.dart';
 const nowPlayingArtworkHeroTag = 'resonance-now-playing-artwork';
 
 @visibleForTesting
-const standaloneArtworkFlipKey = Key('standalone-artwork-flip');
+const standaloneArtworkRevealKey = Key('standalone-artwork-vinyl-reveal');
 
 @visibleForTesting
 const standaloneVinylKey = Key('standalone-vinyl');
+
+@visibleForTesting
+const standaloneVinylRevealTransformKey = Key('standalone-vinyl-reveal-transform');
+
+@visibleForTesting
+const standaloneArtworkCoverKey = Key('standalone-artwork-cover');
 
 @visibleForTesting
 double standaloneArtworkSize(BoxConstraints constraints) {
@@ -42,10 +49,222 @@ List<Color> standaloneGradientColors(
   final secondary = playerSecondary ?? accent;
   final dark = theme.brightness == Brightness.dark;
   return [
-    Color.alphaBlend(accent.withValues(alpha: dark ? 0.46 : 0.30), base),
-    Color.alphaBlend(secondary.withValues(alpha: dark ? 0.20 : 0.13), base),
+    Color.alphaBlend(accent.withValues(alpha: dark ? 0.68 : 0.44), base),
+    Color.alphaBlend(secondary.withValues(alpha: dark ? 0.46 : 0.28), base),
     base,
   ];
+}
+
+@immutable
+class StandaloneGradientFrame {
+  final Offset primaryCenter;
+  final Offset secondaryCenter;
+  final Offset tertiaryCenter;
+  final double primaryRadius;
+  final double secondaryRadius;
+  final double tertiaryRadius;
+
+  const StandaloneGradientFrame({
+    required this.primaryCenter,
+    required this.secondaryCenter,
+    required this.tertiaryCenter,
+    required this.primaryRadius,
+    required this.secondaryRadius,
+    required this.tertiaryRadius,
+  });
+}
+
+/// Samples three closed orbital paths. Sine and cosine make both the position
+/// and velocity continuous when the repeating controller wraps back to zero.
+@visibleForTesting
+StandaloneGradientFrame standaloneGradientFrame(double progress) {
+  final phase = progress.clamp(0.0, 1.0) * math.pi * 2;
+  const orbit = math.pi * 2 / 3;
+  return StandaloneGradientFrame(
+    primaryCenter: Offset(0.50 + math.cos(phase) * 0.42, 0.28 + math.sin(phase) * 0.25),
+    secondaryCenter: Offset(0.50 + math.cos(phase + orbit) * 0.45, 0.64 + math.sin(phase + orbit) * 0.30),
+    tertiaryCenter: Offset(0.50 + math.cos(phase + orbit * 2) * 0.38, 0.54 + math.sin(phase + orbit * 2) * 0.36),
+    primaryRadius: 0.68 + math.sin(phase + 0.45) * 0.10,
+    secondaryRadius: 0.64 + math.sin(phase + orbit + 0.75) * 0.09,
+    tertiaryRadius: 0.58 + math.sin(phase + orbit * 2 + 1.10) * 0.08,
+  );
+}
+
+@visibleForTesting
+class StandaloneGradientPainter extends CustomPainter {
+  final List<Color> colors;
+  final StandaloneGradientFrame frame;
+
+  const StandaloneGradientPainter({required this.colors, required this.frame});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final base = colors.isEmpty ? Colors.transparent : colors.last;
+    final primary = colors.isEmpty ? base : colors.first;
+    final secondary = colors.length > 1 ? colors[1] : primary;
+    final tertiary = Color.lerp(primary, secondary, 0.54) ?? primary;
+    final bounds = Offset.zero & size;
+
+    canvas.drawRect(
+      bounds,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[Color.lerp(base, secondary, 0.30) ?? base, base],
+        ).createShader(bounds),
+    );
+
+    _drawBlob(canvas, size, tertiary, frame.tertiaryCenter, frame.tertiaryRadius, 0.70);
+    _drawBlob(canvas, size, secondary, frame.secondaryCenter, frame.secondaryRadius, 0.86);
+    _drawBlob(canvas, size, primary, frame.primaryCenter, frame.primaryRadius, 0.96);
+  }
+
+  void _drawBlob(
+    Canvas canvas,
+    Size size,
+    Color color,
+    Offset normalizedCenter,
+    double normalizedRadius,
+    double opacity,
+  ) {
+    final center = Offset(normalizedCenter.dx * size.width, normalizedCenter.dy * size.height);
+    final radius = math.max(size.width, size.height) * normalizedRadius;
+    final blobBounds = Rect.fromCircle(center: center, radius: radius);
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..shader = RadialGradient(
+          colors: <Color>[
+            color.withValues(alpha: opacity),
+            color.withValues(alpha: opacity * 0.58),
+            color.withValues(alpha: 0),
+          ],
+          stops: const <double>[0, 0.38, 1],
+        ).createShader(blobBounds),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant StandaloneGradientPainter oldDelegate) =>
+      !listEquals(colors, oldDelegate.colors) ||
+      frame.primaryCenter != oldDelegate.frame.primaryCenter ||
+      frame.secondaryCenter != oldDelegate.frame.secondaryCenter ||
+      frame.tertiaryCenter != oldDelegate.frame.tertiaryCenter ||
+      frame.primaryRadius != oldDelegate.frame.primaryRadius ||
+      frame.secondaryRadius != oldDelegate.frame.secondaryRadius ||
+      frame.tertiaryRadius != oldDelegate.frame.tertiaryRadius;
+}
+
+class StandaloneGradientSurface extends StatefulWidget {
+  final List<Color> colors;
+  final Widget child;
+
+  const StandaloneGradientSurface({super.key, required this.colors, required this.child});
+
+  @override
+  State<StandaloneGradientSurface> createState() => _StandaloneGradientSurfaceState();
+}
+
+class _StandaloneGradientSurfaceState extends State<StandaloneGradientSurface> with TickerProviderStateMixin {
+  late final AnimationController _motionController = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 16),
+  );
+  late final AnimationController _paletteController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 520),
+    value: 1,
+  );
+  late List<Color> _fromColors = List<Color>.from(widget.colors);
+  late List<Color> _toColors = List<Color>.from(widget.colors);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncMotion();
+  }
+
+  @override
+  void didUpdateWidget(covariant StandaloneGradientSurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!listEquals(oldWidget.colors, widget.colors)) {
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _fromColors = List<Color>.from(widget.colors);
+        _toColors = List<Color>.from(widget.colors);
+        _paletteController
+          ..stop()
+          ..value = 1;
+      } else {
+        _fromColors = _interpolatedColors();
+        _toColors = List<Color>.from(widget.colors);
+        _paletteController.forward(from: 0);
+      }
+    }
+    _syncMotion();
+  }
+
+  void _syncMotion() {
+    final reducedMotion = MediaQuery.disableAnimationsOf(context);
+    if (reducedMotion) {
+      _fromColors = List<Color>.from(widget.colors);
+      _toColors = List<Color>.from(widget.colors);
+      _paletteController
+        ..stop()
+        ..value = 1;
+    }
+    final solid = widget.colors.isEmpty || widget.colors.every((color) => color == widget.colors.first);
+    if (!reducedMotion && !solid) {
+      if (!_motionController.isAnimating) _motionController.repeat();
+    } else {
+      _motionController
+        ..stop()
+        ..value = 0;
+    }
+  }
+
+  List<Color> _interpolatedColors() {
+    final t = Curves.easeInOutCubic.transform(_paletteController.value);
+    final length = math.max(_fromColors.length, _toColors.length);
+    if (length == 0) return const <Color>[Colors.transparent, Colors.transparent, Colors.transparent];
+    return List<Color>.generate(length, (index) {
+      final from = _fromColors[math.min(index, _fromColors.length - 1)];
+      final to = _toColors[math.min(index, _toColors.length - 1)];
+      return Color.lerp(from, to, t)!;
+    });
+  }
+
+  @override
+  void dispose() {
+    _motionController.dispose();
+    _paletteController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([_motionController, _paletteController]),
+      child: widget.child,
+      builder: (context, child) {
+        final frame = standaloneGradientFrame(_motionController.value);
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            RepaintBoundary(
+              child: CustomPaint(
+                key: const Key('standalone-animated-gradient'),
+                painter: StandaloneGradientPainter(colors: _interpolatedColors(), frame: frame),
+              ),
+            ),
+            if (child != null) child,
+          ],
+        );
+      },
+    );
+  }
 }
 
 enum StandalonePlayerSwipeAction { next, previous, queue, exit }
@@ -180,17 +399,8 @@ class StandalonePlayerScreen extends StatelessWidget {
             onPrevious: handler.previous,
             onQueue: () => _showUpcomingQueue(context, handler),
             onExit: () => Navigator.maybePop(context),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 520),
-              curve: Curves.easeInOutCubic,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  stops: const [0, 0.50, 1],
-                  colors: gradientColors,
-                ),
-              ),
+            child: StandaloneGradientSurface(
+              colors: gradientColors,
               child: Theme(
                 data: playerTheme,
                 child: Scaffold(
@@ -350,14 +560,18 @@ class _ArtworkBox extends StatelessWidget {
   const _ArtworkBox({required this.item, required this.isPlaying, required this.size});
 
   @override
-  Widget build(BuildContext context) => SizedBox.square(
-    dimension: math.max(0, size),
-    child: StandaloneArtworkFlip(
-      item: item,
-      isPlaying: isPlaying,
-      amplitudeProvider: () => context.read<PlayerHandler>().visualizerAmplitude,
-    ),
-  );
+  Widget build(BuildContext context) {
+    final artworkSize = math.max(0.0, size);
+    return SizedBox(
+      width: artworkSize * 1.30,
+      height: artworkSize,
+      child: StandaloneArtworkVinylReveal(
+        item: item,
+        isPlaying: isPlaying,
+        amplitudeProvider: () => context.read<PlayerHandler>().visualizerAmplitude,
+      ),
+    );
+  }
 }
 
 class _StandaloneMetadata extends StatelessWidget {
@@ -410,12 +624,12 @@ class _StandaloneMetadata extends StatelessWidget {
 }
 
 @visibleForTesting
-class StandaloneArtworkFlip extends StatefulWidget {
+class StandaloneArtworkVinylReveal extends StatefulWidget {
   final MediaItem? item;
   final bool isPlaying;
   final double Function() amplitudeProvider;
 
-  const StandaloneArtworkFlip({
+  const StandaloneArtworkVinylReveal({
     super.key,
     required this.item,
     required this.isPlaying,
@@ -423,91 +637,113 @@ class StandaloneArtworkFlip extends StatefulWidget {
   });
 
   @override
-  State<StandaloneArtworkFlip> createState() => _StandaloneArtworkFlipState();
+  State<StandaloneArtworkVinylReveal> createState() => _StandaloneArtworkVinylRevealState();
 }
 
-class _StandaloneArtworkFlipState extends State<StandaloneArtworkFlip> with SingleTickerProviderStateMixin {
-  late final AnimationController _flipController = AnimationController(
+class _StandaloneArtworkVinylRevealState extends State<StandaloneArtworkVinylReveal>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _revealController = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 620),
+    duration: const Duration(milliseconds: 700),
+    reverseDuration: const Duration(milliseconds: 520),
+  );
+  late final Animation<double> _revealAnimation = CurvedAnimation(
+    parent: _revealController,
+    curve: Curves.easeOutBack,
+    reverseCurve: Curves.easeInOutCubic,
   );
   bool _vinylRequested = false;
 
-  bool get _showingVinyl => _flipController.value >= 0.5;
-
   @override
-  void didUpdateWidget(covariant StandaloneArtworkFlip oldWidget) {
+  void didUpdateWidget(covariant StandaloneArtworkVinylReveal oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.item?.id != widget.item?.id) {
-      _flipController.value = 0;
+      _revealController.value = 0;
       _vinylRequested = false;
     }
   }
 
   @override
   void dispose() {
-    _flipController.dispose();
+    _revealController.dispose();
     super.dispose();
   }
 
-  void _toggleFace() {
+  void _toggleVinyl() {
     if (widget.item == null) return;
-    if (_flipController.status == AnimationStatus.completed || _flipController.value > 0.5) {
+    if (_vinylRequested) {
       setState(() => _vinylRequested = false);
-      _flipController.reverse();
+      _revealController.reverse();
     } else {
       setState(() => _vinylRequested = true);
-      _flipController.forward();
+      _revealController.forward();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.primary;
-    return PlaybackPulse(
-      active: widget.isPlaying,
-      borderRadius: _vinylRequested ? 999 : 28,
-      reach: 22,
-      amplitudeProvider: widget.amplitudeProvider,
-      child: Hero(
-        tag: nowPlayingArtworkHeroTag,
-        child: Semantics(
-          button: widget.item != null,
-          label: _vinylRequested ? 'Spinning vinyl. Tap to show album cover' : 'Album cover. Tap for vinyl',
-          child: GestureDetector(
-            key: standaloneArtworkFlipKey,
-            behavior: HitTestBehavior.opaque,
-            onTap: widget.item == null ? null : _toggleFace,
-            child: AnimatedBuilder(
-              animation: _flipController,
+    return Semantics(
+      button: widget.item != null,
+      label: _vinylRequested
+          ? 'Album cover with vinyl revealed. Tap to tuck the vinyl away'
+          : 'Album cover. Tap to reveal the vinyl',
+      child: GestureDetector(
+        key: standaloneArtworkRevealKey,
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.item == null ? null : _toggleVinyl,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final coverSize = math.min(constraints.maxHeight, constraints.maxWidth / 1.30);
+            return AnimatedBuilder(
+              animation: _revealAnimation,
               builder: (context, _) {
-                final vinylFace = _showingVinyl;
-                final angle = vinylFace ? (_flipController.value - 1) * math.pi : _flipController.value * math.pi;
-                return Transform(
+                final progress = _revealAnimation.value;
+                final clampedProgress = progress.clamp(0.0, 1.0);
+                final discSize = coverSize * 0.92;
+                return Stack(
+                  clipBehavior: Clip.none,
                   alignment: Alignment.center,
-                  transform: Matrix4.identity()
-                    ..setEntry(3, 2, 0.0012)
-                    ..rotateY(angle),
-                  child: vinylFace
-                      ? LayoutBuilder(
-                          builder: (context, constraints) {
-                            final size = math.min(constraints.maxWidth, constraints.maxHeight);
-                            return Center(
-                              child: ResonanceVinylDisc(
-                                key: standaloneVinylKey,
-                                size: size,
-                                spinning: widget.isPlaying,
-                                accent: accent,
-                                amplitudeProvider: widget.amplitudeProvider,
-                              ),
-                            );
-                          },
-                        )
-                      : _LargeArtwork(item: widget.item),
+                  children: [
+                    Transform.translate(
+                      key: standaloneVinylRevealTransformKey,
+                      offset: Offset(
+                        coverSize * 0.30 * progress,
+                        -coverSize * 0.025 * math.sin(clampedProgress * math.pi),
+                      ),
+                      child: Transform.rotate(
+                        angle: -0.08 + clampedProgress * 0.12,
+                        child: Transform.scale(
+                          scale: 0.97 + clampedProgress * 0.03,
+                          child: ResonanceVinylDisc(
+                            key: standaloneVinylKey,
+                            size: discSize,
+                            spinning: widget.isPlaying && (_vinylRequested || _revealController.value > 0),
+                            accent: accent,
+                            amplitudeProvider: widget.amplitudeProvider,
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox.square(
+                      key: standaloneArtworkCoverKey,
+                      dimension: coverSize,
+                      child: PlaybackPulse(
+                        active: widget.isPlaying,
+                        borderRadius: 28,
+                        reach: 22,
+                        amplitudeProvider: widget.amplitudeProvider,
+                        child: Hero(
+                          tag: nowPlayingArtworkHeroTag,
+                          child: _LargeArtwork(item: widget.item),
+                        ),
+                      ),
+                    ),
+                  ],
                 );
               },
-            ),
-          ),
+            );
+          },
         ),
       ),
     );

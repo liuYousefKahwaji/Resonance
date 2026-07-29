@@ -83,11 +83,11 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 
 Every style has light and dark variants and can be changed without restarting. The theme style setting switches between the original accent-only appearance and the newer full palette treatment:
 
-$\color{#9827F5}{\textsf{\textbf{Obsidian}}}$ · $\color{#1DB954}{\textsf{\textbf{Jade}}}$ · $\color{#2563EB}{\textsf{\textbf{Cobalt}}}$ · $\color{#FF1744}{\textsf{\textbf{Magma}}}$ · $\color{#B8BDC7}{\textsf{\textbf{Void}}}$
+$\color{#9827F5}{\textsf{\textbf{Obsidian}}}$ · $\color{#1DB954}{\textsf{\textbf{Jade}}}$ · $\color{#2563EB}{\textsf{\textbf{Cobalt}}}$ · $\color{#FF1744}{\textsf{\textbf{Magma}}}$ · $\color{#B8BDC7}{\textsf{\textbf{Void}}}$ · $\color{#E7E9EE}{\textsf{\textbf{Quartz}}}$ · $\color{#F2C14E}{\textsf{\textbf{Aurum}}}$
 
-Void uses a true black base in dark mode for an OLED-style look.
+Void uses a true black base in dark mode for an OLED-style look. Quartz adapts its white/silver character to a darker gray accent in light mode so controls remain readable, while Aurum uses a warm gold palette.
 
-The full style changes backgrounds and surfaces as well as the accent. The default style keeps the older, more restrained theme treatment.
+The full style changes backgrounds and surfaces as well as the accent. Disabling full styling restores the older neutral Resonance surfaces while preserving the selected accent.
 
 An optional artwork-color setting extracts and caches a safe palette for Currently Playing, the standalone player, and the visualizer glow while preserving the selected theme and Void's true-black surfaces.
 

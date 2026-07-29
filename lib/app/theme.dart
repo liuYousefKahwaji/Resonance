@@ -19,7 +19,7 @@ class ResonancePlatformTheme extends ThemeExtension<ResonancePlatformTheme> {
 bool useWindowsNativeControls(BuildContext context) =>
     Theme.of(context).extension<ResonancePlatformTheme>()?.windowsNativeControls ?? false;
 
-enum ResonanceThemeStyle { obsidian, jade, cobalt, magma, voidTheme }
+enum ResonanceThemeStyle { obsidian, jade, cobalt, magma, voidTheme, quartz, aurum }
 
 extension ResonanceThemeStyleLabel on ResonanceThemeStyle {
   String get label => switch (this) {
@@ -28,6 +28,8 @@ extension ResonanceThemeStyleLabel on ResonanceThemeStyle {
     ResonanceThemeStyle.cobalt => 'Cobalt',
     ResonanceThemeStyle.magma => 'Magma',
     ResonanceThemeStyle.voidTheme => 'Void',
+    ResonanceThemeStyle.quartz => 'Quartz',
+    ResonanceThemeStyle.aurum => 'Aurum',
   };
 
   // Dart enum values cannot be named `void`, so storage/UI use `void` while
@@ -83,6 +85,16 @@ _Palette _palette(ResonanceThemeStyle style) => switch (style) {
     darkSecondary: Color(0xFFA855F7),
     lightPrimary: Color(0xFF6D28D9),
     lightSecondary: Color(0xFF7C3AED),
+    darkBase: Color(0xFF0F0918),
+    darkSurface: Color(0xFF191024),
+    darkElevated: Color(0xFF261738),
+    darkHighest: Color(0xFF352149),
+    darkBorder: Color(0xFF4A3161),
+    lightBase: Color(0xFFF7F1FC),
+    lightSurface: Color(0xFFFEFBFF),
+    lightElevated: Color(0xFFEEE2F7),
+    lightHighest: Color(0xFFE2D1EF),
+    lightBorder: Color(0xFFCFB7DF),
   ),
   ResonanceThemeStyle.jade => const _Palette(
     darkPrimary: Color(0xFF1DB954),
@@ -148,6 +160,38 @@ _Palette _palette(ResonanceThemeStyle style) => switch (style) {
     lightHighest: Color(0xFFD4D8DD),
     lightBorder: Color(0xFFBEC4CB),
   ),
+  ResonanceThemeStyle.quartz => const _Palette(
+    darkPrimary: Color(0xFFF1F3F5),
+    darkSecondary: Color(0xFFC9CED6),
+    lightPrimary: Color(0xFF4B5563),
+    lightSecondary: Color(0xFF6B7280),
+    darkBase: Color(0xFF0C0D0F),
+    darkSurface: Color(0xFF17191D),
+    darkElevated: Color(0xFF23262B),
+    darkHighest: Color(0xFF30343A),
+    darkBorder: Color(0xFF464B53),
+    lightBase: Color(0xFFF4F5F7),
+    lightSurface: Color(0xFFFFFFFF),
+    lightElevated: Color(0xFFE8EAED),
+    lightHighest: Color(0xFFDADDDF),
+    lightBorder: Color(0xFFC5C9CF),
+  ),
+  ResonanceThemeStyle.aurum => const _Palette(
+    darkPrimary: Color(0xFFF2C14E),
+    darkSecondary: Color(0xFFD89B26),
+    lightPrimary: Color(0xFF946200),
+    lightSecondary: Color(0xFFB7791F),
+    darkBase: Color(0xFF151006),
+    darkSurface: Color(0xFF211809),
+    darkElevated: Color(0xFF30230D),
+    darkHighest: Color(0xFF413015),
+    darkBorder: Color(0xFF5B4315),
+    lightBase: Color(0xFFFFF8E7),
+    lightSurface: Color(0xFFFFFCF4),
+    lightElevated: Color(0xFFF7EBC7),
+    lightHighest: Color(0xFFEEDCA3),
+    lightBorder: Color(0xFFD8BE73),
+  ),
 };
 
 ThemeData buildResonanceTheme(
@@ -183,6 +227,9 @@ ThemeData buildResonanceTheme(
       : const Color(0xFFE9ECF2);
   final textPrimary = dark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A);
   const textMuted = Color(0xFF64748B);
+  final onPrimary = ThemeData.estimateBrightnessForColor(primary) == Brightness.dark
+      ? Colors.white
+      : const Color(0xFF111318);
   final border = fullPalette
       ? (dark ? palette.darkBorder : palette.lightBorder)
       : dark
@@ -203,6 +250,7 @@ ThemeData buildResonanceTheme(
         seedColor: primary,
         brightness: brightness,
         primary: primary,
+        onPrimary: onPrimary,
         secondary: secondary,
         surface: appSurface,
       ).copyWith(
@@ -296,7 +344,7 @@ ThemeData buildResonanceTheme(
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: primary,
-        foregroundColor: Colors.white,
+        foregroundColor: scheme.onPrimary,
         elevation: 0,
         minimumSize: windowsNativeControls ? const Size(0, 32) : null,
         padding: windowsNativeControls ? const EdgeInsets.symmetric(horizontal: 14, vertical: 7) : null,
@@ -305,6 +353,8 @@ ThemeData buildResonanceTheme(
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
+        backgroundColor: primary,
+        foregroundColor: scheme.onPrimary,
         minimumSize: windowsNativeControls ? const Size(0, 32) : null,
         padding: windowsNativeControls ? const EdgeInsets.symmetric(horizontal: 14, vertical: 7) : null,
         shape: controlShape,
@@ -364,7 +414,7 @@ ThemeData buildResonanceTheme(
     ),
     switchTheme: SwitchThemeData(
       thumbColor: WidgetStateProperty.resolveWith(
-        (states) => states.contains(WidgetState.selected) ? Colors.white : textMuted,
+        (states) => states.contains(WidgetState.selected) ? scheme.onPrimary : textMuted,
       ),
       trackColor: WidgetStateProperty.resolveWith((states) => states.contains(WidgetState.selected) ? primary : border),
       trackOutlineColor: WidgetStateProperty.resolveWith(
