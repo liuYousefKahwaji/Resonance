@@ -10,7 +10,7 @@
 ![Windows](https://img.shields.io/badge/Windows-x64-2563EB?style=flat-square&logo=windows11&logoColor=white)
 ![Android](https://img.shields.io/badge/Android-7.0%2B-1DB954?style=flat-square&logo=android&logoColor=white)
 
-[Download](#download) · [Features](#features) · [What's new](#whats-new-since-v230) · [Quick start](#quick-start) · [Build from source](#build-from-source) · [Release history](#release-history)
+[Download](#download) · [Features](#features) · [Quick start](#quick-start) · [Build from source](#build-from-source) · [Release history](#release-history)
 
 </div>
 
@@ -113,45 +113,7 @@ Playback and interface updates are kept lighter during normal use and when Reson
 
 Stream visualizers reuse playback data instead of downloading or decoding the stream a second time. Loudness analysis runs in the background and is cached so it does not delay local playback.
 
-Windows playback includes fixes for local tracks that could previously stall indefinitely and stop automatic queue progression. Existing playlists, saved metadata, Companion pairings, widget state, shortcuts, downloads, and settings remain compatible across the recent releases.
-
-## What's new since v2.3.0
-
-### v2.7.0
-
-- **Themes:** Obsidian now receives a full purple-styled appearance when Full Theme Styling is enabled, while disabling it keeps the classic Resonance appearance. Quartz adds a white-and-silver option, and Aurum adds a warm gold palette.
-- **Playback and standalone player:** Long song titles scroll without being cut off, the standalone player uses a more expressive animated gradient, and tapping the artwork reveals or hides a spinning vinyl record underneath it.
-- **Metadata:** Track edits save reliably throughout the complete playlist, including the final entries.
-- **Equalizer:** Custom curves are remembered when switching presets; Global and Per-track scopes retain their own curves; saved Custom settings remain available after restarting or using Companion controls.
-- **Android widget:** The widget retains its compact default layout while supporting a controlled, bounded expanded size.
-
-### v2.6.0
-
-- **Android playback widgets:** Added compact, standard, and expanded home-screen layouts with theme-aware artwork and controls for previous, play/pause, next, repeat, and shuffle.
-- **Widget synchronization:** Widget snapshots refresh immediately after playback or theme changes, backed by a three-second safety synchronization pass. Launcher loading and the expanded repeat/shuffle ordering were corrected.
-- **Player presentation:** Playback settings were moved into the updated player and Settings flow. Tapping the standalone artwork flips it into a larger spinning-vinyl easter egg while preserving artwork colors, motion, and existing controls.
-- **Discord Companion hotkeys:** Mute and deafen shortcuts now target Discord's real background window, preserve focus on the active application, and report when Discord cannot accept the shortcut. Recording, testing, saved bindings, and default restoration remain supported.
-
-### v2.5.0
-
-- **Five-band equalizer:** Replaced the standalone bass slider with a cross-platform equalizer, seven presets, editable Custom curves, automatic preamp, and Global or Per-track persistence.
-- **Volume normalization:** Added optional cached background analysis for local tracks, targeting -14 LUFS while respecting a peak-safe limit. Playback begins immediately, analyzed values are reused later, and streams remain unchanged.
-- **Companion sound controls:** Migrated the Companion protocol and controls from the old bass value to the new equalizer settings.
-- **Pocket Vinyl:** Introduced the decorative rotating vinyl treatment used by the player artwork.
-- **Playback reliability:** Fixed Windows tracks that could become stuck and prevent the playback loop from continuing.
-
-### v2.4.1
-
-- **Search:** Results appear automatically after typing pauses with a two-song preview; Enter loads the complete result set; tapping elsewhere dismisses the keyboard.
-- **Song identification:** Tapping outside the identification box closes it and returns to the music list.
-- **Suggested Music:** Suggestions recover correctly when a regular search begins while recommendation loading is still in progress.
-
-### v2.4.0
-
-- **Companion controls:** Added Android mute and deafen buttons. Windows resolves them through user-configured Discord shortcuts without exposing Discord account or status data; shortcuts can be recorded, tested, restored, and saved.
-- **Suggested Music:** Recommendations load sooner, provide a more varied artist mix, offer repeatable refreshes, filter existing songs and common variants, and provide useful actions for empty playlists, failures, and no-result states.
-- **Streams and playback:** Returning from a search preview keeps the results available. Stream artwork persists through imports, transfers, and saves, appears in playlists and the player with a stream badge, and visualizers stay smooth without a second download or decode.
-- **Windows experience:** Added an optional native Windows control style, enabled by default, while preserving the classic Resonance style. Spacing, buttons, menus, focus states, sliders, and scrollbars were refined for desktop use.
+Windows playback includes fixes for local tracks that could previously stall indefinitely and stop automatic queue progression. Existing playlists, saved metadata, Companion pairings, widget state, shortcuts, downloads, and settings remain compatible across recent releases.
 
 ## Download
 
