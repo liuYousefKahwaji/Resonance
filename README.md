@@ -35,18 +35,25 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 - Open the real upcoming queue from a swipe-up sheet on Android or a persistent drawer on Windows; shuffled playback shows its already-generated order.
 - Optionally crossfade automatic track changes by 0–8 seconds with true overlapping playback.
 - Adjustable 1–15 second seek buttons and support for tracks longer than one hour.
-- Playback speed and pitch from 0.5× to 2.0×, real bass adjustment, and a clearly marked volume boost up to 200%.
-- Apply speed, pitch, and bass globally or override them for individual tracks.
+- Playback speed and pitch from 0.5× to 2.0×, plus a clearly marked volume boost up to 200%.
+- Shape the sound with a five-band equalizer and Flat, Bass Boost, Rock, Pop, Vocal, Electronic, and Custom presets.
+- Apply speed, pitch, and equalizer settings globally or override them for individual tracks. Custom equalizer curves are remembered independently for each scope.
+- Optionally normalize local-track loudness toward -14 LUFS using cached background analysis. Streams retain their original loudness.
 - Optionally remember the position of tracks at least ten minutes long and resume them later.
-- Restores the last track and remembers volume, speed, pitch, loop, and shuffle settings.
-- Responsive player layouts, embedded artwork, loading feedback, and an optional startup pulse.
+- Restores the last track and remembers volume, speed, pitch, loop, shuffle, equalizer, and playback-scope settings.
+- Responsive player layouts, embedded artwork, loading feedback, animated gradients, and an optional startup pulse.
+- Long titles scroll smoothly when they exceed the available space.
+- Tap the standalone player artwork to reveal or hide a spinning vinyl record.
 - Opening a playlist track in the standalone player continues the current song instead of starting a second playback instance.
 
-### YouTube
+### YouTube and discovery
 
 - Search by song, artist, or album and browse up to ten results with artwork and duration, or paste a YouTube link.
-- **Play** opens a standalone, playlist-free Now Playing screen.
-- **Stream** adds the track's URL to the current playlist without downloading it.
+- After typing pauses, Resonance shows a quick two-result preview; press Enter to load the full result set.
+- Open Search with an empty query to see **Suggested Music** based on the active playlist, with refreshable and deliberately varied recommendations.
+- Suggested Music filters songs and obvious variants that are already in the playlist, and provides useful empty, retry, and no-result states.
+- **Play** opens a standalone, playlist-free Now Playing screen without discarding the current search results.
+- **Stream** adds the track's URL and artwork to the current playlist without downloading it. Stream badges distinguish remote tracks from local files.
 - **Download** saves the audio locally, imports it, remembers its source, and shows live progress.
 - Search download history by title or artist, review successes and failures, replay completed tracks, reveal files on Windows, or remove old records.
 - Unicode titles and artists are preserved across Android search and download events.
@@ -76,6 +83,9 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 | Hardware media keys and taskbar thumbnail buttons | Headset/media buttons, artwork, seek controls, and a true stop/exit action |
 | Fast, watchdog-backed close behavior; close to tray, minimize to tray, or disable the tray | Quick Settings tile for microphone or device-audio song recognition |
 | Optional Discord Rich Presence | Android share target for YouTube, YouTube Music, Spotify, Audiomack, playlist links, and search text |
+| Optional Windows-native control styling, with the classic Resonance style still available | Compact, standard, and expanded home-screen playback widgets |
+| Local Companion server with queue, transport, loop, shuffle, speed, pitch, equalizer, and Discord shortcut controls | Local-network PC Companion remote with queue and playback controls |
+| Configurable Discord mute/deafen shortcuts that work while Discord is in the background | Companion mute/deafen buttons without account access or claimed state tracking |
 |  | Runtime audio, storage, camera, microphone, and notification permissions |
 |  | QR camera scanning and export to `Pictures/Resonance` |
 
@@ -87,20 +97,22 @@ $\color{#9827F5}{\textsf{\textbf{Obsidian}}}$ · $\color{#1DB954}{\textsf{\textb
 
 Void uses a true black base in dark mode for an OLED-style look. Quartz adapts its white/silver character to a darker gray accent in light mode so controls remain readable, while Aurum uses a warm gold palette.
 
-The full style changes backgrounds and surfaces as well as the accent. Disabling full styling restores the older neutral Resonance surfaces while preserving the selected accent.
+The full style changes backgrounds and surfaces as well as the accent. Disabling full styling restores the older neutral Resonance surfaces while preserving the selected accent. Obsidian now receives its own full purple-styled treatment instead of looking identical in both modes.
 
-An optional artwork-color setting extracts and caches a safe palette for Currently Playing, the standalone player, and the visualizer glow while preserving the selected theme and Void's true-black surfaces.
+An optional artwork-color setting extracts and caches a safe palette for Currently Playing, the standalone player, and the visualizer glow while preserving the selected theme and Void's true-black surfaces. Standalone-player gradients animate subtly and continue to respect the selected theme.
 
 ## Performance
 
 Playback and interface updates are kept lighter during normal use and when Resonance is minimized to the tray. Track menus and playlist scrolling also use smoother transitions, with a subtle blur effect while scrolling.
 
+Stream visualizers reuse playback data instead of downloading or decoding the stream a second time. Loudness analysis runs in the background and is cached so it does not delay local playback.
+
 ## Download
 
-The current release is **v2.3.0**:
+The current release is **v2.7.0**:
 
-- [Android APK](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.3.0/Resonance-Android-v2.3.0.apk) — Android 7.0 (API 24) or newer.
-- [Windows x64 package](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.3.0/Resonance-Windows-v2.3.0.rar) — extract the entire archive, then run `resonance.exe`.
+- [Android APK](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.7.0/Resonance-Android-v2.7.0.apk) — Android 7.0 (API 24) or newer.
+- [Windows x64 package](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.7.0/Resonance-Windows-v2.7.0.rar) — extract the entire archive, then run `resonance.exe`.
 
 All versions and their notes are on the [Releases page](https://github.com/liuYousefKahwaji/Resonance/releases). Keep the Windows package together after extraction; its `bin` folder contains the tools used for YouTube features.
 
@@ -108,11 +120,13 @@ All versions and their notes are on the [Releases page](https://github.com/liuYo
 
 1. Open the playlist menu to create or name a playlist.
 2. Press **+** to import local audio. On Windows, you can also drag files or an M3U/M3U8 playlist into the track list.
-3. Press the search icon for YouTube. Choose **Play**, **Stream**, or **Download** on a result.
+3. Press the search icon for YouTube. Choose **Play**, **Stream**, or **Download** on a result, or browse Suggested Music before entering a query.
 4. Long-press or right-click a track to edit its metadata, or open its three-dot menu for playback and permanent deletion. Drag its handle to change playlist order.
-5. Use the QR buttons to transfer the current playlist or import one from another device. You can also use **Cross-website playlist import** for public YouTube, YouTube Music, Spotify, or Audiomack playlists.
+5. Open Playback Settings to change speed, pitch, scope, or the equalizer. Volume normalization is available under Settings → Playback.
+6. Use the QR buttons to transfer the current playlist or import one from another device. You can also use **Cross-website playlist import** for public YouTube, YouTube Music, Spotify, or Audiomack playlists.
+7. On Android, add a Resonance playback widget from the launcher or open Settings → Companion to control Resonance running on a Windows PC over the local network.
 
-On Android, grant audio/storage access for local imports, notifications for background controls, and camera access only if you use QR scanning. Local playback works offline; YouTube search, streaming, downloads, cover lookup, and source matching require an internet connection.
+On Android, grant audio/storage access for local imports, notifications for background controls, and camera access only if you use QR scanning. Microphone or device-audio access is needed only for song identification. Local playback works offline; YouTube search, suggestions, streaming, downloads, cover lookup, and source matching require an internet connection.
 
 ## Build from source
 
@@ -151,13 +165,13 @@ Windows packages yt-dlp, FFmpeg, and Deno from `assets/bin` into the release bun
 
 ```text
 lib/
-├── core/       audio, storage, metadata, and low-level playback logic
-├── services/   import, artwork cache, Discord, source tracking, and QR transfer
-├── screens/    YouTube search, standalone player, settings, and transfer flows
-├── widgets/    library, player, and platform-responsive UI
-└── platform/   Windows tray/hotkeys and Android permission integration
-android/        native YouTube, QR, loudness, and background-service bridges
-windows/        runner, hardware media keys, and taskbar thumbnail controls
+├── core/       audio, storage, metadata, equalizer, normalization, and low-level playback logic
+├── services/   import, artwork cache, suggestions, Companion, source tracking, and QR transfer
+├── screens/    YouTube search, standalone player, equalizer, settings, Companion, and transfer flows
+├── widgets/    library, player, discovery, and platform-responsive UI
+└── platform/   Windows tray/hotkeys and Android permission/effect integration
+android/        native YouTube, widgets, QR, loudness, and background-service bridges
+windows/        runner, hardware media keys, Discord shortcuts, and taskbar thumbnail controls
 test/           Flutter/Dart and Python tests
 ```
 
@@ -167,6 +181,11 @@ The table condenses every published changelog; each version links to its full re
 
 | Release | What changed |
 | --- | --- |
+| [v2.7.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.7.0) | Added Quartz and Aurum, gave Obsidian a distinct full-style appearance, improved animated player gradients and overflowing titles, fixed metadata editing near the end of playlists, remembered Custom EQ curves, and bounded Android widget expansion. |
+| [v2.6.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.6.0) | Added compact, standard, and expanded Android playback widgets; polished the standalone vinyl interaction; moved playback settings into the updated flow; and made Companion Discord shortcuts work against the background client without stealing focus. |
+| [v2.5.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.5.0) | Replaced the bass slider with a cross-platform five-band equalizer and presets, added cached local-track volume normalization, migrated playback scopes to equalizer settings, introduced Pocket Vinyl, and fixed Windows tracks that could stall playback. |
+| [v2.4.1](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.4.1) | Added automatic two-result search previews, improved keyboard and song-identification dismissal, and fixed Suggested Music recovery when a normal search starts during loading. |
+| [v2.4.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.4.0) | Added Discord mute/deafen Companion controls, playlist-based Suggested Music, persistent stream artwork and visualizers, preserved search previews, and an optional Windows-native control style. |
 | [v2.3.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.3.0) | Background Android recognition, Quick Settings and share-sheet integration, the visual queue, crossfade, long-track resume, scoped audio controls and real bass, download history, artwork-derived player colors, Unicode-safe downloads, and faster Windows shutdown. |
 | [v2.2.1](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.2.1) | Restored exact YouTube and YouTube Music playlist imports, unified cross-website downloads and streams, bounded metadata extraction, and fixed metadata leaking between playlists. |
 | [v2.2.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.2.0) | Shazam-style song identification, standalone-player gestures, touch-safe scrolling, Currently Playing navigation improvements, and an About section with the packaged version. |
