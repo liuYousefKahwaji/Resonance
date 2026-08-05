@@ -110,7 +110,13 @@ void main() {
     final image = img.Image(width: 4, height: 4);
     for (var y = 0; y < image.height; y++) {
       for (var x = 0; x < image.width; x++) {
-        image.setPixelRgba(x, y, 205, 45, 70, 255);
+        if (x == 0) {
+          image.setPixelRgba(x, y, 0, 0, 0, 255);
+        } else if (x == image.width - 1) {
+          image.setPixelRgba(x, y, 255, 255, 255, 255);
+        } else {
+          image.setPixelRgba(x, y, 205, 45, 70, 255);
+        }
       }
     }
     final artwork = File(
@@ -128,6 +134,13 @@ void main() {
     expect(provider.artworkPlayerColors, isTrue);
     await provider.updatePlayerArtwork(artwork.uri);
     expect(provider.hasArtworkPalette, isTrue);
+
+    const stylePrimary = Color(0xFF10B981);
+    const styleSecondary = Color(0xFF3478D4);
+    final gradient = provider.playerGradientColors(stylePrimary, styleSecondary);
+    expect(gradient, isNot(contains(stylePrimary)));
+    expect(gradient, isNot(contains(styleSecondary)));
+    expect(gradient.map((color) => color.toARGB32()), containsAll(<int>[0xFFCD2D46, 0xFF000000, 0xFFFFFFFF]));
   });
 
   test('Windows-native mode changes control geometry without changing the palette', () {

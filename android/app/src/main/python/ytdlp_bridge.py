@@ -91,6 +91,8 @@ def search(query: str, limit: int = 10) -> str:
             "url": url,
             "duration_seconds": int(duration) if duration else None,
             "thumbnail": thumbnail,
+            "view_count": entry.get("view_count"),
+            "like_count": entry.get("like_count"),
             "live_status": entry.get("live_status"),
             "availability": entry.get("availability"),
             "is_short": "/shorts/" in str(entry.get("original_url") or entry.get("webpage_url") or ""),
@@ -126,6 +128,8 @@ def get_metadata(url: str) -> str:
         "url": info.get("webpage_url") or url,
         "duration_seconds": int(info["duration"]) if info.get("duration") else None,
         "thumbnail": thumbnail,
+        "view_count": info.get("view_count"),
+        "like_count": info.get("like_count"),
     }, ensure_ascii=False)
 
 

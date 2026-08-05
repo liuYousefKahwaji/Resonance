@@ -135,4 +135,34 @@ class ThemeProvider extends ChangeNotifier {
         )
         .toColor();
   }
+
+  List<Color> playerGradientColors(Color themePrimary, Color themeSecondary) {
+    final palette = _artworkPlayerColors ? _artworkPalette : null;
+    if (palette == null) return [themePrimary, themeSecondary];
+
+    final candidates = <Color>[
+      ...palette.primaryColors,
+      if (palette.secondaryGradientColor != null) palette.secondaryGradientColor!,
+      if (palette.darkNeutral != null) palette.darkNeutral!,
+      if (palette.lightNeutral != null) palette.lightNeutral!,
+    ];
+    if (candidates.isEmpty) {
+      final neutral = palette.darkNeutral ?? palette.lightNeutral;
+      if (neutral != null) candidates.add(neutral);
+    }
+    if (candidates.isEmpty) return [themePrimary, themeSecondary];
+    final unique = <Color>[];
+    for (final color in candidates) {
+      if (!unique.any((candidate) => _colorsNear(candidate, color))) unique.add(color);
+    }
+    if (unique.length == 1) unique.add(unique.first);
+    return unique;
+  }
+}
+
+bool _colorsNear(Color first, Color second) {
+  final red = (first.r - second.r).abs();
+  final green = (first.g - second.g).abs();
+  final blue = (first.b - second.b).abs();
+  return red + green + blue < 0.12;
 }

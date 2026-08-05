@@ -558,6 +558,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
+                  stackTrailingOnNarrow: true,
                 ),
                 _Divider(),
                 _SettingsTile(
@@ -600,6 +601,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ],
                       ),
                     ),
+                    stackTrailingOnNarrow: true,
                   ),
                 ],
                 _Divider(),
@@ -918,11 +920,42 @@ class _SettingsTile extends StatelessWidget {
   final String? subtitle;
   final Widget? trailing;
   final VoidCallback? onTap;
+  final bool stackTrailingOnNarrow;
 
-  const _SettingsTile({required this.icon, required this.title, this.subtitle, this.trailing, this.onTap});
+  const _SettingsTile({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.trailing,
+    this.onTap,
+    this.stackTrailingOnNarrow = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    if (trailing != null && stackTrailingOnNarrow) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          if (!settingsTileShouldStackTrailing(constraints.maxWidth, stackTrailingOnNarrow)) {
+            return _buildTile(context, trailing);
+          }
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildTile(context, null),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(68, 0, 16, 10),
+                child: Align(alignment: Alignment.centerLeft, child: trailing),
+              ),
+            ],
+          );
+        },
+      );
+    }
+    return _buildTile(context, trailing);
+  }
+
+  Widget _buildTile(BuildContext context, Widget? tileTrailing) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = Theme.of(context).colorScheme.primary;
 
@@ -953,12 +986,15 @@ class _SettingsTile extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             )
           : null,
-      trailing: trailing,
+      trailing: tileTrailing,
       onTap: onTap,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
   }
 }
+
+@visibleForTesting
+bool settingsTileShouldStackTrailing(double availableWidth, bool enabled) => enabled && availableWidth < 440;
 
 class _Divider extends StatelessWidget {
   @override

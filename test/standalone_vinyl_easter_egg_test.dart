@@ -5,7 +5,7 @@ import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/widgets/player/vinyl_disc.dart';
 
 void main() {
-  testWidgets('standalone artwork stays still while the shared vinyl slides out and retracts', (tester) async {
+  testWidgets('standalone cover recenters the revealed cover-and-vinyl composition', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -37,7 +37,8 @@ void main() {
     expect(find.byType(ResonanceVinylDisc), findsOneWidget);
     final revealedTransform = tester.widget<Transform>(find.byKey(standaloneVinylRevealTransformKey));
     expect(revealedTransform.transform.storage[12], greaterThan(80));
-    expect(tester.getRect(find.byKey(standaloneArtworkCoverKey)), coverBefore);
+    final coverRevealed = tester.getRect(find.byKey(standaloneArtworkCoverKey));
+    expect(coverRevealed.center.dx, closeTo(coverBefore.center.dx - standaloneVinylCompositionShift(320, 1), 0.5));
 
     final rotation = find.descendant(of: find.byKey(standaloneVinylKey), matching: find.byType(Transform));
     final before = List<double>.from(tester.widget<Transform>(rotation).transform.storage);
@@ -51,5 +52,11 @@ void main() {
     final retractedTransform = tester.widget<Transform>(find.byKey(standaloneVinylRevealTransformKey));
     expect(retractedTransform.transform.storage[12], closeTo(0, 0.001));
     expect(tester.getRect(find.byKey(standaloneArtworkCoverKey)), coverBefore);
+  });
+
+  test('vinyl composition shift is bounded to the reveal range', () {
+    expect(standaloneVinylCompositionShift(300, -1), 0);
+    expect(standaloneVinylCompositionShift(300, 1), 39);
+    expect(standaloneVinylCompositionShift(300, 2), 39);
   });
 }

@@ -19,6 +19,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/services/import_service.dart';
+import 'package:resonance/services/lyrics_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
@@ -265,16 +266,26 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
           }
         },
       );
-      for (final track in tracks) {
-        if (track.youtubeVideoId != null) {
+      for (final download in tracks) {
+        if (download.youtubeVideoId != null) {
           await const TrackSourceRepository().saveSource(
-            localPath: track.localPath,
-            youtubeVideoId: track.youtubeVideoId!,
+            localPath: download.localPath,
+            youtubeVideoId: download.youtubeVideoId!,
             method: TrackSourceMethod.downloadedByResonance,
             lastVerifiedAt: DateTime.now().toUtc(),
           );
         }
-        await ImportService.importFiles([track.localPath], (newPath) => widget.onFileAdded?.call(newPath));
+        await ImportService.importFiles([download.localPath], (newPath) => widget.onFileAdded?.call(newPath));
+        if (track != null) {
+          unawaited(
+            const LyricsService().prefetch(
+              trackId: download.localPath,
+              title: track.title,
+              artist: track.artist,
+              duration: track.durationSeconds == null ? null : Duration(seconds: track.durationSeconds!),
+            ),
+          );
+        }
       }
       if (mounted) {
         Navigator.pop(context);

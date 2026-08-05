@@ -11,6 +11,8 @@ import 'package:resonance/screens/external_playlist/external_playlist_import_scr
 import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/services/external_playlist_service.dart';
 import 'package:resonance/services/import_service.dart';
+import 'package:resonance/services/lyrics_service.dart';
+import 'package:resonance/services/youtube_stats_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/suggested_music_service.dart';
@@ -64,6 +66,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   int _refreshGeneration = 0;
   int _searchGeneration = 0;
   int _suggestionGeneration = 0;
+  int _statsGeneration = 0;
   Timer? _previewTimer;
   bool _waitingForPreview = false;
 
@@ -89,6 +92,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     _previewTimer?.cancel();
     _searchGeneration++;
     _suggestionGeneration++;
+    _statsGeneration++;
     _controller.dispose();
     super.dispose();
   }
@@ -97,7 +101,9 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     _previewTimer?.cancel();
     final input = _controller.text.trim();
     final generation = ++_searchGeneration;
+    _statsGeneration++;
     if (input.isNotEmpty) {
+      if (Platform.isWindows) _windows.cancelBackgroundSearches();
       _suggestionGeneration++;
       if (mounted) {
         setState(() {
@@ -157,7 +163,9 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         result = await _suggestions.generate(
           profile: profile,
           refreshGeneration: _refreshGeneration,
-          search: Platform.isWindows ? _windows.search : _android.search,
+          search: Platform.isWindows
+              ? (query) => _windows.search(query, background: true)
+              : (query) => _android.search(query),
           isCancelled: isCancelled,
         );
       }
@@ -167,6 +175,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         _suggestionTracks = result.tracks;
         _suggestionLoading = false;
       });
+      unawaited(_hydrateStats(result.tracks, suggestions: true));
     } on SuggestedMusicCancelled {
       if (mounted && generation == _suggestionGeneration) {
         setState(() => _suggestionLoading = false);
@@ -190,7 +199,10 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   Future<List<YoutubeTrack>> _search(String input, {int limit = 10}) async {
     final loader = widget.searchLoader;
     if (loader != null) return loader(input, limit);
-    if (Platform.isWindows) await _windows.initBinaries();
+    if (Platform.isWindows) {
+      _windows.cancelBackgroundSearches();
+      await _windows.initBinaries();
+    }
     if (_isLink(input)) {
       return [await (Platform.isWindows ? _windows.lookup(input) : _android.lookup(input))];
     }
@@ -206,6 +218,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         _results = results.take(2).toList(growable: false);
         _waitingForPreview = false;
       });
+      unawaited(_hydrateStats(_results, suggestions: false));
     } catch (_) {
       if (!mounted || generation != _searchGeneration || input != _controller.text.trim()) return;
       setState(() => _waitingForPreview = false);
@@ -217,6 +230,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     if (input.isEmpty || _loading) return;
     _previewTimer?.cancel();
     final generation = ++_searchGeneration;
+    _statsGeneration++;
     FocusScope.of(context).unfocus();
     setState(() {
       _loading = true;
@@ -237,6 +251,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       final results = await _search(input);
       if (mounted && generation == _searchGeneration && input == _controller.text.trim()) {
         setState(() => _results = results.take(10).toList(growable: false));
+        unawaited(_hydrateStats(_results, suggestions: false));
       }
     } catch (error) {
       if (mounted && generation == _searchGeneration && input == _controller.text.trim()) {
@@ -244,6 +259,34 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       }
     } finally {
       if (mounted && generation == _searchGeneration) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _hydrateStats(List<YoutubeTrack> tracks, {required bool suggestions}) async {
+    // An injected search backend owns its metadata contract as well. This is
+    // important for deterministic tests and for embedders that do not ship
+    // Resonance's native yt-dlp binaries.
+    if (tracks.isEmpty || widget.searchLoader != null) return;
+    final generation = ++_statsGeneration;
+    try {
+      late List<YoutubeTrack> hydrated;
+      if (Platform.isWindows) {
+        hydrated = await _windows.hydrateStats(tracks);
+      } else {
+        hydrated = tracks;
+      }
+      hydrated = await const YoutubeStatsService().hydrateAll(hydrated);
+      if (!mounted || generation != _statsGeneration) return;
+      final byUrl = {for (final track in hydrated) track.url: track};
+      setState(() {
+        if (suggestions) {
+          _suggestionTracks = [for (final track in _suggestionTracks) byUrl[track.url] ?? track];
+        } else {
+          _results = [for (final track in _results) byUrl[track.url] ?? track];
+        }
+      });
+    } catch (error) {
+      debugPrint('YouTube statistics hydration failed: $error');
     }
   }
 
@@ -331,6 +374,14 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
                 lastVerifiedAt: DateTime.now().toUtc(),
               );
             }
+            unawaited(
+              const LyricsService().prefetch(
+                trackId: path,
+                title: track.title,
+                artist: track.artist,
+                duration: track.durationSeconds == null ? null : Duration(seconds: track.durationSeconds!),
+              ),
+            );
           },
         );
       } else {
@@ -353,6 +404,14 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
               lastVerifiedAt: DateTime.now().toUtc(),
             );
           }
+          unawaited(
+            const LyricsService().prefetch(
+              trackId: download.localPath,
+              title: track.title,
+              artist: track.artist,
+              duration: track.durationSeconds == null ? null : Duration(seconds: track.durationSeconds!),
+            ),
+          );
         }
       }
       if (mounted) Navigator.pop(context, addedTrack);
@@ -567,6 +626,15 @@ class _ResultCard extends StatelessWidget {
                   [track.artist, if (track.formattedDuration.isNotEmpty) track.formattedDuration].join(' · '),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 14,
+                  runSpacing: 4,
+                  children: [
+                    _StatLabel(icon: Icons.visibility_rounded, value: track.formattedViewCount, label: 'views'),
+                    _StatLabel(icon: Icons.thumb_up_alt_rounded, value: track.formattedLikeCount, label: 'likes'),
+                  ],
+                ),
                 const SizedBox(height: 14),
                 Wrap(
                   spacing: 8,
@@ -621,6 +689,24 @@ class _ResultCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _StatLabel extends StatelessWidget {
+  final IconData icon;
+  final String value;
+  final String label;
+
+  const _StatLabel({required this.icon, required this.value, required this.label});
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 15, color: Theme.of(context).colorScheme.onSurfaceVariant),
+      const SizedBox(width: 5),
+      Text('$value $label', style: Theme.of(context).textTheme.labelMedium),
+    ],
+  );
 }
 
 class _Thumbnail extends StatelessWidget {

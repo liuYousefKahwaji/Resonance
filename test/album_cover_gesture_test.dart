@@ -111,4 +111,30 @@ void main() {
     final after = tester.widget<Transform>(rotation).transform.storage;
     expect(after, equals(before));
   });
+
+  testWidgets('now-playing card gradient accepts three cover colors', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: NowPlayingCard(
+            title: 'Current track',
+            artist: 'Artist',
+            artworkUri: null,
+            isPlaying: false,
+            isLoading: false,
+            hasTrack: true,
+            isDark: true,
+            tintSurface: true,
+            playerGradientColors: const [Color(0xFFE24A62), Color(0xFF3478D4), Color(0xFFF2C14E)],
+            onTap: () {},
+            onArtworkTap: () {},
+          ),
+        ),
+      ),
+    );
+
+    final containers = find.descendant(of: find.byKey(nowPlayingCardTapKey), matching: find.byType(AnimatedContainer));
+    final decoration = tester.widget<AnimatedContainer>(containers.first).decoration! as BoxDecoration;
+    expect((decoration.gradient! as LinearGradient).colors, hasLength(3));
+  });
 }

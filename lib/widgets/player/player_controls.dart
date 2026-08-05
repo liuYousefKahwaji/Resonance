@@ -214,7 +214,11 @@ class _PlayPauseButton extends StatelessWidget {
                 ]
               : [],
         ),
-        child: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.white, size: size * 0.5),
+        child: Icon(
+          isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+          color: Theme.of(context).colorScheme.onPrimary,
+          size: size * 0.5,
+        ),
       ),
     );
   }

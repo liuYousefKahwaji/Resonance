@@ -11,16 +11,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 @immutable
 class ArtworkPalette {
-  final Color primary;
-  final Color secondary;
+  final List<Color> colors;
+  final Color? darkNeutral;
+  final Color? lightNeutral;
 
-  const ArtworkPalette({required this.primary, required this.secondary});
+  ArtworkPalette({required List<Color> colors, this.darkNeutral, this.lightNeutral})
+    : assert(colors.length <= 3),
+      colors = List<Color>.unmodifiable(colors);
+
+  Color? get primary => colors.isEmpty ? null : colors.first;
+  Color? get secondary => colors.length > 1 ? colors[1] : primary;
+  Color? get tertiary => colors.length > 2 ? colors[2] : null;
+  List<Color> get primaryColors => colors.take(2).toList(growable: false);
+  Color? get secondaryGradientColor => tertiary;
 }
 
-/// Extracts a restrained pair of artwork colors and keeps a small persistent
+/// Extracts a restrained artwork palette and keeps a small persistent
 /// cache so changing back to a recently played track is effectively free.
 class ArtworkPaletteService {
-  static const _cacheKey = 'artwork_palette_cache_v1';
+  static const _cacheKey = 'artwork_palette_cache_v3';
   static const _maxCacheEntries = 80;
 
   final Map<String, ArtworkPalette?> _memoryCache = {};
@@ -56,13 +65,17 @@ class ArtworkPaletteService {
       final decoded = jsonDecode(raw);
       if (decoded is! Map<String, dynamic>) return;
       for (final entry in decoded.entries) {
-        final colors = entry.value;
-        if (colors is List && colors.length == 2 && colors[0] is int && colors[1] is int) {
-          _memoryCache[entry.key] = ArtworkPalette(
-            primary: Color(colors[0] as int),
-            secondary: Color(colors[1] as int),
-          );
-        }
+        final palette = entry.value;
+        if (palette is! Map) continue;
+        final encodedColors = palette['colors'];
+        if (encodedColors is! List || encodedColors.length > 3 || encodedColors.any((value) => value is! int)) continue;
+        final dark = palette['dark'];
+        final light = palette['light'];
+        _memoryCache[entry.key] = ArtworkPalette(
+          colors: encodedColors.cast<int>().map(Color.new).toList(growable: false),
+          darkNeutral: dark is int ? Color(dark) : null,
+          lightNeutral: light is int ? Color(light) : null,
+        );
       }
     } catch (error) {
       debugPrint('Ignoring invalid artwork palette cache: $error');
@@ -73,8 +86,13 @@ class ArtworkPaletteService {
     try {
       final entries = _memoryCache.entries.where((entry) => entry.value != null).toList();
       final trimmed = entries.length <= _maxCacheEntries ? entries : entries.sublist(entries.length - _maxCacheEntries);
-      final encoded = <String, List<int>>{
-        for (final entry in trimmed) entry.key: [entry.value!.primary.toARGB32(), entry.value!.secondary.toARGB32()],
+      final encoded = <String, Map<String, Object?>>{
+        for (final entry in trimmed)
+          entry.key: {
+            'colors': entry.value!.colors.map((color) => color.toARGB32()).toList(growable: false),
+            'dark': entry.value!.darkNeutral?.toARGB32(),
+            'light': entry.value!.lightNeutral?.toARGB32(),
+          },
       };
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_cacheKey, jsonEncode(encoded));
@@ -137,7 +155,10 @@ ArtworkPalette? extractArtworkPalette(img.Image image) {
   if (image.width == 0 || image.height == 0) return null;
   const bucketCount = 24;
   final buckets = List.generate(bucketCount, (_) => _ColorBucket());
+  final darkNeutral = _ColorBucket();
+  final lightNeutral = _ColorBucket();
   final step = math.max(1, math.min(image.width, image.height) ~/ 44);
+  var sampledWeight = 0.0;
 
   for (var y = 0; y < image.height; y += step) {
     for (var x = 0; x < image.width; x += step) {
@@ -150,34 +171,59 @@ ArtworkPalette? extractArtworkPalette(img.Image image) {
         pixel.b.round().clamp(0, 255),
       );
       final hsl = HSLColor.fromColor(color);
+      final centerBias = 1 - ((x / image.width - 0.5).abs() + (y / image.height - 0.5).abs()) * 0.16;
+      final positionWeight = centerBias.clamp(0.72, 1.0);
+      sampledWeight += positionWeight;
+      // HSL saturation is unstable near black (tiny RGB differences can look
+      // highly saturated), so darkness alone decides whether this sample is
+      // a neutral gradient candidate.
+      if (hsl.lightness <= 0.12) {
+        darkNeutral.add(color, positionWeight);
+        continue;
+      }
+      if (hsl.lightness >= 0.88 && hsl.saturation <= 0.24) {
+        lightNeutral.add(color, positionWeight);
+        continue;
+      }
       if (hsl.saturation < 0.18 || hsl.lightness < 0.10 || hsl.lightness > 0.90) continue;
       final bucketIndex = ((hsl.hue / 360) * bucketCount).floor() % bucketCount;
-      final centerBias = 1 - ((x / image.width - 0.5).abs() + (y / image.height - 0.5).abs()) * 0.16;
-      final weight = (0.25 + hsl.saturation * 0.75) * centerBias.clamp(0.72, 1.0);
+      final weight = (0.25 + hsl.saturation * 0.75) * positionWeight;
       buckets[bucketIndex].add(color, weight);
     }
   }
 
   final ranked = List.generate(bucketCount, (index) => index)
     ..sort((a, b) => buckets[b].weight.compareTo(buckets[a].weight));
-  if (buckets[ranked.first].weight <= 0) return null;
+  final selectedBuckets = <int>[];
+  for (final index in ranked) {
+    if (buckets[index].weight <= 0) break;
+    final distinct = selectedBuckets.every((selected) {
+      final distance = (index - selected).abs();
+      return math.min(distance, bucketCount - distance) >= 2;
+    });
+    if (distinct) selectedBuckets.add(index);
+    if (selectedBuckets.length == 3) break;
+  }
 
-  final primaryIndex = ranked.first;
-  final secondaryIndex = ranked.firstWhere((index) {
-    if (buckets[index].weight <= 0) return false;
-    final distance = (index - primaryIndex).abs();
-    final wrappedDistance = math.min(distance, bucketCount - distance);
-    return wrappedDistance >= 3;
-  }, orElse: () => primaryIndex);
-
-  final primary = _safeAccent(buckets[primaryIndex].average);
-  final secondary = secondaryIndex == primaryIndex
-      ? _safeAccent(HSLColor.fromColor(primary).withHue((HSLColor.fromColor(primary).hue + 38) % 360).toColor())
-      : _safeAccent(buckets[secondaryIndex].average);
-  return ArtworkPalette(primary: primary, secondary: secondary);
+  final minimumNeutralWeight = sampledWeight * 0.045;
+  final dark = darkNeutral.weight >= minimumNeutralWeight ? _safeDarkNeutral(darkNeutral.average) : null;
+  final light = lightNeutral.weight >= minimumNeutralWeight ? _safeLightNeutral(lightNeutral.average) : null;
+  if (selectedBuckets.isEmpty && dark == null && light == null) return null;
+  return ArtworkPalette(
+    // Keep the cover colors faithful here. ThemeProvider separately derives
+    // contrast-safe control colors; gradients should use the artwork itself.
+    colors: selectedBuckets.map((index) => buckets[index].average).toList(growable: false),
+    darkNeutral: dark,
+    lightNeutral: light,
+  );
 }
 
-Color _safeAccent(Color color) {
+Color _safeDarkNeutral(Color color) {
   final hsl = HSLColor.fromColor(color);
-  return hsl.withSaturation(hsl.saturation.clamp(0.42, 0.88)).withLightness(hsl.lightness.clamp(0.34, 0.66)).toColor();
+  return hsl.withSaturation(hsl.saturation.clamp(0.0, 0.18)).withLightness(hsl.lightness.clamp(0.0, 0.12)).toColor();
+}
+
+Color _safeLightNeutral(Color color) {
+  final hsl = HSLColor.fromColor(color);
+  return hsl.withSaturation(hsl.saturation.clamp(0.0, 0.16)).withLightness(hsl.lightness.clamp(0.88, 1.0)).toColor();
 }

@@ -38,6 +38,7 @@ import 'package:path/path.dart' as p;
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/music_recognition/music_recognition_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
+import 'package:resonance/services/track_selection_service.dart';
 import 'package:resonance/services/companion/companion_client_service.dart';
 import 'package:resonance/services/companion/companion_server_service.dart';
 import 'package:resonance/services/scroll_effects_preferences.dart';
@@ -260,6 +261,7 @@ class _MainAppState extends State<MainApp> {
   bool _exitInProgress = false;
   bool _uiVisible = true;
   bool _queueDrawerOpen = false;
+  final Set<int> _selectedTrackIndices = <int>{};
   bool? _windowsChromeEnabled;
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   bool _handlingAndroidAction = false;
@@ -294,6 +296,11 @@ class _MainAppState extends State<MainApp> {
     Future.delayed(const Duration(milliseconds: 3100), () {
       if (mounted) setState(() => _showIntro = false);
     });
+  }
+
+  Future<void> _dismissIntro() async {
+    await _introPlayer?.stop();
+    if (mounted && _showIntro) setState(() => _showIntro = false);
   }
 
   Future<void> _initDesktop() async {
@@ -335,6 +342,7 @@ class _MainAppState extends State<MainApp> {
         activePlaylistNumber = active;
         playlistNames = names;
         playlist = fileData.split('\n').where((line) => line.isNotEmpty).skip(1).toList();
+        _selectedTrackIndices.clear();
         isLoading = false;
       });
       widget.handler.playbackModeRevision.value++;
@@ -655,9 +663,208 @@ class _MainAppState extends State<MainApp> {
       playlist.insert(newIndex, item);
       _trackItemKeys.clear();
       _pulsingTrackIndex = null;
+      _selectedTrackIndices.clear();
     });
     await FileService().reorderPlaylist(playlist);
     widget.handler.playbackModeRevision.value++;
+  }
+
+  void _toggleTrackSelection(int index) {
+    if (index < 0 || index >= playlist.length) return;
+    setState(() {
+      if (!_selectedTrackIndices.add(index)) _selectedTrackIndices.remove(index);
+    });
+  }
+
+  void _selectAllTracks() {
+    setState(() {
+      _selectedTrackIndices
+        ..clear()
+        ..addAll(List<int>.generate(playlist.length, (index) => index));
+    });
+  }
+
+  void _clearTrackSelection() {
+    if (_selectedTrackIndices.isEmpty) return;
+    setState(_selectedTrackIndices.clear);
+  }
+
+  Future<int?> _pickSelectionTarget(String actionLabel) async {
+    final targets = playlistNumbers.where((number) => number != activePlaylistNumber).toList(growable: false);
+    final navigatorContext = _navigatorKey.currentState?.overlay?.context;
+    if (navigatorContext == null) return null;
+    if (targets.isEmpty) {
+      ScaffoldMessenger.of(
+        navigatorContext,
+      ).showSnackBar(const SnackBar(content: Text('Create another playlist first.')));
+      return null;
+    }
+    return showModalBottomSheet<int>(
+      context: navigatorContext,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.queue_music_rounded),
+              title: Text('$actionLabel ${_selectedTrackIndices.length} selected tracks'),
+              subtitle: const Text('Choose a destination playlist'),
+            ),
+            for (final number in targets)
+              ListTile(
+                leading: const Icon(Icons.playlist_play_rounded),
+                title: Text(playlistNames[number] ?? 'Playlist $number'),
+                onTap: () => Navigator.pop(sheetContext, number),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _copyOrMoveSelected({required bool move}) async {
+    final target = await _pickSelectionTarget(move ? 'Move' : 'Copy');
+    if (target == null || !mounted) return;
+    final indices = validTrackSelectionIndices(playlist.length, _selectedTrackIndices);
+    final tracks = selectedTracks(playlist, indices);
+    if (tracks.isEmpty) return;
+    final service = FileService();
+    try {
+      for (final track in tracks) {
+        await service.writeTextToPlaylist(target, '$track\n', append: true);
+      }
+      if (move) {
+        final remaining = tracksWithoutSelection(playlist, indices);
+        await service.reorderPlaylist(remaining);
+        for (final track in tracks) {
+          widget.handler.removeTrackFromActivePlaybackOrder(track);
+        }
+        if (mounted) {
+          setState(() {
+            playlist = remaining;
+            _selectedTrackIndices.clear();
+            _trackItemKeys.clear();
+          });
+        }
+      } else {
+        _clearTrackSelection();
+      }
+      widget.handler.playbackModeRevision.value++;
+      if (mounted) {
+        final targetName = playlistNames[target] ?? 'Playlist $target';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${move ? 'Moved' : 'Copied'} ${tracks.length} tracks to “$targetName”.')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not ${move ? 'move' : 'copy'} the selected tracks: $error')));
+      }
+    }
+  }
+
+  Future<void> _removeSelectedFromPlaylist() async {
+    final navigatorContext = _navigatorKey.currentState?.overlay?.context;
+    if (navigatorContext == null) return;
+    final count = validTrackSelectionIndices(playlist.length, _selectedTrackIndices).length;
+    if (count == 0) return;
+    final confirmed = await showDialog<bool>(
+      context: navigatorContext,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove selected tracks?'),
+        content: Text(
+          'Remove $count ${count == 1 ? 'track' : 'tracks'} from this playlist? The audio files will be kept.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final tracks = selectedTracks(playlist, _selectedTrackIndices);
+    final remaining = tracksWithoutSelection(playlist, _selectedTrackIndices);
+    await FileService().reorderPlaylist(remaining);
+    for (final track in tracks) {
+      widget.handler.removeTrackFromActivePlaybackOrder(track);
+    }
+    if (!mounted) return;
+    setState(() {
+      playlist = remaining;
+      _selectedTrackIndices.clear();
+      _trackItemKeys.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Removed $count tracks from this playlist.')));
+  }
+
+  List<String> _uniqueTrackPaths(Iterable<String> paths) {
+    final service = FileService();
+    final unique = <String>[];
+    for (final path in paths) {
+      if (!unique.any((candidate) => service.sameTrackPath(candidate, path))) unique.add(path);
+    }
+    return unique;
+  }
+
+  Future<void> _deleteSelectedTracks() async {
+    final navigatorContext = _navigatorKey.currentState?.overlay?.context;
+    if (navigatorContext == null) return;
+    final tracks = _uniqueTrackPaths(selectedTracks(playlist, _selectedTrackIndices));
+    if (tracks.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: navigatorContext,
+      builder: (dialogContext) => AlertDialog(
+        icon: Icon(Icons.delete_forever_rounded, color: Theme.of(dialogContext).colorScheme.error),
+        title: const Text('Delete selected tracks everywhere?'),
+        content: Text(
+          '${tracks.length} ${tracks.length == 1 ? 'track' : 'tracks'} will be removed from every Resonance playlist. '
+          'Local audio files will be permanently deleted. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(dialogContext).colorScheme.error),
+            child: const Text('Delete Permanently'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final service = FileService();
+      for (final track in tracks) {
+        await widget.handler.forgetTrack(track);
+        if (!track.startsWith('http://') && !track.startsWith('https://')) {
+          final file = File(track);
+          if (await file.exists()) await file.delete();
+        }
+        await service.removeTrackFromAllPlaylists(track);
+        await MetadataCacheService.remove(track);
+        await const TrackSourceRepository().removeSourceForTrack(track);
+      }
+      await _loadPlaylistFromDisk();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Deleted ${tracks.length} tracks everywhere.')));
+      }
+    } catch (error) {
+      await _loadPlaylistFromDisk();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not delete every selected track: $error'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _deleteTrackEverywhere(String trackPath) async {
@@ -954,7 +1161,7 @@ class _MainAppState extends State<MainApp> {
           home: Builder(
             builder: (nestedContext) {
               return _showIntro
-                  ? const _IntroOverlay()
+                  ? _IntroOverlay(onDismiss: () => unawaited(_dismissIntro()))
                   : TickerMode(
                       enabled: _uiVisible,
                       child: Scaffold(
@@ -1097,6 +1304,8 @@ class _MainAppState extends State<MainApp> {
             pulsingTrackIndex: _pulsingTrackIndex,
             pulse: _trackPulse,
             artworkRevision: _artworkRevision,
+            selectedIndices: _selectedTrackIndices,
+            onSelectionToggle: _toggleTrackSelection,
             itemKeyForIndex: _trackItemKey,
             onTrackDeleted: (index, trackPath) async {
               setState(() => playlist.removeAt(index));
@@ -1212,6 +1421,7 @@ class _MainAppState extends State<MainApp> {
   }
 
   Widget _buildToolbar(BuildContext context) {
+    if (_selectedTrackIndices.isNotEmpty) return _buildSelectionToolbar(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final windowsNative = Platform.isWindows && useWindowsNativeControls(context);
     final trackCount = playlist.length;
@@ -1261,6 +1471,112 @@ class _MainAppState extends State<MainApp> {
         },
       ),
     );
+  }
+
+  Widget _buildSelectionToolbar(BuildContext context) {
+    final windowsNative = Platform.isWindows && useWindowsNativeControls(context);
+    final allSelected = _selectedTrackIndices.length == playlist.length;
+    return Container(
+      key: const Key('track-selection-toolbar'),
+      padding: windowsNative ? const EdgeInsets.fromLTRB(8, 5, 8, 5) : const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      decoration: windowsNative
+          ? BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              border: Border(bottom: BorderSide(color: Theme.of(context).colorScheme.outline)),
+            )
+          : null,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 620;
+          return Row(
+            children: [
+              IconButton(
+                onPressed: _clearTrackSelection,
+                icon: const Icon(Icons.close_rounded),
+                tooltip: 'Cancel selection',
+              ),
+              Expanded(
+                child: Text(
+                  '${_selectedTrackIndices.length} selected',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                ),
+              ),
+              IconButton(
+                onPressed: allSelected ? _clearTrackSelection : _selectAllTracks,
+                icon: Icon(allSelected ? Icons.deselect_rounded : Icons.select_all_rounded),
+                tooltip: allSelected ? 'Select none' : 'Select all',
+              ),
+              if (!compact) ...[
+                IconButton(
+                  onPressed: playlistNumbers.length > 1 ? () => _copyOrMoveSelected(move: false) : null,
+                  icon: const Icon(Icons.copy_all_rounded),
+                  tooltip: 'Copy to playlist',
+                ),
+                IconButton(
+                  onPressed: playlistNumbers.length > 1 ? () => _copyOrMoveSelected(move: true) : null,
+                  icon: const Icon(Icons.drive_file_move_rounded),
+                  tooltip: 'Move to playlist',
+                ),
+                IconButton(
+                  onPressed: _removeSelectedFromPlaylist,
+                  icon: const Icon(Icons.playlist_remove_rounded),
+                  tooltip: 'Remove from playlist',
+                ),
+                IconButton(
+                  onPressed: _deleteSelectedTracks,
+                  icon: Icon(Icons.delete_forever_rounded, color: Theme.of(context).colorScheme.error),
+                  tooltip: 'Delete everywhere',
+                ),
+              ] else
+                PopupMenuButton<_SelectionAction>(
+                  tooltip: 'Selected track actions',
+                  icon: const Icon(Icons.more_vert_rounded),
+                  onSelected: _handleSelectionAction,
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: _SelectionAction.copy,
+                      enabled: playlistNumbers.length > 1,
+                      child: const _ToolbarMenuLabel(icon: Icons.copy_all_rounded, label: 'Copy to playlist'),
+                    ),
+                    PopupMenuItem(
+                      value: _SelectionAction.move,
+                      enabled: playlistNumbers.length > 1,
+                      child: const _ToolbarMenuLabel(icon: Icons.drive_file_move_rounded, label: 'Move to playlist'),
+                    ),
+                    const PopupMenuItem(
+                      value: _SelectionAction.remove,
+                      child: _ToolbarMenuLabel(icon: Icons.playlist_remove_rounded, label: 'Remove from playlist'),
+                    ),
+                    PopupMenuItem(
+                      value: _SelectionAction.delete,
+                      child: _ToolbarMenuLabel(
+                        icon: Icons.delete_forever_rounded,
+                        label: 'Delete everywhere',
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _handleSelectionAction(_SelectionAction action) {
+    switch (action) {
+      case _SelectionAction.copy:
+        unawaited(_copyOrMoveSelected(move: false));
+      case _SelectionAction.move:
+        unawaited(_copyOrMoveSelected(move: true));
+      case _SelectionAction.remove:
+        unawaited(_removeSelectedFromPlaylist());
+      case _SelectionAction.delete:
+        unawaited(_deleteSelectedTracks());
+    }
   }
 
   List<Widget> _wideTransferActions(BuildContext context) => [
@@ -1524,20 +1840,25 @@ enum _ToolbarAction { refresh, transfer, importTransfer, importExternal, importL
 class _ToolbarMenuLabel extends StatelessWidget {
   final IconData icon;
   final String label;
+  final Color? color;
 
-  const _ToolbarMenuLabel({required this.icon, required this.label});
+  const _ToolbarMenuLabel({required this.icon, required this.label, this.color});
 
   @override
   Widget build(BuildContext context) => Row(
     children: [
-      Icon(icon, size: 18),
+      Icon(icon, size: 18, color: color),
       const SizedBox(width: 10),
-      Flexible(child: Text(label)),
+      Flexible(
+        child: Text(label, style: color == null ? null : TextStyle(color: color)),
+      ),
     ],
   );
 }
 
 enum _PlaylistActionType { select, create, rename, delete }
+
+enum _SelectionAction { copy, move, remove, delete }
 
 class _PlaylistMenuAction {
   final _PlaylistActionType type;
@@ -1551,7 +1872,9 @@ EncodedPlaylistTransfer _encodeTransferManifest(Map<String, dynamic> json) {
 }
 
 class _IntroOverlay extends StatefulWidget {
-  const _IntroOverlay();
+  final VoidCallback onDismiss;
+
+  const _IntroOverlay({required this.onDismiss});
 
   @override
   State<_IntroOverlay> createState() => _IntroOverlayState();
@@ -1559,23 +1882,11 @@ class _IntroOverlay extends StatefulWidget {
 
 class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
-  late final Animation<double> _scale;
-  late final Animation<double> _opacity;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 3030))..forward();
-    _scale = TweenSequence<double>([
-      TweenSequenceItem(tween: Tween(begin: 0.72, end: 1.0).chain(CurveTween(curve: Curves.easeOutBack)), weight: 34),
-      TweenSequenceItem(tween: ConstantTween(1.0), weight: 48),
-      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.08).chain(CurveTween(curve: Curves.easeIn)), weight: 18),
-    ]).animate(_controller);
-    _opacity = TweenSequence<double>([
-      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0).chain(CurveTween(curve: Curves.easeOut)), weight: 12),
-      TweenSequenceItem(tween: ConstantTween(1.0), weight: 72),
-      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 16),
-    ]).animate(_controller);
   }
 
   @override
@@ -1587,58 +1898,98 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
   @override
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
-    return IgnorePointer(
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.onDismiss,
       child: AnimatedBuilder(
         animation: _controller,
         builder: (context, child) {
+          final progress = reduceMotion ? 0.72 : _controller.value;
+          final entrance = Curves.easeOutExpo.transform((progress / 0.42).clamp(0.0, 1.0));
+          final exit = 1 - Curves.easeInCubic.transform(((progress - 0.84) / 0.16).clamp(0.0, 1.0));
+          final logoScale = 0.78 + entrance * 0.22;
+          final wordReveal = Curves.easeOutCubic.transform(((progress - 0.28) / 0.34).clamp(0.0, 1.0));
           return Opacity(
-            opacity: _opacity.value,
+            opacity: reduceMotion ? 1 : exit,
             child: Container(
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 gradient: RadialGradient(
-                  center: Alignment(0, -0.05),
-                  radius: 0.9,
-                  colors: [Color(0xFF17131F), Color(0xFF08080C), Color(0xFF030305)],
+                  center: const Alignment(0, -0.08),
+                  radius: 1.08,
+                  colors: [Color.lerp(const Color(0xFF15121D), primary, 0.09)!, const Color(0xFF07070B), Colors.black],
                 ),
               ),
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  Positioned.fill(child: CustomPaint(painter: _ResonancePainter(_controller.value, primary))),
+                  Positioned.fill(child: CustomPaint(painter: _ResonancePainter(progress, primary, reduceMotion))),
                   Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Transform.scale(
-                          scale: _scale.value,
-                          child: Container(
-                            width: 92,
-                            height: 92,
-                            padding: const EdgeInsets.all(7),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(24),
-                              color: const Color(0xFF111118),
-                              border: Border.all(color: primary.withValues(alpha: 0.38)),
-                              boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.22), blurRadius: 42)],
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(18),
-                              child: Image.asset('assets/icon/icon.png', fit: BoxFit.cover),
+                        Opacity(
+                          opacity: entrance,
+                          child: Transform.scale(
+                            scale: logoScale,
+                            child: Container(
+                              width: 82,
+                              height: 82,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(22),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: primary.withValues(alpha: 0.34 * entrance),
+                                    blurRadius: 54,
+                                    spreadRadius: 4,
+                                  ),
+                                ],
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(22),
+                                child: Image.asset('assets/icon/icon.png', fit: BoxFit.cover),
+                              ),
                             ),
                           ),
                         ),
-                        const SizedBox(height: 22),
-                        Text(
-                          'R E S O N A N C E',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.88),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            letterSpacing: 3.2,
-                            decoration: TextDecoration.none,
+                        const SizedBox(height: 28),
+                        ClipRect(
+                          child: Align(
+                            heightFactor: wordReveal,
+                            child: Opacity(
+                              opacity: wordReveal,
+                              child: Transform.translate(
+                                offset: Offset(0, 10 * (1 - wordReveal)),
+                                child: const Text(
+                                  'RESONANCE',
+                                  style: TextStyle(
+                                    color: Color(0xFFF4F1FA),
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 6.2,
+                                    decoration: TextDecoration.none,
+                                  ),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                  Positioned(
+                    bottom: math.max(22, MediaQuery.paddingOf(context).bottom + 14),
+                    child: Opacity(
+                      opacity: 0.34 * wordReveal,
+                      child: const Text(
+                        'tap to skip',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          letterSpacing: 1.2,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -1654,37 +2005,67 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
 class _ResonancePainter extends CustomPainter {
   final double progress;
   final Color color;
-  const _ResonancePainter(this.progress, this.color);
+  final bool reduceMotion;
+  const _ResonancePainter(this.progress, this.color, this.reduceMotion);
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = size.center(Offset.zero);
-    final maxRadius = math.sqrt(size.width * size.width + size.height * size.height) * 0.55;
-    for (final onset in const [0.08, 0.31, 0.52]) {
-      final raw = ((progress - onset) / 0.46).clamp(0.0, 1.0);
-      if (raw <= 0 || raw >= 1) continue;
-      final wave = Curves.easeOutCubic.transform(raw);
-      final paint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2 + (1 - raw) * 1.8
-        ..color = color.withValues(alpha: (1 - raw) * 0.24)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
-      canvas.drawCircle(center, 54 + maxRadius * wave, paint);
+    final reveal = reduceMotion ? 1.0 : Curves.easeOutQuart.transform((progress / 0.58).clamp(0.0, 1.0));
+    final halfWidth = size.width * 0.48 * reveal;
+    final waveform = Path()..moveTo(center.dx - halfWidth, center.dy);
+    const samples = 150;
+    for (var index = 0; index <= samples; index++) {
+      final normalized = index / samples * 2 - 1;
+      final x = center.dx + normalized * halfWidth;
+      final envelope = math.pow(1 - normalized.abs(), 2.2).toDouble();
+      final fracture = math.sin(normalized * 33 + progress * math.pi * 5) * 11 + math.sin(normalized * 71) * 4;
+      final y = center.dy + fracture * envelope * reveal;
+      waveform.lineTo(x, y);
     }
-
-    final breathe = 0.5 + 0.5 * math.sin(progress * math.pi * 6);
-    canvas.drawCircle(
-      center,
-      118 + breathe * 8,
+    canvas.drawPath(
+      waveform,
       Paint()
+        ..color = color.withValues(alpha: 0.16)
+        ..strokeWidth = 8
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = color.withValues(alpha: 0.07 + breathe * 0.04),
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 9),
     );
+    canvas.drawPath(
+      waveform,
+      Paint()
+        ..color = Color.lerp(color, Colors.white, 0.34)!.withValues(alpha: 0.82)
+        ..strokeWidth = 1.25
+        ..style = PaintingStyle.stroke,
+    );
+
+    final flash = 1 - ((progress - 0.12) / 0.26).clamp(0.0, 1.0);
+    canvas.drawLine(
+      Offset(center.dx, center.dy - 82 * flash),
+      Offset(center.dx, center.dy + 82 * flash),
+      Paint()
+        ..color = Colors.white.withValues(alpha: flash * 0.58)
+        ..strokeWidth = 1.2
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+    );
+
+    for (var index = 0; index < 18; index++) {
+      final side = index.isEven ? -1.0 : 1.0;
+      final seed = (index * 37 % 101) / 101;
+      final travel = reveal * (0.3 + seed * 0.7);
+      final x = center.dx + side * size.width * (0.06 + seed * 0.43) * travel;
+      final y = center.dy + math.sin(index * 2.31) * (18 + seed * 42) * travel;
+      canvas.drawCircle(
+        Offset(x, y),
+        0.6 + seed * 1.2,
+        Paint()..color = color.withValues(alpha: (1 - travel * 0.55) * 0.45),
+      );
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _ResonancePainter oldDelegate) => oldDelegate.progress != progress;
+  bool shouldRepaint(covariant _ResonancePainter oldDelegate) =>
+      oldDelegate.progress != progress || oldDelegate.color != color;
 }
 
 // ── Theme builders ─────────────────────────────────────────────────────────────

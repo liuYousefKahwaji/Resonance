@@ -38,6 +38,9 @@ class TrackTile extends StatefulWidget {
   final VoidCallback onDeleteEverywhere;
   final int pulse;
   final int artworkRevision;
+  final bool selected;
+  final bool selectionMode;
+  final VoidCallback? onSelectionToggle;
   @visibleForTesting
   final Future<CachedTrackMetadata?> Function(String path)? metadataLoader;
 
@@ -50,6 +53,9 @@ class TrackTile extends StatefulWidget {
     required this.onDeleteEverywhere,
     this.pulse = 0,
     this.artworkRevision = 0,
+    this.selected = false,
+    this.selectionMode = false,
+    this.onSelectionToggle,
     this.metadataLoader,
   });
 
@@ -461,6 +467,9 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
           coverArt: _coverArt,
           artworkUrl: _artworkUrl,
           onEditMetadata: _showMetadataEditor,
+          selected: widget.selected,
+          selectionMode: widget.selectionMode,
+          onSelectionToggle: widget.onSelectionToggle,
         ),
       ),
     );
@@ -512,6 +521,9 @@ class _TrackTileContent extends StatelessWidget {
   final Uint8List? coverArt;
   final String? artworkUrl;
   final void Function(BuildContext, String, String) onEditMetadata;
+  final bool selected;
+  final bool selectionMode;
+  final VoidCallback? onSelectionToggle;
 
   const _TrackTileContent({
     required this.trackPath,
@@ -525,6 +537,9 @@ class _TrackTileContent extends StatelessWidget {
     required this.coverArt,
     required this.artworkUrl,
     required this.onEditMetadata,
+    required this.selected,
+    required this.selectionMode,
+    required this.onSelectionToggle,
   });
 
   Future<void> _openStandalone(
@@ -571,7 +586,12 @@ class _TrackTileContent extends StatelessWidget {
     if (loading) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-        child: _SkeletonTile(isDark: isDark),
+        child: TrackTapRegion(
+          onTap: selectionMode && onSelectionToggle != null ? onSelectionToggle! : () {},
+          onLongPress: onSelectionToggle,
+          borderRadius: BorderRadius.circular(tileRadius),
+          child: _SkeletonTile(isDark: isDark),
+        ),
       );
     }
 
@@ -591,13 +611,17 @@ class _TrackTileContent extends StatelessWidget {
             duration: const Duration(milliseconds: 250),
             curve: Curves.easeOut,
             decoration: BoxDecoration(
-              color: isCurrentTrack
+              color: selected
+                  ? primary.withValues(alpha: isDark ? 0.22 : 0.12)
+                  : isCurrentTrack
                   ? (isDark ? primary.withValues(alpha: 0.12) : primary.withValues(alpha: 0.06))
                   : Theme.of(context).colorScheme.surface,
               borderRadius: BorderRadius.circular(tileRadius),
               border: Border.all(
-                color: isCurrentTrack ? primary.withValues(alpha: 0.45) : Theme.of(context).colorScheme.outline,
-                width: isCurrentTrack ? 1.5 : 1,
+                color: selected || isCurrentTrack
+                    ? primary.withValues(alpha: selected ? 0.75 : 0.45)
+                    : Theme.of(context).colorScheme.outline,
+                width: selected || isCurrentTrack ? 1.5 : 1,
               ),
               boxShadow: isCurrentTrack && !windowsNative
                   ? [
@@ -612,38 +636,46 @@ class _TrackTileContent extends StatelessWidget {
             child: Material(
               type: MaterialType.transparency,
               child: TrackTapRegion(
-                onTap: () => unawaited(_activateTrack(handler, resolvedTitle, resolvedArtist)),
-                onLongPress: isStream ? null : () => onEditMetadata(context, resolvedTitle, resolvedArtist),
+                onTap: selectionMode && onSelectionToggle != null
+                    ? onSelectionToggle!
+                    : () => unawaited(_activateTrack(handler, resolvedTitle, resolvedArtist)),
+                onLongPress: onSelectionToggle,
                 borderRadius: BorderRadius.circular(tileRadius),
                 child: Padding(
                   padding: EdgeInsets.symmetric(horizontal: windowsNative ? 10 : 12, vertical: windowsNative ? 8 : 10),
                   child: Row(
                     children: [
                       // ── Drag handle / shuffle cue ─────────────
-                      ReorderableDragStartListener(
-                        index: index,
-                        child: Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: ValueListenableBuilder<int>(
-                            valueListenable: handler.playbackModeRevision,
-                            builder: (context, _, __) {
-                              final shuffle = handler.getShuffleMode();
-                              return AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 180),
-                                child: Icon(
-                                  shuffle ? Icons.shuffle_rounded : Icons.drag_handle_rounded,
-                                  key: ValueKey(shuffle),
-                                  size: 18,
-                                  color: shuffle
-                                      ? primary.withValues(alpha: isCurrentTrack ? 0.85 : 0.55)
-                                      : isCurrentTrack
-                                      ? primary.withValues(alpha: 0.5)
-                                      : Theme.of(context).colorScheme.outline,
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: selectionMode
+                            ? Checkbox(
+                                value: selected,
+                                onChanged: onSelectionToggle == null ? null : (_) => onSelectionToggle!(),
+                                visualDensity: VisualDensity.compact,
+                              )
+                            : ReorderableDragStartListener(
+                                index: index,
+                                child: ValueListenableBuilder<int>(
+                                  valueListenable: handler.playbackModeRevision,
+                                  builder: (context, _, __) {
+                                    final shuffle = handler.getShuffleMode();
+                                    return AnimatedSwitcher(
+                                      duration: const Duration(milliseconds: 180),
+                                      child: Icon(
+                                        shuffle ? Icons.shuffle_rounded : Icons.drag_handle_rounded,
+                                        key: ValueKey(shuffle),
+                                        size: 18,
+                                        color: shuffle
+                                            ? primary.withValues(alpha: isCurrentTrack ? 0.85 : 0.55)
+                                            : isCurrentTrack
+                                            ? primary.withValues(alpha: 0.5)
+                                            : Theme.of(context).colorScheme.outline,
+                                      ),
+                                    );
+                                  },
                                 ),
-                              );
-                            },
-                          ),
-                        ),
+                              ),
                       ),
 
                       // ── Icon ─────────────────────────────────
@@ -690,64 +722,66 @@ class _TrackTileContent extends StatelessWidget {
                         ),
                       ),
 
-                      MenuAnchor(
-                        alignmentOffset: const Offset(-196, 4),
-                        style: MenuStyle(
-                          elevation: WidgetStatePropertyAll(windowsNative ? 8 : 10),
-                          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-                          shape: WidgetStatePropertyAll(
-                            RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(windowsNative ? 4 : 14),
-                              side: windowsNative
-                                  ? BorderSide(color: Theme.of(context).colorScheme.outline)
-                                  : BorderSide.none,
-                            ),
-                          ),
-                          padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: windowsNative ? 3 : 6)),
-                        ),
-                        menuChildren: [
-                          MenuItemButton(
-                            leadingIcon: const Icon(Icons.open_in_new_rounded, size: 19),
-                            onPressed: () =>
-                                unawaited(_openStandalone(context, handler, resolvedTitle, resolvedArtist)),
-                            child: const Text('Open standalone player'),
-                          ),
-                          if (!isStream)
-                            MenuItemButton(
-                              leadingIcon: const Icon(Icons.edit_rounded, size: 19),
-                              onPressed: () => onEditMetadata(context, resolvedTitle, resolvedArtist),
-                              child: const Text('Edit metadata'),
-                            ),
-                          if (!isStream)
-                            MenuItemButton(
-                              style: ButtonStyle(
-                                foregroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.error),
+                      if (!selectionMode) ...[
+                        MenuAnchor(
+                          alignmentOffset: const Offset(-196, 4),
+                          style: MenuStyle(
+                            elevation: WidgetStatePropertyAll(windowsNative ? 8 : 10),
+                            surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+                            shape: WidgetStatePropertyAll(
+                              RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(windowsNative ? 4 : 14),
+                                side: windowsNative
+                                    ? BorderSide(color: Theme.of(context).colorScheme.outline)
+                                    : BorderSide.none,
                               ),
-                              leadingIcon: const Icon(Icons.delete_forever_rounded, size: 19),
-                              onPressed: onDeleteEverywhere,
-                              child: const Text('Delete file everywhere'),
                             ),
-                        ],
-                        builder: (context, controller, _) => IconButton(
-                          tooltip: 'Track actions',
-                          onPressed: () => controller.isOpen ? controller.close() : controller.open(),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                          icon: Icon(
-                            Icons.more_vert_rounded,
-                            size: 18,
-                            color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
+                            padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: windowsNative ? 3 : 6)),
+                          ),
+                          menuChildren: [
+                            MenuItemButton(
+                              leadingIcon: const Icon(Icons.open_in_new_rounded, size: 19),
+                              onPressed: () =>
+                                  unawaited(_openStandalone(context, handler, resolvedTitle, resolvedArtist)),
+                              child: const Text('Open standalone player'),
+                            ),
+                            if (!isStream)
+                              MenuItemButton(
+                                leadingIcon: const Icon(Icons.edit_rounded, size: 19),
+                                onPressed: () => onEditMetadata(context, resolvedTitle, resolvedArtist),
+                                child: const Text('Edit metadata'),
+                              ),
+                            if (!isStream)
+                              MenuItemButton(
+                                style: ButtonStyle(
+                                  foregroundColor: WidgetStatePropertyAll(Theme.of(context).colorScheme.error),
+                                ),
+                                leadingIcon: const Icon(Icons.delete_forever_rounded, size: 19),
+                                onPressed: onDeleteEverywhere,
+                                child: const Text('Delete file everywhere'),
+                              ),
+                          ],
+                          builder: (context, controller, _) => IconButton(
+                            tooltip: 'Track actions',
+                            onPressed: () => controller.isOpen ? controller.close() : controller.open(),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                            icon: Icon(
+                              Icons.more_vert_rounded,
+                              size: 18,
+                              color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
+                            ),
                           ),
                         ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded, size: 16),
-                        tooltip: 'Remove from playlist',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                        color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
-                        onPressed: onDelete,
-                      ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, size: 16),
+                          tooltip: 'Remove from playlist',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
+                          onPressed: onDelete,
+                        ),
+                      ],
                     ],
                   ),
                 ),

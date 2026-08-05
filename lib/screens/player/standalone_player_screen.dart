@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -5,9 +6,12 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/models/lyrics.dart';
 import 'package:resonance/providers/theme_provider.dart';
+import 'package:resonance/services/lyrics_service.dart';
 import 'package:resonance/widgets/common/overflowing_text.dart';
 import 'package:resonance/widgets/player/audio_visualizer.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
@@ -26,6 +30,9 @@ const standaloneVinylKey = Key('standalone-vinyl');
 const standaloneVinylRevealTransformKey = Key('standalone-vinyl-reveal-transform');
 
 @visibleForTesting
+const standaloneVinylCompositionTransformKey = Key('standalone-vinyl-composition-transform');
+
+@visibleForTesting
 const standaloneArtworkCoverKey = Key('standalone-artwork-cover');
 
 @visibleForTesting
@@ -37,20 +44,28 @@ double standaloneArtworkSize(BoxConstraints constraints) {
 }
 
 @visibleForTesting
+double standaloneLyricsVerticalInset(BoxConstraints constraints) => (constraints.maxHeight * 0.035).clamp(10.0, 24.0);
+
+@visibleForTesting
+double standaloneVinylCompositionShift(double coverSize, double revealProgress) =>
+    coverSize * 0.13 * revealProgress.clamp(0.0, 1.0);
+
+@visibleForTesting
 List<Color> standaloneGradientColors(
   ThemeData theme, {
   Color? playerAccent,
   Color? playerSecondary,
+  List<Color>? playerColors,
   bool preserveOledSurface = false,
 }) {
   final base = theme.scaffoldBackgroundColor;
   if (preserveOledSurface) return [base, base, base];
   final accent = playerAccent ?? theme.colorScheme.primary;
   final secondary = playerSecondary ?? accent;
-  final dark = theme.brightness == Brightness.dark;
-  return [
-    Color.alphaBlend(accent.withValues(alpha: dark ? 0.68 : 0.44), base),
-    Color.alphaBlend(secondary.withValues(alpha: dark ? 0.46 : 0.28), base),
+  final sources = playerColors ?? <Color>[accent, secondary];
+  return <Color>[
+    for (final color in sources)
+      Color.alphaBlend(color.withValues(alpha: theme.brightness == Brightness.dark ? 0.64 : 0.42), base),
     base,
   ];
 }
@@ -101,9 +116,8 @@ class StandaloneGradientPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
     final base = colors.isEmpty ? Colors.transparent : colors.last;
-    final primary = colors.isEmpty ? base : colors.first;
-    final secondary = colors.length > 1 ? colors[1] : primary;
-    final tertiary = Color.lerp(primary, secondary, 0.54) ?? primary;
+    final swatches = colors.length > 1 ? colors.sublist(0, colors.length - 1) : <Color>[base];
+    final secondary = swatches.length > 1 ? swatches[1] : swatches.first;
     final bounds = Offset.zero & size;
 
     canvas.drawRect(
@@ -116,9 +130,25 @@ class StandaloneGradientPainter extends CustomPainter {
         ).createShader(bounds),
     );
 
-    _drawBlob(canvas, size, tertiary, frame.tertiaryCenter, frame.tertiaryRadius, 0.70);
-    _drawBlob(canvas, size, secondary, frame.secondaryCenter, frame.secondaryRadius, 0.86);
-    _drawBlob(canvas, size, primary, frame.primaryCenter, frame.primaryRadius, 0.96);
+    final centers = <Offset>[frame.primaryCenter, frame.secondaryCenter, frame.tertiaryCenter];
+    final radii = <double>[frame.primaryRadius, frame.secondaryRadius, frame.tertiaryRadius];
+    for (var index = swatches.length - 1; index >= 0; index--) {
+      final orbit = index % centers.length;
+      final ring = index ~/ centers.length;
+      final ringOffset = ring == 0 ? Offset.zero : Offset(index.isEven ? 0.11 : -0.11, index.isEven ? -0.08 : 0.08);
+      final center = Offset(
+        (centers[orbit].dx + ringOffset.dx).clamp(-0.12, 1.12),
+        (centers[orbit].dy + ringOffset.dy).clamp(-0.12, 1.12),
+      );
+      _drawBlob(
+        canvas,
+        size,
+        swatches[index],
+        center,
+        radii[orbit] * (ring == 0 ? 1 : 0.82),
+        (0.96 - index * 0.07).clamp(0.54, 0.96),
+      );
+    }
   }
 
   void _drawBlob(
@@ -359,10 +389,17 @@ class _StandalonePlayerGestureSurfaceState extends State<StandalonePlayerGesture
   );
 }
 
-class StandalonePlayerScreen extends StatelessWidget {
+class StandalonePlayerScreen extends StatefulWidget {
   final bool playlistTrack;
 
   const StandalonePlayerScreen({super.key, this.playlistTrack = false});
+
+  @override
+  State<StandalonePlayerScreen> createState() => _StandalonePlayerScreenState();
+}
+
+class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
+  bool _lyricsVisible = false;
 
   @override
   Widget build(BuildContext context) {
@@ -371,6 +408,7 @@ class StandalonePlayerScreen extends StatelessWidget {
     final themeProvider = context.watch<ThemeProvider>();
     final playerAccent = themeProvider.playerAccent(theme.colorScheme.primary, theme.brightness);
     final playerSecondary = themeProvider.playerSecondary(theme.colorScheme.secondary, theme.brightness);
+    final gradientPalette = themeProvider.playerGradientColors(theme.colorScheme.primary, theme.colorScheme.secondary);
     final playerTheme = theme.copyWith(
       colorScheme: theme.colorScheme.copyWith(primary: playerAccent, secondary: playerSecondary),
     );
@@ -385,13 +423,12 @@ class StandalonePlayerScreen extends StatelessWidget {
         });
         final gradientColors = standaloneGradientColors(
           theme,
-          playerAccent: playerAccent,
-          playerSecondary: playerSecondary,
+          playerColors: gradientPalette,
           preserveOledSurface: themeProvider.hasArtworkPalette && themeProvider.preserveOledPlayerSurface,
         );
         return PopScope(
           onPopInvokedWithResult: (didPop, _) {
-            if (didPop && playlistTrack) handler.setStandalonePresentation(false);
+            if (didPop && widget.playlistTrack) handler.setStandalonePresentation(false);
           },
           child: StandalonePlayerGestureSurface(
             key: const Key('standalone-player-gesture-surface'),
@@ -434,6 +471,21 @@ class StandalonePlayerScreen extends StatelessWidget {
                         ),
                       ],
                     ),
+                    actions: [
+                      IconButton(
+                        key: const Key('standalone-lyrics-toggle'),
+                        tooltip: _lyricsVisible ? 'Hide lyrics' : 'Show lyrics',
+                        onPressed: () => setState(() => _lyricsVisible = !_lyricsVisible),
+                        icon: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 220),
+                          child: Icon(
+                            _lyricsVisible ? Icons.lyrics_rounded : Icons.lyrics_outlined,
+                            key: ValueKey(_lyricsVisible),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                   ),
                   body: ValueListenableBuilder<PlaybackVisualState>(
                     valueListenable: handler.playbackVisualNotifier,
@@ -442,10 +494,28 @@ class StandalonePlayerScreen extends StatelessWidget {
                         Expanded(
                           child: ValueListenableBuilder<TrackTransitionState>(
                             valueListenable: handler.trackTransitionNotifier,
-                            builder: (context, transition, _) => _AnimatedTrackContent(
-                              item: item,
-                              isPlaying: playback.playing,
-                              direction: transition.direction,
+                            builder: (context, transition, _) => LayoutBuilder(
+                              builder: (context, constraints) {
+                                final artwork = _AnimatedTrackContent(
+                                  item: item,
+                                  isPlaying: playback.playing,
+                                  direction: transition.direction,
+                                );
+                                if (!_lyricsVisible) return artwork;
+                                final lyrics = Padding(
+                                  key: const Key('standalone-lyrics-panel-padding'),
+                                  padding: EdgeInsets.symmetric(vertical: standaloneLyricsVerticalInset(constraints)),
+                                  child: _LyricsPanel(item: item, handler: handler),
+                                );
+                                if (constraints.maxWidth < 960) return lyrics;
+                                return Row(
+                                  children: [
+                                    Expanded(child: artwork),
+                                    SizedBox(width: math.min(500, constraints.maxWidth * 0.43), child: lyrics),
+                                    const SizedBox(width: 22),
+                                  ],
+                                );
+                              },
                             ),
                           ),
                         ),
@@ -550,6 +620,571 @@ class _TrackContent extends StatelessWidget {
       );
     },
   );
+}
+
+class _LyricsPanel extends StatefulWidget {
+  final MediaItem? item;
+  final PlayerHandler handler;
+
+  const _LyricsPanel({required this.item, required this.handler});
+
+  @override
+  State<_LyricsPanel> createState() => _LyricsPanelState();
+}
+
+class _LyricsPanelState extends State<_LyricsPanel> {
+  final _scrollController = ScrollController();
+  LyricsDocument? _document;
+  Object? _error;
+  bool _loading = true;
+  int _generation = 0;
+  int _activeLine = -1;
+  DateTime _manualScrollUntil = DateTime.fromMillisecondsSinceEpoch(0);
+  List<GlobalKey> _lineKeys = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LyricsPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldItem = oldWidget.item;
+    final item = widget.item;
+    final durationBecameAvailable = (oldItem?.duration?.inSeconds ?? 0) <= 0 && (item?.duration?.inSeconds ?? 0) > 0;
+    if (oldItem?.id != item?.id ||
+        oldItem?.title != item?.title ||
+        oldItem?.artist != item?.artist ||
+        oldItem?.album != item?.album ||
+        durationBecameAvailable) {
+      _load();
+    }
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load({bool forceRefresh = false}) async {
+    final generation = ++_generation;
+    final item = widget.item;
+    setState(() {
+      _loading = true;
+      _document = null;
+      _error = null;
+      _activeLine = -1;
+      _lineKeys = const [];
+    });
+    if (item == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    try {
+      final document = await const LyricsService().fetch(
+        trackId: item.id,
+        title: item.title,
+        artist: item.artist ?? '',
+        album: item.album ?? '',
+        duration: item.duration,
+        forceRefresh: forceRefresh,
+      );
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _document = document;
+        _lineKeys = List.generate(document?.lines.length ?? 0, (_) => GlobalKey());
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _error = error;
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _chooseLyrics() async {
+    final item = widget.item;
+    if (item == null) return;
+    final picker = _LyricsPicker(
+      initialQuery: [
+        item.artist,
+        item.title,
+      ].whereType<String>().map((part) => part.trim()).where((part) => part.isNotEmpty).join(' '),
+      targetDuration: item.duration,
+    );
+    final candidate = Platform.isWindows
+        ? await showDialog<LrclibCandidate>(
+            context: context,
+            builder: (context) => Dialog(
+              clipBehavior: Clip.antiAlias,
+              child: SizedBox(
+                width: 640,
+                height: math.min(MediaQuery.sizeOf(context).height * 0.78, 720),
+                child: picker,
+              ),
+            ),
+          )
+        : await showModalBottomSheet<LrclibCandidate>(
+            context: context,
+            isScrollControlled: true,
+            useSafeArea: true,
+            showDragHandle: true,
+            builder: (context) => SizedBox(height: MediaQuery.sizeOf(context).height * 0.82, child: picker),
+          );
+    if (candidate == null || !mounted) return;
+
+    final previous = _document;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final document = await const LyricsService().selectLrclibCandidate(
+        trackId: item.id,
+        title: item.title,
+        artist: item.artist ?? '',
+        album: item.album ?? '',
+        duration: item.duration,
+        candidate: candidate,
+      );
+      if (!mounted) return;
+      if (document == null) throw StateError('The selected lyrics could not be loaded.');
+      setState(() {
+        _document = document;
+        _lineKeys = List.generate(document.lines.length, (_) => GlobalKey());
+        _activeLine = -1;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _document = previous;
+        _loading = false;
+        _error = previous == null ? error : null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not use those lyrics: $error')));
+    }
+  }
+
+  int _lineAt(LyricsDocument document, Duration position) {
+    if (document.timingQuality == LyricTimingQuality.plain) return -1;
+    var active = -1;
+    for (var index = 0; index < document.lines.length; index++) {
+      final start = document.lines[index].start;
+      if (start == null || start > position) break;
+      active = index;
+    }
+    return active;
+  }
+
+  void _follow(int index) {
+    if (index < 0 || index == _activeLine) return;
+    _activeLine = index;
+    if (DateTime.now().isBefore(_manualScrollUntil)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || index >= _lineKeys.length) return;
+      final context = _lineKeys[index].currentContext;
+      if (context != null) {
+        Scrollable.ensureVisible(
+          context,
+          duration: const Duration(milliseconds: 480),
+          curve: Curves.easeOutCubic,
+          alignment: 0.38,
+        );
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (_loading) {
+      return const _LyricsMessage(icon: Icons.graphic_eq_rounded, title: 'Finding lyrics…', loading: true);
+    }
+    final document = _document;
+    if (_error != null || document == null) {
+      return _LyricsMessage(
+        icon: Icons.lyrics_outlined,
+        title: 'Lyrics unavailable',
+        subtitle: 'No local or online lyrics were found.',
+        action: () => _load(forceRefresh: true),
+        secondaryAction: _chooseLyrics,
+        secondaryActionLabel: 'Choose lyrics',
+      );
+    }
+    if (document.instrumental) {
+      return _LyricsMessage(
+        icon: Icons.music_note_rounded,
+        title: 'Instrumental',
+        subtitle: 'This track does not have vocals.',
+        secondaryAction: _chooseLyrics,
+        secondaryActionLabel: 'Choose lyrics',
+      );
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface.withValues(alpha: 0.34),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 20, 8),
+            child: Row(
+              children: [
+                Text(
+                  'LYRICS',
+                  style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w900, letterSpacing: 1.5),
+                ),
+                const Spacer(),
+                Text(
+                  document.source,
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  key: const Key('change-lyrics-button'),
+                  tooltip: 'Choose different lyrics',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _chooseLyrics,
+                  icon: const Icon(Icons.swap_horiz_rounded, size: 20),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: StreamBuilder<Duration>(
+              stream: widget.handler.positionStream,
+              initialData: Duration.zero,
+              builder: (context, snapshot) {
+                final position = snapshot.data ?? Duration.zero;
+                final active = _lineAt(document, position);
+                _follow(active);
+                return NotificationListener<UserScrollNotification>(
+                  onNotification: (notification) {
+                    if (notification.direction != ScrollDirection.idle) {
+                      _manualScrollUntil = DateTime.now().add(const Duration(seconds: 4));
+                    }
+                    return false;
+                  },
+                  child: ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.fromLTRB(24, 28, 24, 120),
+                    itemCount: document.lines.length,
+                    itemBuilder: (context, index) {
+                      final line = document.lines[index];
+                      final isActive = index == active;
+                      final isPast = active >= 0 && index < active;
+                      return InkWell(
+                        key: _lineKeys[index],
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: line.start == null ? null : () => widget.handler.seek(line.start!),
+                        child: AnimatedPadding(
+                          duration: const Duration(milliseconds: 220),
+                          padding: EdgeInsets.symmetric(vertical: isActive ? 13 : 10, horizontal: 4),
+                          child: _LyricLineText(line: line, position: position, active: isActive, past: isPast),
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 18),
+            child: Text(
+              document.timingQuality == LyricTimingQuality.word
+                  ? 'Word-synced'
+                  : document.timingQuality == LyricTimingQuality.line
+                  ? 'Line-synced · word flow estimated'
+                  : 'Unsynced lyrics',
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LyricLineText extends StatelessWidget {
+  final LyricLine line;
+  final Duration position;
+  final bool active;
+  final bool past;
+
+  const _LyricLineText({required this.line, required this.position, required this.active, required this.past});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final base = theme.textTheme.headlineSmall?.copyWith(
+      height: 1.16,
+      fontWeight: active ? FontWeight.w900 : FontWeight.w700,
+      letterSpacing: -0.5,
+      color: active ? theme.colorScheme.onSurface : theme.colorScheme.onSurface.withValues(alpha: past ? 0.48 : 0.30),
+    );
+    if (!active || line.words.isEmpty) return Text(line.text.isEmpty ? '♪' : line.text, style: base);
+    return Text.rich(
+      TextSpan(
+        children: [
+          for (final word in line.words)
+            TextSpan(
+              text: word.text,
+              style: base?.copyWith(
+                color: position >= word.start
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurface.withValues(alpha: 0.42),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LyricsMessage extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final bool loading;
+  final VoidCallback? action;
+  final VoidCallback? secondaryAction;
+  final String? secondaryActionLabel;
+
+  const _LyricsMessage({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.loading = false,
+    this.action,
+    this.secondaryAction,
+    this.secondaryActionLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (loading)
+            const SizedBox.square(dimension: 42, child: CircularProgressIndicator())
+          else
+            Icon(icon, size: 48, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(height: 16),
+          Text(title, textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleLarge),
+          if (subtitle != null) ...[
+            const SizedBox(height: 8),
+            Text(subtitle!, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
+          ],
+          if (action != null || secondaryAction != null) ...[
+            const SizedBox(height: 16),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                if (action != null)
+                  TextButton.icon(
+                    onPressed: action,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Try again'),
+                  ),
+                if (secondaryAction != null)
+                  FilledButton.tonalIcon(
+                    key: const Key('choose-lyrics-button'),
+                    onPressed: secondaryAction,
+                    icon: const Icon(Icons.search_rounded),
+                    label: Text(secondaryActionLabel ?? 'Choose lyrics'),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+}
+
+class _LyricsPicker extends StatefulWidget {
+  final String initialQuery;
+  final Duration? targetDuration;
+
+  const _LyricsPicker({required this.initialQuery, required this.targetDuration});
+
+  @override
+  State<_LyricsPicker> createState() => _LyricsPickerState();
+}
+
+class _LyricsPickerState extends State<_LyricsPicker> {
+  late final TextEditingController _queryController;
+  List<LrclibCandidate> _results = const [];
+  bool _loading = true;
+  bool _searched = false;
+  int _generation = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _queryController = TextEditingController(text: widget.initialQuery);
+    _search();
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _queryController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search() async {
+    final query = _queryController.text.trim();
+    if (query.isEmpty) return;
+    final generation = ++_generation;
+    setState(() {
+      _loading = true;
+      _searched = true;
+    });
+    final results = await const LyricsService().searchLrclibCandidates(query);
+    if (!mounted || generation != _generation) return;
+    setState(() {
+      _results = results;
+      _loading = false;
+    });
+  }
+
+  String _duration(Duration duration) {
+    final minutes = duration.inMinutes;
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  String? _difference(LrclibCandidate candidate) {
+    final target = widget.targetDuration;
+    if (target == null || target.inSeconds <= 0 || candidate.duration.inSeconds <= 0) return null;
+    final difference = candidate.duration.inSeconds - target.inSeconds;
+    if (difference == 0) return 'exact duration';
+    return '${difference > 0 ? '+' : ''}${difference}s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 12, 12),
+            child: Row(
+              children: [
+                Expanded(child: Text('Choose lyrics', style: theme.textTheme.titleLarge)),
+                IconButton(tooltip: 'Close', onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: TextField(
+              key: const Key('lyrics-search-field'),
+              controller: _queryController,
+              autofocus: Platform.isWindows,
+              textInputAction: TextInputAction.search,
+              onSubmitted: (_) => _search(),
+              decoration: InputDecoration(
+                hintText: 'Artist and song title',
+                prefixIcon: const Icon(Icons.search_rounded),
+                suffixIcon: IconButton(tooltip: 'Search', onPressed: _search, icon: const Icon(Icons.arrow_forward)),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
+            child: Text(
+              'Automatic matching only accepts results within 3 seconds. You can deliberately choose any version here.',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _results.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        _searched ? 'No LRCLIB results for this search.' : 'Search LRCLIB to choose a result.',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+                    itemCount: _results.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final candidate = _results[index];
+                      final difference = _difference(candidate);
+                      final details = [
+                        candidate.artistName,
+                        if (candidate.albumName.isNotEmpty) candidate.albumName,
+                      ].where((part) => part.isNotEmpty).join(' · ');
+                      return ListTile(
+                        key: ValueKey('lrclib-candidate-${candidate.id}'),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        title: Text(candidate.trackName, maxLines: 2, overflow: TextOverflow.ellipsis),
+                        subtitle: Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(details, maxLines: 2, overflow: TextOverflow.ellipsis),
+                        ),
+                        trailing: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 116),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(_duration(candidate.duration), style: theme.textTheme.labelLarge),
+                              Text(
+                                candidate.instrumental
+                                    ? 'Instrumental'
+                                    : candidate.hasSyncedLyrics
+                                    ? 'Synced'
+                                    : 'Plain',
+                                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary),
+                              ),
+                              if (difference != null)
+                                Text(
+                                  difference,
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: difference == 'exact duration'
+                                        ? theme.colorScheme.primary
+                                        : theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        onTap: () => Navigator.pop(context, candidate),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ArtworkBox extends StatelessWidget {
@@ -701,45 +1336,49 @@ class _StandaloneArtworkVinylRevealState extends State<StandaloneArtworkVinylRev
                 final progress = _revealAnimation.value;
                 final clampedProgress = progress.clamp(0.0, 1.0);
                 final discSize = coverSize * 0.92;
-                return Stack(
-                  clipBehavior: Clip.none,
-                  alignment: Alignment.center,
-                  children: [
-                    Transform.translate(
-                      key: standaloneVinylRevealTransformKey,
-                      offset: Offset(
-                        coverSize * 0.30 * progress,
-                        -coverSize * 0.025 * math.sin(clampedProgress * math.pi),
-                      ),
-                      child: Transform.rotate(
-                        angle: -0.08 + clampedProgress * 0.12,
-                        child: Transform.scale(
-                          scale: 0.97 + clampedProgress * 0.03,
-                          child: ResonanceVinylDisc(
-                            key: standaloneVinylKey,
-                            size: discSize,
-                            spinning: widget.isPlaying && (_vinylRequested || _revealController.value > 0),
-                            accent: accent,
-                            amplitudeProvider: widget.amplitudeProvider,
+                return Transform.translate(
+                  key: standaloneVinylCompositionTransformKey,
+                  offset: Offset(-standaloneVinylCompositionShift(coverSize, clampedProgress), 0),
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    alignment: Alignment.center,
+                    children: [
+                      Transform.translate(
+                        key: standaloneVinylRevealTransformKey,
+                        offset: Offset(
+                          coverSize * 0.30 * progress,
+                          -coverSize * 0.025 * math.sin(clampedProgress * math.pi),
+                        ),
+                        child: Transform.rotate(
+                          angle: -0.08 + clampedProgress * 0.12,
+                          child: Transform.scale(
+                            scale: 0.97 + clampedProgress * 0.03,
+                            child: ResonanceVinylDisc(
+                              key: standaloneVinylKey,
+                              size: discSize,
+                              spinning: widget.isPlaying && (_vinylRequested || _revealController.value > 0),
+                              accent: accent,
+                              amplitudeProvider: widget.amplitudeProvider,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    SizedBox.square(
-                      key: standaloneArtworkCoverKey,
-                      dimension: coverSize,
-                      child: PlaybackPulse(
-                        active: widget.isPlaying,
-                        borderRadius: 28,
-                        reach: 22,
-                        amplitudeProvider: widget.amplitudeProvider,
-                        child: Hero(
-                          tag: nowPlayingArtworkHeroTag,
-                          child: _LargeArtwork(item: widget.item),
+                      SizedBox.square(
+                        key: standaloneArtworkCoverKey,
+                        dimension: coverSize,
+                        child: PlaybackPulse(
+                          active: widget.isPlaying,
+                          borderRadius: 28,
+                          reach: 22,
+                          amplitudeProvider: widget.amplitudeProvider,
+                          child: Hero(
+                            tag: nowPlayingArtworkHeroTag,
+                            child: _LargeArtwork(item: widget.item),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 );
               },
             );

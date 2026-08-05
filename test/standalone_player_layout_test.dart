@@ -17,6 +17,15 @@ void main() {
     expect(standaloneArtworkSize(constraints), 420);
   });
 
+  test('lyrics panel keeps a small balanced vertical inset', () {
+    expect(
+      standaloneLyricsVerticalInset(const BoxConstraints(maxWidth: 360, maxHeight: 320)),
+      closeTo(11.2, 0.001),
+    );
+    expect(standaloneLyricsVerticalInset(const BoxConstraints(maxWidth: 900, maxHeight: 100)), 10);
+    expect(standaloneLyricsVerticalInset(const BoxConstraints(maxWidth: 1600, maxHeight: 1200)), 24);
+  });
+
   test('standalone gradient blends the selected accent into the dark base', () {
     final theme = ThemeData.dark().copyWith(
       scaffoldBackgroundColor: const Color(0xFF101014),
@@ -50,6 +59,31 @@ void main() {
 
     expect(colors.first, isNot(colors[1]));
     expect(colors.last, theme.scaffoldBackgroundColor);
+  });
+
+  test('standalone gradient combines three cover colors', () {
+    final theme = ThemeData.dark().copyWith(scaffoldBackgroundColor: const Color(0xFF101014));
+    final colors = standaloneGradientColors(
+      theme,
+      playerColors: const [Color(0xFFE24A62), Color(0xFF3478D4), Color(0xFFF2C14E)],
+    );
+
+    expect(colors, hasLength(4));
+    expect(colors.toSet(), hasLength(4));
+  });
+
+  test('black and white cover colors use normal strength in either theme', () {
+    final darkTheme = ThemeData.dark().copyWith(scaffoldBackgroundColor: const Color(0xFF101014));
+    final lightTheme = ThemeData.light().copyWith(scaffoldBackgroundColor: const Color(0xFFF6F5F2));
+
+    expect(
+      standaloneGradientColors(darkTheme, playerColors: const [Colors.white]).first,
+      Color.alphaBlend(Colors.white.withValues(alpha: 0.64), darkTheme.scaffoldBackgroundColor),
+    );
+    expect(
+      standaloneGradientColors(lightTheme, playerColors: const [Colors.black]).first,
+      Color.alphaBlend(Colors.black.withValues(alpha: 0.42), lightTheme.scaffoldBackgroundColor),
+    );
   });
 
   test('OLED preservation keeps the standalone surface true black', () {

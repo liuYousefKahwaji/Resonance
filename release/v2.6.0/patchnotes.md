@@ -1,27 +1,18 @@
-# Android playback widgets, vinyl player polish, and companion reliability
+(fixes issues #47, #48, and (maybe?) #49)
 
-(solves #47, #48, and #49)
+## Android Widget (#47):
+- added a Resonance Android Widget
+- play, pause, next, previous, loop, shuffle
+- size of the widget changes available buttons
+- theme-friendly with Resonance and updates state semi-instantly
 
-## Android playback widget: (#47)
+## Moved (Copied technically) Playback Scope to Playback Settings:
+- now you can change playback scope from the playback settings directly in the controls
+- the same functionality is still in settings as well, just copied to the player controls
 
-- added compact, standard, and expanded home-screen playback widgets with theme-aware artwork and controls
-- widget controls now dispatch playback, previous/next, loop, and shuffle actions
-- widget snapshots refresh immediately on playback and theme changes with a three-second safety sync
-- corrected widget loading on Android launchers and placed repeat before shuffle in the expanded layout
+## Discord Global Hotkeys (#49):
+- technically not fixed, but should be more responsive now
 
-## Player presentation: (#48)
-
-- moved playback settings into the updated player and settings flow
-- clicking the standalone player album cover flips it into a larger spinning-vinyl easter egg
-- preserved artwork colors, motion, and existing player controls
-
-## Discord companion hotkeys: (#49)
-
-- companion mute and deafen shortcuts now target Discord's real client window when Discord is in the background
-- background delivery keeps the user's active app focused and reports failure when Discord cannot accept the shortcut
-- shortcut recording, testing, saved custom bindings, and default restoration remain available
-
-## Compatibility and reliability:
-
-- existing companion pairings, playlists, widget state, and saved shortcuts continue to work
-- Android release includes the corrected RemoteViews widget layouts
+## Small UI Bonus Addition:
+- in the standalone player, clicking on the album cover causes it to flip to the vinyl.
+- theme friendly, includes same effects as the small one, but larger

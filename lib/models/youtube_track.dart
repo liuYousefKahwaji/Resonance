@@ -4,6 +4,8 @@ class YoutubeTrack {
   final String url;
   final int? durationSeconds;
   final String? thumbnailUrl;
+  final int? viewCount;
+  final int? likeCount;
   final bool isLive;
   final bool isShort;
   final String? availability;
@@ -17,6 +19,8 @@ class YoutubeTrack {
     required this.url,
     this.durationSeconds,
     this.thumbnailUrl,
+    this.viewCount,
+    this.likeCount,
     this.isLive = false,
     this.isShort = false,
     this.availability,
@@ -41,6 +45,8 @@ class YoutubeTrack {
     'url': url,
     if (durationSeconds != null) 'durationSeconds': durationSeconds,
     if (thumbnailUrl != null) 'thumbnailUrl': thumbnailUrl,
+    if (viewCount != null) 'viewCount': viewCount,
+    if (likeCount != null) 'likeCount': likeCount,
     'isLive': isLive,
     'isShort': isShort,
     if (availability != null) 'availability': availability,
@@ -52,6 +58,8 @@ class YoutubeTrack {
     url: json['url']?.toString() ?? '',
     durationSeconds: json['durationSeconds'] is num ? (json['durationSeconds'] as num).toInt() : null,
     thumbnailUrl: json['thumbnailUrl']?.toString(),
+    viewCount: _readCount(json['viewCount']),
+    likeCount: _readCount(json['likeCount']),
     isLive: json['isLive'] == true,
     isShort: json['isShort'] == true,
     availability: json['availability']?.toString(),
@@ -69,6 +77,23 @@ class YoutubeTrack {
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
+  String get formattedViewCount => _compactCount(viewCount);
+
+  String get formattedLikeCount => _compactCount(likeCount);
+
+  YoutubeTrack copyWith({int? viewCount, int? likeCount}) => YoutubeTrack(
+    title: title,
+    artist: artist,
+    url: url,
+    durationSeconds: durationSeconds,
+    thumbnailUrl: thumbnailUrl,
+    viewCount: viewCount ?? this.viewCount,
+    likeCount: likeCount ?? this.likeCount,
+    isLive: isLive,
+    isShort: isShort,
+    availability: availability,
+  );
+
   factory YoutubeTrack.fromJson(Map<String, dynamic> json) {
     final thumbnails = json['thumbnails'];
     String? thumbnail = json['thumbnail']?.toString();
@@ -84,6 +109,8 @@ class YoutubeTrack {
       url: _canonicalYoutubeUrl(rawUrl, json['id']?.toString()),
       durationSeconds: rawDuration is num ? rawDuration.toInt() : int.tryParse(rawDuration?.toString() ?? ''),
       thumbnailUrl: thumbnail?.trim().isNotEmpty == true ? thumbnail : null,
+      viewCount: _readCount(json['view_count']),
+      likeCount: _readCount(json['like_count']),
       isLive: json['is_live'] == true || json['live_status'] == 'is_live' || json['live_status'] == 'was_live',
       isShort:
           json['is_short'] == true ||
@@ -99,6 +126,26 @@ class YoutubeTrack {
       if (text.isNotEmpty) return text;
     }
     return null;
+  }
+
+  static int? _readCount(dynamic value) => value is num ? value.toInt() : int.tryParse(value?.toString() ?? '');
+
+  static String _compactCount(int? value) {
+    if (value == null) return '—';
+    if (value < 1000) return '$value';
+    const suffixes = ['K', 'M', 'B', 'T'];
+    var amount = value.toDouble();
+    var suffix = -1;
+    while (amount >= 1000 && suffix < suffixes.length - 1) {
+      amount /= 1000;
+      suffix++;
+    }
+    final digits = amount >= 100
+        ? 0
+        : amount >= 10
+        ? 1
+        : 2;
+    return '${amount.toStringAsFixed(digits).replaceFirst(RegExp(r'\.0+$'), '')}${suffixes[suffix]}';
   }
 
   static String _canonicalYoutubeUrl(String value, String? id) {

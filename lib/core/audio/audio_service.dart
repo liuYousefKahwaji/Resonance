@@ -643,11 +643,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       await _markPlaybackUnavailable(generation);
       return;
     }
-    final playlist = playlistNumber != null
-        ? await _getCleanPlaylist(playlistNumber: playlistNumber)
-        : isShuffle
-        ? shuffledList
-        : await _getCleanPlaylist();
+    final playlist = await _effectivePlaybackOrder(playlistNumber: playlistNumber);
     if (_loadGeneration != generation) return;
     final currentIndex = _currentPlaylistIndex(playlist, failedItem.id);
     final nextIndex = nextPlayablePlaylistIndex(
@@ -1323,11 +1319,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (currentItem == null) return null;
     final playlistNumber = _standalonePlaylistNumber;
     if (isStandaloneMode && playlistNumber == null) return null;
-    final playlist = playlistNumber != null
-        ? await _getCleanPlaylist(playlistNumber: playlistNumber)
-        : isShuffle
-        ? shuffledList
-        : await _getCleanPlaylist();
+    final playlist = await _effectivePlaybackOrder(playlistNumber: playlistNumber);
     if (playlist.length < 2) return null;
     final currentIndex = _currentPlaylistIndex(playlist, currentItem.id);
     if (currentIndex < 0) return null;
@@ -2420,11 +2412,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (currentItem == null) return;
     final standalonePlaylistNumber = _standalonePlaylistNumber;
     if (isStandaloneMode && standalonePlaylistNumber == null) return;
-    final playlist = standalonePlaylistNumber != null
-        ? await _getCleanPlaylist(playlistNumber: standalonePlaylistNumber)
-        : isShuffle
-        ? shuffledList
-        : await _getCleanPlaylist();
+    final playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber);
     if (playlist.isEmpty) return;
     final index = _currentPlaylistIndex(playlist, currentItem.id);
     if (index == -1) return;
@@ -2449,11 +2437,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (currentItem == null) return;
     final standalonePlaylistNumber = _standalonePlaylistNumber;
     if (isStandaloneMode && standalonePlaylistNumber == null) return;
-    final playlist = standalonePlaylistNumber != null
-        ? await _getCleanPlaylist(playlistNumber: standalonePlaylistNumber)
-        : isShuffle
-        ? shuffledList
-        : await _getCleanPlaylist();
+    final playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber);
     if (playlist.isEmpty) return;
     final index = _currentPlaylistIndex(playlist, currentItem.id);
     if (index == -1) return;
@@ -2590,6 +2574,32 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     shuffledList = List.from(clean)..shuffle();
   }
 
+  Future<List<String>> _effectivePlaybackOrder({int? playlistNumber}) async {
+    final clean = await _getCleanPlaylist(playlistNumber: playlistNumber);
+    if (!isShuffle) return clean;
+    if (!_containsSameTracks(shuffledList, clean)) {
+      shuffledList = List<String>.from(clean)..shuffle();
+    }
+    return List<String>.from(shuffledList);
+  }
+
+  bool _containsSameTracks(List<String> first, List<String> second) {
+    if (first.length != second.length) return false;
+    final matched = List<bool>.filled(second.length, false);
+    for (final track in first) {
+      var found = false;
+      for (var index = 0; index < second.length; index++) {
+        if (!matched[index] && _sameTrackId(track, second[index])) {
+          matched[index] = true;
+          found = true;
+          break;
+        }
+      }
+      if (!found) return false;
+    }
+    return true;
+  }
+
   /// Removes a playlist entry from the session's already-generated shuffle
   /// order without reshuffling the remaining tracks.
   void removeTrackFromActivePlaybackOrder(String filePath, {bool allOccurrences = false}) {
@@ -2626,11 +2636,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final playlistNumber = _standalonePlaylistNumber;
     final paths = isStandaloneMode && playlistNumber == null
         ? const <String>[]
-        : playlistNumber != null
-        ? await _getCleanPlaylist(playlistNumber: playlistNumber)
-        : isShuffle
-        ? List<String>.from(shuffledList)
-        : await _getCleanPlaylist();
+        : await _effectivePlaybackOrder(playlistNumber: playlistNumber);
     final currentIndex = _currentPlaylistIndex(paths, current.id);
     final upcomingPaths = switch (loopBehavior) {
       QueueLoopBehavior.one => const <String>[],

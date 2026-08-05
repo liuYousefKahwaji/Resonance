@@ -4,6 +4,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/core/youtube/windows_process_output.dart';
 
 void main() {
+  test('parses live stdout, stderr, and fragment progress formats', () {
+    expect(parseWindowsYtDlpProgress('resonance_progress: 42.5%'), 42.5);
+    expect(parseWindowsYtDlpProgress('[download]  17.3% of 4.2MiB'), 17.3);
+    expect(parseWindowsYtDlpProgress('[download] Destination (frag 3/8)'), 37.5);
+  });
+
   test('UTF-8 Windows downloader output preserves Unicode paths exactly', () {
     const output = r'C:\Music\øneheart — São Paulo 東京 🎧.mp3|jNQXAC9IVRw';
 

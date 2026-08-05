@@ -3,9 +3,6 @@
 
 #include <flutter/standard_method_codec.h>
 
-#include <algorithm>
-#include <cstring>
-#include <cwchar>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -124,63 +121,6 @@ bool IsExtendedKey(WORD key) {
   }
 }
 
-bool IsDiscordProcess(HWND hwnd) {
-  DWORD process_id = 0;
-  GetWindowThreadProcessId(hwnd, &process_id);
-  if (process_id == 0) return false;
-
-  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
-  if (process == nullptr) return false;
-  wchar_t path[MAX_PATH] = {};
-  DWORD path_length = _countof(path);
-  const bool queried = QueryFullProcessImageNameW(process, 0, path, &path_length) != FALSE;
-  CloseHandle(process);
-  if (!queried) return false;
-
-  const wchar_t* filename = std::wcsrchr(path, L'\\');
-  filename = filename == nullptr ? path : filename + 1;
-  return _wcsicmp(filename, L"Discord.exe") == 0 ||
-         _wcsicmp(filename, L"DiscordCanary.exe") == 0 ||
-         _wcsicmp(filename, L"DiscordPTB.exe") == 0 ||
-         _wcsicmp(filename, L"DiscordDevelopment.exe") == 0;
-}
-
-struct DiscordWindowSearch {
-  HWND hwnd = nullptr;
-  int score = -1;
-};
-
-BOOL CALLBACK FindDiscordWindowCallback(HWND hwnd, LPARAM parameter) {
-  if (!IsDiscordProcess(hwnd)) return TRUE;
-
-  wchar_t class_name[128] = {};
-  GetClassNameW(hwnd, class_name, _countof(class_name));
-  if (std::wcscmp(class_name, L"Chrome_WidgetWin_1") != 0) return TRUE;
-
-  wchar_t title[512] = {};
-  GetWindowTextW(hwnd, title, _countof(title));
-  if (std::wcsstr(title, L"Overlay") != nullptr) return TRUE;
-
-  int score = 0;
-  if (title[0] != L'\0') score += 8;
-  if (IsWindowVisible(hwnd)) score += 4;
-  if (GetWindow(hwnd, GW_OWNER) == nullptr) score += 2;
-  if (IsIconic(hwnd)) score += 1;
-
-  auto* search = reinterpret_cast<DiscordWindowSearch*>(parameter);
-  if (score > search->score) {
-    search->hwnd = hwnd;
-    search->score = score;
-  }
-  return TRUE;
-}
-
-HWND FindDiscordMainWindow() {
-  DiscordWindowSearch search;
-  EnumWindows(FindDiscordWindowCallback, reinterpret_cast<LPARAM>(&search));
-  return search.hwnd;
-}
-
 INPUT KeyboardInput(WORD key, bool key_up, bool force_extended = false) {
   INPUT input{};
   input.type = INPUT_KEYBOARD;
@@ -199,92 +139,6 @@ INPUT KeyboardInput(WORD key, bool key_up, bool force_extended = false) {
                        ((force_extended || IsExtendedKey(key)) ? KEYEVENTF_EXTENDEDKEY : 0);
   }
   return input;
-}
-
-LPARAM KeyMessageData(
-    WORD key,
-    bool key_up,
-    bool force_extended = false,
-    bool system_message = false) {
-  const UINT scan_code = MapVirtualKeyW(key, MAPVK_VK_TO_VSC_EX);
-  LPARAM data = 1 | (static_cast<LPARAM>(scan_code & 0xFF) << 16);
-  if ((scan_code & 0xFF00) != 0 || force_extended || IsExtendedKey(key)) {
-    data |= static_cast<LPARAM>(1) << 24;
-  }
-  if (system_message) data |= static_cast<LPARAM>(1) << 29;
-  if (key_up) {
-    data |= (static_cast<LPARAM>(1) << 30) | (static_cast<LPARAM>(1) << 31);
-  }
-  return data;
-}
-
-bool SendKeyMessage(
-    HWND hwnd,
-    WORD key,
-    bool key_up,
-    bool force_extended = false,
-    bool system_message = false) {
-  DWORD_PTR message_result = 0;
-  const bool use_system_message = system_message || key == VK_MENU;
-  const UINT message = use_system_message ? (key_up ? WM_SYSKEYUP : WM_SYSKEYDOWN)
-                                          : (key_up ? WM_KEYUP : WM_KEYDOWN);
-  return SendMessageTimeoutW(
-             hwnd,
-             message,
-             key,
-             KeyMessageData(key, key_up, force_extended, use_system_message),
-             SMTO_ABORTIFHUNG | SMTO_BLOCK,
-             250,
-             &message_result) != 0;
-}
-
-bool SendShortcutToDiscordWindow(
-    HWND hwnd,
-    WORD key,
-    bool key_is_extended,
-    const std::vector<WORD>& modifiers) {
-  const DWORD target_thread = GetWindowThreadProcessId(hwnd, nullptr);
-  const DWORD current_thread = GetCurrentThreadId();
-  const bool attached =
-      target_thread == current_thread ||
-      AttachThreadInput(current_thread, target_thread, TRUE) != FALSE;
-  if (!attached) return false;
-
-  BYTE previous_keyboard_state[256] = {};
-  const bool captured_state = GetKeyboardState(previous_keyboard_state) != FALSE;
-  if (!captured_state) {
-    if (target_thread != current_thread) {
-      AttachThreadInput(current_thread, target_thread, FALSE);
-    }
-    return false;
-  }
-  BYTE shortcut_state[256] = {};
-  std::memcpy(shortcut_state, previous_keyboard_state, sizeof(shortcut_state));
-  for (WORD modifier : modifiers) shortcut_state[modifier] |= 0x80;
-  if (SetKeyboardState(shortcut_state) == FALSE) {
-    if (target_thread != current_thread) {
-      AttachThreadInput(current_thread, target_thread, FALSE);
-    }
-    return false;
-  }
-
-  bool sent = true;
-  for (WORD modifier : modifiers) {
-    sent = SendKeyMessage(hwnd, modifier, false) && sent;
-  }
-  const bool has_alt =
-      std::find(modifiers.begin(), modifiers.end(), VK_MENU) != modifiers.end();
-  sent = SendKeyMessage(hwnd, key, false, key_is_extended, has_alt) && sent;
-  sent = SendKeyMessage(hwnd, key, true, key_is_extended, has_alt) && sent;
-  for (auto it = modifiers.rbegin(); it != modifiers.rend(); ++it) {
-    sent = SendKeyMessage(hwnd, *it, true) && sent;
-  }
-
-  const bool restored_state = SetKeyboardState(previous_keyboard_state) != FALSE;
-  if (target_thread != current_thread) {
-    AttachThreadInput(current_thread, target_thread, FALSE);
-  }
-  return sent && restored_state;
 }
 
 WORD VirtualKeyFromHidUsage(int64_t hid_usage) {
@@ -385,28 +239,10 @@ bool SendShortcut(const flutter::EncodableMap& arguments) {
     }
   }
 
-  const HWND discord_window = FindDiscordMainWindow();
-  if (discord_window == nullptr) return false;
-  const DWORD foreground_process = [] {
-    DWORD process_id = 0;
-    GetWindowThreadProcessId(GetForegroundWindow(), &process_id);
-    return process_id;
-  }();
-  DWORD discord_process = 0;
-  GetWindowThreadProcessId(discord_window, &discord_process);
-
-  if (discord_process != foreground_process) {
-    // Discord's privileged keybind helper ignores injected keyboard packets.
-    // Deliver the complete chord to the real client window without focusing
-    // or restoring it. Attaching the input queues lets Chromium observe the
-    // correct modifier state while it handles the synchronous key messages.
-    return SendShortcutToDiscordWindow(
-        discord_window,
-        key,
-        key_is_extended,
-        modifiers);
-  }
-
+  // SendInput targets the system input stream, so Discord's global keybind
+  // listener receives the chord regardless of which window is visible or has
+  // focus. Posting WM_KEY* messages to a Discord HWND only worked while that
+  // window was active and bypassed the global shortcut listener.
   std::vector<INPUT> inputs;
   inputs.reserve(modifiers.size() * 2 + 2);
   for (WORD modifier : modifiers) inputs.push_back(KeyboardInput(modifier, false));

@@ -13,6 +13,7 @@ import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:resonance/services/import_service.dart';
+import 'package:resonance/services/lyrics_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
@@ -20,6 +21,7 @@ import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/download_history_repository.dart';
 import 'package:resonance/core/youtube/windows_process_output.dart';
+import 'package:resonance/services/youtube_stats_service.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -27,12 +29,30 @@ bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacO
 
 class MediaDownloader {
   static const _audioExtensions = {'mp3', 'wav', 'm4a', 'ogg', 'opus', 'webm', 'aac', 'flac'};
+  static const _searchCacheTtl = Duration(minutes: 5);
+  static Future<void>? _binaryInitialization;
+  static final Map<String, ({DateTime storedAt, List<YoutubeTrack> tracks})> _searchCache = {};
+  static final Map<String, Future<List<YoutubeTrack>>> _searchesInFlight = {};
+  static final Set<Process> _backgroundSearchProcesses = {};
 
   Future<String> get binDirPath async {
     return p.join(p.dirname(Platform.resolvedExecutable), 'bin');
   }
 
   Future<void> initBinaries() async {
+    final existing = _binaryInitialization;
+    if (existing != null) return existing;
+    final initialization = _verifyBinaries();
+    _binaryInitialization = initialization;
+    try {
+      await initialization;
+    } catch (_) {
+      if (identical(_binaryInitialization, initialization)) _binaryInitialization = null;
+      rethrow;
+    }
+  }
+
+  Future<void> _verifyBinaries() async {
     final binDir = Directory(await binDirPath);
 
     for (final exe in ['yt-dlp.exe', 'ffmpeg.exe', 'deno.exe']) {
@@ -43,8 +63,37 @@ class MediaDownloader {
     }
   }
 
-  Future<List<YoutubeTrack>> search(String query, {int limit = 10}) async {
+  void cancelBackgroundSearches() {
+    for (final process in _backgroundSearchProcesses.toList(growable: false)) {
+      process.kill();
+    }
+  }
+
+  Future<List<YoutubeTrack>> search(String query, {int limit = 10, bool background = false}) async {
     final resultLimit = limit.clamp(1, 10);
+    final normalizedQuery = query.trim().toLowerCase();
+    final cached = _searchCache[normalizedQuery];
+    if (cached != null && DateTime.now().difference(cached.storedAt) < _searchCacheTtl) {
+      return cached.tracks.take(resultLimit).toList(growable: false);
+    }
+    final inFlight = _searchesInFlight[normalizedQuery];
+    if (inFlight != null) {
+      return (await inFlight).take(resultLimit).toList(growable: false);
+    }
+    final search = _runSearch(query.trim(), background: background);
+    _searchesInFlight[normalizedQuery] = search;
+    try {
+      final tracks = await search;
+      _searchCache[normalizedQuery] = (storedAt: DateTime.now(), tracks: tracks);
+      return tracks.take(resultLimit).toList(growable: false);
+    } finally {
+      if (identical(_searchesInFlight[normalizedQuery], search)) {
+        _searchesInFlight.remove(normalizedQuery);
+      }
+    }
+  }
+
+  Future<List<YoutubeTrack>> _runSearch(String query, {required bool background}) async {
     final binDir = await binDirPath;
 
     final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
@@ -67,11 +116,15 @@ class MediaDownloader {
 
         '--no-download',
 
-        'ytsearch$resultLimit:$query',
+        // Always fill the small cache with the complete result page. This
+        // lets a two-item type-ahead preview and the subsequent Enter key
+        // share one native process instead of paying Windows startup twice.
+        'ytsearch10:$query',
       ],
       environment: windowsYtDlpUtf8Environment,
       includeParentEnvironment: true,
     );
+    if (background) _backgroundSearchProcesses.add(process);
 
     // Drain stderr to prevent pipe deadlock
 
@@ -84,6 +137,7 @@ class MediaDownloader {
     final lines = const LineSplitter().convert(stdout);
 
     await process.exitCode;
+    _backgroundSearchProcesses.remove(process);
 
     await stderrDone;
 
@@ -132,19 +186,24 @@ class MediaDownloader {
     return YoutubeTrack.fromJson(jsonDecode(stdout) as Map<String, dynamic>);
   }
 
+  /// Search already supplies views. Fill omitted engagement fields through a
+  /// small cached HTTP lookup instead of launching a second yt-dlp process for
+  /// every result page on Windows.
+  Future<List<YoutubeTrack>> hydrateStats(List<YoutubeTrack> tracks) => const YoutubeStatsService().hydrateAll(tracks);
+
   /// Downloads audio for [url], reporting progress via callbacks.
 
   ///
 
   /// BUG FIX 1 — Progress stuck at 0%:
 
-  ///   yt-dlp writes [download] XX.X% progress lines to STDERR, not stdout.
+  ///   A custom yt-dlp progress template can be emitted on stdout, while the
 
-  ///   Previously stderr was drained silently so onProgress never fired.
+  ///   regular download log is emitted on stderr. Both streams must therefore
 
-  ///   Now stderr is read concurrently via a listen() for progress callbacks,
+  ///   be consumed line-by-line while the process is running. Buffering stdout
 
-  ///   while stdout is read for --print filepath output.
+  ///   until EOF makes the Windows UI jump directly from 0% to 100%.
 
   ///
 
@@ -269,9 +328,6 @@ class MediaDownloader {
           includeParentEnvironment: true,
         );
 
-        final progressRegex = RegExp(r'\[download\]\s+(\d+(?:\.\d+)?)%');
-        final templateProgressRegex = RegExp(r'resonance_progress:\s*(\d+(?:\.\d+)?)%');
-        final fragRegex = RegExp(r'\(frag\s+(\d+)/(\d+)\)');
         final playlistItemRegex = RegExp(r'\[download\]\s+Downloading item\s+(\d+)\s+of\s+(\d+)');
         final alreadyDownloadedRegex = RegExp(r'\[download\]\s+(.+?)\s+has already been downloaded');
 
@@ -285,9 +341,9 @@ class MediaDownloader {
           if (trimmed.isEmpty) return;
           outputLines.add(trimmed);
 
-          final templateMatch = templateProgressRegex.firstMatch(trimmed);
-          if (templateMatch != null) {
-            final percent = double.tryParse(templateMatch.group(1) ?? '0') ?? 0.0;
+          final parsedProgress = parseWindowsYtDlpProgress(trimmed);
+          if (trimmed.contains('resonance_progress:') && parsedProgress != null) {
+            final percent = parsedProgress;
             final prefix = totalItems > 1 ? '($currentItem/$totalItems) ' : '';
             onProgress(percent.clamp(0.0, 100.0), '${prefix}Downloading... ${percent.toStringAsFixed(1)}%');
             return;
@@ -300,21 +356,8 @@ class MediaDownloader {
             return;
           }
 
-          if (trimmed.contains('[download]') && trimmed.contains('%')) {
-            double? percent;
-            final fragMatch = fragRegex.firstMatch(trimmed);
-            if (fragMatch != null) {
-              final fragIdx = int.tryParse(fragMatch.group(1) ?? '0') ?? 0;
-              final fragTotal = int.tryParse(fragMatch.group(2) ?? '0') ?? 0;
-              if (fragTotal > 0) percent = (fragIdx / fragTotal) * 100.0;
-            }
-
-            if (percent == null || percent == 0.0) {
-              final match = progressRegex.firstMatch(trimmed);
-              if (match != null) {
-                percent = double.tryParse(match.group(1) ?? '0');
-              }
-            }
+          if (trimmed.contains('[download]') && (trimmed.contains('%') || trimmed.contains('(frag'))) {
+            final percent = parsedProgress;
 
             if (percent != null) {
               final prefix = totalItems > 1 ? '($currentItem/$totalItems) ' : '';
@@ -328,16 +371,9 @@ class MediaDownloader {
           }
         }
 
-        final stdoutTextFuture = collectWindowsProcessOutput(process.stdout);
-        final stderrDone = decodeWindowsProcessLines(process.stderr).listen(handleLine).asFuture<void>();
-
-        // Keep stdout as raw bytes until the process exits. This avoids a
-        // strict UTF-8 stream decoder aborting on a Windows code-page byte
-        // before the filesystem fallback can recover the real Unicode path.
-        final stdoutText = await stdoutTextFuture;
-        for (final line in const LineSplitter().convert(stdoutText)) {
+        void handleStdoutLine(String line) {
           final trimmed = line.trim();
-          if (trimmed.isEmpty) continue;
+          if (trimmed.isEmpty) return;
           if (trimmed.contains('resonance_progress:') ||
               trimmed.contains('[download]') ||
               trimmed.contains('[ExtractAudio]') ||
@@ -349,17 +385,15 @@ class MediaDownloader {
           }
         }
 
-        // ── Collect ALL stdout lines first, then process sequentially ──
-
-        // stdout carries only the --print after_move:%(filepath)s output.
-
-        // Using .toList() ensures the stream is fully consumed before we
-
-        // iterate, and the plain for loop below properly awaits each
-
-        // onTrackDownloaded call — fixing the last-track race condition.
-
-        await stderrDone;
+        // Listen to both pipes before waiting for exit. In particular, the
+        // `resonance_progress` template is normally written to stdout, so it
+        // cannot share the old completed-output buffering used for paths.
+        // allowMalformed keeps a legacy Windows code-page byte from cancelling
+        // the stream; the directory scan below remains the path fallback.
+        final stdoutDone = decodeWindowsProcessLines(process.stdout).listen(handleStdoutLine).asFuture<void>();
+        final stderrDone = decodeWindowsProcessLines(process.stderr).listen(handleLine).asFuture<void>();
+        final exitCodeFuture = process.exitCode;
+        await Future.wait<void>([stdoutDone, stderrDone]);
 
         // ── Process filepath lines sequentially, fully awaited ──
 
@@ -417,7 +451,7 @@ class MediaDownloader {
           }
         }
 
-        final exitCode = await process.exitCode;
+        final exitCode = await exitCodeFuture;
 
         if (exitCode != 0) {
           throw Exception('yt-dlp exited with code $exitCode');
@@ -549,6 +583,16 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
           await ImportService.importFiles([filePath], (newPath) {
             widget.onFileAdded?.call(newPath);
           });
+          if (track != null) {
+            unawaited(
+              const LyricsService().prefetch(
+                trackId: filePath,
+                title: track.title,
+                artist: track.artist,
+                duration: track.durationSeconds == null ? null : Duration(seconds: track.durationSeconds!),
+              ),
+            );
+          }
         },
       );
 

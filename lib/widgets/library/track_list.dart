@@ -29,6 +29,8 @@ class TrackList extends StatefulWidget {
   final int pulse;
   final int artworkRevision;
   final GlobalKey Function(int playlistNumber, int index) itemKeyForIndex;
+  final Set<int> selectedIndices;
+  final ValueChanged<int>? onSelectionToggle;
 
   const TrackList({
     super.key,
@@ -42,6 +44,8 @@ class TrackList extends StatefulWidget {
     required this.pulse,
     required this.artworkRevision,
     required this.itemKeyForIndex,
+    this.selectedIndices = const <int>{},
+    this.onSelectionToggle,
   });
 
   @override
@@ -88,6 +92,9 @@ class _TrackListState extends State<TrackList> {
           onDeleteEverywhere: () => widget.onTrackDeletedEverywhere(trackPath),
           pulse: widget.pulsingTrackIndex == index ? widget.pulse : 0,
           artworkRevision: widget.artworkRevision,
+          selected: widget.selectedIndices.contains(index),
+          selectionMode: widget.selectedIndices.isNotEmpty,
+          onSelectionToggle: widget.onSelectionToggle == null ? null : () => widget.onSelectionToggle!(index),
         );
       },
       onReorder: widget.onReorder,

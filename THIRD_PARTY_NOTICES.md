@@ -1,5 +1,12 @@
 # Third-party notices
 
+## Return YouTube Dislike
+
+When yt-dlp does not expose a public YouTube like count, Resonance uses the
+[Return YouTube Dislike](https://returnyoutubedislike.com/) public API as a
+read-only fallback. The project requires attribution and applies rate limits to
+third-party clients.
+
 ## shazamio-core 1.0.7
 
 Resonance's music-recognition fingerprint implementation is adapted from

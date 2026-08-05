@@ -42,6 +42,10 @@ class AlbumCover extends StatelessWidget {
             final theme = Theme.of(context);
             final accent = themeProvider.playerAccent(theme.colorScheme.primary, theme.brightness);
             final secondary = themeProvider.playerSecondary(theme.colorScheme.secondary, theme.brightness);
+            final gradientColors = themeProvider.playerGradientColors(
+              theme.colorScheme.primary,
+              theme.colorScheme.secondary,
+            );
             final windowsNative = useWindowsNativeControls(context);
             return ValueListenableBuilder<PlaybackVisualState>(
               valueListenable: handler.playbackVisualNotifier,
@@ -71,6 +75,7 @@ class AlbumCover extends StatelessWidget {
                         isDark: isDark,
                         playerAccent: accent,
                         playerSecondary: secondary,
+                        playerGradientColors: gradientColors,
                         tintSurface: themeProvider.hasArtworkPalette && !themeProvider.preserveOledPlayerSurface,
                         showQueueButton: Platform.isWindows && item != null && onQueueRequested != null,
                         onQueueTap: onQueueRequested,
@@ -109,6 +114,7 @@ class NowPlayingCard extends StatelessWidget {
   final VoidCallback? onArtworkTap;
   final Color? playerAccent;
   final Color? playerSecondary;
+  final List<Color>? playerGradientColors;
   final bool tintSurface;
   final bool showQueueButton;
   final VoidCallback? onQueueTap;
@@ -127,6 +133,7 @@ class NowPlayingCard extends StatelessWidget {
     required this.onArtworkTap,
     this.playerAccent,
     this.playerSecondary,
+    this.playerGradientColors,
     this.tintSurface = false,
     this.showQueueButton = false,
     this.onQueueTap,
@@ -137,6 +144,7 @@ class NowPlayingCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final primary = playerAccent ?? Theme.of(context).colorScheme.primary;
     final secondary = playerSecondary ?? primary;
+    final gradientSources = playerGradientColors ?? <Color>[primary, secondary];
     final surface = Theme.of(context).colorScheme.surface;
     final border = Theme.of(context).colorScheme.outline;
     final textPrimary = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A);
@@ -163,8 +171,8 @@ class NowPlayingCard extends StatelessWidget {
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      Color.alphaBlend(primary.withValues(alpha: isDark ? 0.18 : 0.10), surface),
-                      Color.alphaBlend(secondary.withValues(alpha: isDark ? 0.11 : 0.06), surface),
+                      for (final color in gradientSources)
+                        Color.alphaBlend(color.withValues(alpha: isDark ? 0.16 : 0.09), surface),
                     ],
                   )
                 : null,

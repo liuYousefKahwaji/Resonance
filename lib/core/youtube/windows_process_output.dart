@@ -37,3 +37,18 @@ Future<String> collectWindowsProcessOutput(Stream<List<int>> source) async {
 /// here because authoritative completed file paths are recovered separately.
 Stream<String> decodeWindowsProcessLines(Stream<List<int>> source) =>
     source.transform(const Utf8Decoder(allowMalformed: true)).transform(const LineSplitter());
+
+/// Parses both Resonance's stdout progress template and yt-dlp's ordinary
+/// stderr progress output. Fragment-only downloads are supported as a
+/// fallback when no percentage is present.
+double? parseWindowsYtDlpProgress(String line) {
+  final template = RegExp(r'resonance_progress:\s*(\d+(?:\.\d+)?)%').firstMatch(line);
+  if (template != null) return double.tryParse(template.group(1)!);
+  final ordinary = RegExp(r'\[download\]\s+(\d+(?:\.\d+)?)%').firstMatch(line);
+  if (ordinary != null) return double.tryParse(ordinary.group(1)!);
+  final fragment = RegExp(r'\(frag\s+(\d+)/(\d+)\)').firstMatch(line);
+  if (fragment == null) return null;
+  final current = int.tryParse(fragment.group(1)!);
+  final total = int.tryParse(fragment.group(2)!);
+  return current == null || total == null || total == 0 ? null : current / total * 100;
+}
