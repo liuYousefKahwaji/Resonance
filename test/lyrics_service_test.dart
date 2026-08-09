@@ -69,4 +69,24 @@ void main() {
     expect(selectAutomaticLrclibCandidate([close], const Duration(milliseconds: 200100)), same(close));
     expect(selectAutomaticLrclibCandidate([close], const Duration(milliseconds: 200099)), isNull);
   });
+
+  test('title-only last resort accepts exact or two-second duration matches', () {
+    final selected = selectTitleOnlyLrclibCandidate([
+      candidate(id: 1, seconds: 197),
+      candidate(id: 2, seconds: 202),
+      candidate(id: 3, seconds: 200),
+    ], const Duration(seconds: 200));
+
+    expect(selected?.id, 3);
+  });
+
+  test('title-only last resort rejects wider and lyricless duration matches', () {
+    final selected = selectTitleOnlyLrclibCandidate([
+      candidate(id: 1, seconds: 198, synced: false),
+      candidate(id: 2, seconds: 203),
+    ], const Duration(seconds: 200));
+
+    expect(selected, isNull);
+    expect(selectTitleOnlyLrclibCandidate([candidate(id: 3, seconds: 200)], null), isNull);
+  });
 }

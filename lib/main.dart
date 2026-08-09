@@ -42,6 +42,10 @@ import 'package:resonance/services/track_selection_service.dart';
 import 'package:resonance/services/companion/companion_client_service.dart';
 import 'package:resonance/services/companion/companion_server_service.dart';
 import 'package:resonance/services/scroll_effects_preferences.dart';
+import 'package:resonance/services/lyrics_display_preferences.dart';
+import 'package:resonance/services/download/download_queue_controller.dart';
+import 'package:resonance/services/sync/sync_session_service.dart';
+import 'package:resonance/screens/sync/sync_screens.dart';
 import 'package:resonance/widgets/music_recognition/music_recognition_dialog.dart';
 
 // Desktop-only imports — guarded at runtime with Platform checks
@@ -93,10 +97,12 @@ Future<void> main() async {
     ),
   );
   final themeProvider = ThemeProvider();
+  SyncSessionService.instance.initialize(handler);
   if (Platform.isAndroid) {
     unawaited(AndroidPlaybackWidgetService.instance.attach(handler, themeProvider));
   }
   await ScrollEffectsPreferences.instance.initialize();
+  await LyricsDisplayPreferences.instance.initialize();
   if (Platform.isWindows) {
     unawaited(CompanionServerService.instance.initialize(handler));
   } else if (Platform.isAndroid) {
@@ -144,6 +150,8 @@ Future<void> main() async {
     MultiProvider(
       providers: [
         Provider<PlayerHandler>.value(value: handler),
+        ChangeNotifierProvider<DownloadQueueController>.value(value: DownloadQueueController.instance),
+        ChangeNotifierProvider<SyncSessionService>.value(value: SyncSessionService.instance),
         ChangeNotifierProvider<ThemeProvider>.value(value: themeProvider),
       ],
       child: MainApp(handler: handler),
@@ -1381,6 +1389,7 @@ class _MainAppState extends State<MainApp> {
                 initialMediaItem: widget.handler.mediaItem.value,
                 revision: widget.handler.playbackModeRevision,
                 loadSnapshot: widget.handler.playbackQueueSnapshot,
+                resolveArtwork: widget.handler.queueArtworkUri,
                 onPlay: widget.handler.playPlaybackQueueEntry,
                 onClose: _toggleUpcomingQueue,
               ),
@@ -1413,6 +1422,7 @@ class _MainAppState extends State<MainApp> {
             initialMediaItem: widget.handler.mediaItem.value,
             revision: widget.handler.playbackModeRevision,
             loadSnapshot: widget.handler.playbackQueueSnapshot,
+            resolveArtwork: widget.handler.queueArtworkUri,
             onClose: () => Navigator.pop(sheetContext),
           ),
         );
@@ -1451,7 +1461,7 @@ class _MainAppState extends State<MainApp> {
                   ),
                 ),
               ),
-              if (!compact) ..._wideTransferActions(context),
+              if (!compact && !Platform.isAndroid) ..._wideTransferActions(context),
               _buildPlaylistMenu(),
               IconButton(
                 key: const Key('music-recognition-button'),
@@ -1464,8 +1474,8 @@ class _MainAppState extends State<MainApp> {
                 icon: const Icon(Icons.search_rounded),
                 tooltip: 'Search YouTube',
               ),
-              if (!compact) ..._wideLibraryActions(context),
-              if (compact) _buildCompactActionsMenu(context),
+              if (!compact && !Platform.isAndroid) ..._wideLibraryActions(context),
+              if (compact || Platform.isAndroid) _buildCompactActionsMenu(context),
             ],
           );
         },
@@ -1614,27 +1624,36 @@ class _MainAppState extends State<MainApp> {
     tooltip: 'More playlist actions',
     icon: const Icon(Icons.more_vert_rounded),
     onSelected: (action) => _handleToolbarAction(context, action),
-    itemBuilder: (_) => const [
-      PopupMenuItem(
+    itemBuilder: (_) => [
+      const PopupMenuItem(
         value: _ToolbarAction.refresh,
         child: _ToolbarMenuLabel(icon: Icons.refresh_rounded, label: 'Refresh track covers'),
       ),
-      PopupMenuItem(
+      const PopupMenuItem(
         value: _ToolbarAction.transfer,
         child: _ToolbarMenuLabel(icon: Icons.qr_code_2_rounded, label: 'Transfer current playlist'),
       ),
-      PopupMenuItem(
+      const PopupMenuItem(
         value: _ToolbarAction.importTransfer,
         child: _ToolbarMenuLabel(icon: Icons.qr_code_scanner_rounded, label: 'Import playlist QR'),
       ),
-      PopupMenuItem(
+      const PopupMenuItem(
         value: _ToolbarAction.importExternal,
         child: _ToolbarMenuLabel(icon: Icons.playlist_add_rounded, label: 'Cross-website playlist import'),
       ),
-      PopupMenuItem(
+      const PopupMenuItem(
         value: _ToolbarAction.importLocal,
         child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: 'Import local tracks'),
       ),
+      if (Platform.isAndroid)
+        PopupMenuItem(
+          value: _ToolbarAction.sync,
+          child: _ToolbarMenuLabel(
+            icon: SyncSessionService.instance.active ? Icons.spatial_audio_rounded : Icons.spatial_audio_off_rounded,
+            label: SyncSessionService.instance.active ? 'Resonance Sync · Active' : 'Resonance Sync',
+            color: SyncSessionService.instance.active ? Theme.of(context).colorScheme.primary : null,
+          ),
+        ),
     ],
   );
 
@@ -1650,6 +1669,8 @@ class _MainAppState extends State<MainApp> {
         unawaited(_importExternalPlaylist(context));
       case _ToolbarAction.importLocal:
         unawaited(_importLocalTracks(context));
+      case _ToolbarAction.sync:
+        unawaited(_openSync(context));
     }
   }
 
@@ -1660,6 +1681,18 @@ class _MainAppState extends State<MainApp> {
         widget.handler.playbackModeRevision.value++;
       }
     });
+  }
+
+  Future<void> _openSync(BuildContext context) async {
+    await showSyncLauncher(
+      context,
+      handler: widget.handler,
+      playlistNumber: activePlaylistNumber,
+      playlistName: playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber',
+      tracks: List<String>.from(playlist),
+    );
+    if (!mounted) return;
+    await _loadPlaylistFromDisk();
   }
 
   Future<void> _openSearch(BuildContext context) async {
@@ -1835,7 +1868,7 @@ class _MainAppState extends State<MainApp> {
   );
 }
 
-enum _ToolbarAction { refresh, transfer, importTransfer, importExternal, importLocal }
+enum _ToolbarAction { refresh, transfer, importTransfer, importExternal, importLocal, sync }
 
 class _ToolbarMenuLabel extends StatelessWidget {
   final IconData icon;

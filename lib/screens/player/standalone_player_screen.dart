@@ -6,12 +6,14 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/models/lyrics.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/services/lyrics_service.dart';
+import 'package:resonance/services/lyrics_display_preferences.dart';
+import 'package:resonance/services/sync/sync_session_service.dart';
 import 'package:resonance/widgets/common/overflowing_text.dart';
 import 'package:resonance/widgets/player/audio_visualizer.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
@@ -331,6 +333,7 @@ class StandalonePlayerGestureSurface extends StatefulWidget {
   final void Function({required bool restartCurrent}) onPrevious;
   final VoidCallback onQueue;
   final VoidCallback onExit;
+  final bool queueOnly;
 
   const StandalonePlayerGestureSurface({
     super.key,
@@ -339,6 +342,7 @@ class StandalonePlayerGestureSurface extends StatefulWidget {
     required this.onPrevious,
     required this.onQueue,
     required this.onExit,
+    this.queueOnly = false,
   });
 
   @override
@@ -357,6 +361,10 @@ class _StandalonePlayerGestureSurfaceState extends State<StandalonePlayerGesture
   void _handlePanEnd(DragEndDetails _) {
     final action = standalonePlayerSwipeAction(_dragOffset);
     _dragOffset = Offset.zero;
+    if (widget.queueOnly) {
+      if (action == StandalonePlayerSwipeAction.queue) widget.onQueue();
+      return;
+    }
     switch (action) {
       case StandalonePlayerSwipeAction.next:
         widget.onNext();
@@ -391,8 +399,9 @@ class _StandalonePlayerGestureSurfaceState extends State<StandalonePlayerGesture
 
 class StandalonePlayerScreen extends StatefulWidget {
   final bool playlistTrack;
+  final bool syncPeer;
 
-  const StandalonePlayerScreen({super.key, this.playlistTrack = false});
+  const StandalonePlayerScreen({super.key, this.playlistTrack = false, this.syncPeer = false});
 
   @override
   State<StandalonePlayerScreen> createState() => _StandalonePlayerScreenState();
@@ -400,6 +409,34 @@ class StandalonePlayerScreen extends StatefulWidget {
 
 class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
   bool _lyricsVisible = false;
+  bool _leavingSync = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.syncPeer) SyncSessionService.instance.addListener(_onSyncChanged);
+  }
+
+  void _onSyncChanged() {
+    if (!mounted || _leavingSync || SyncSessionService.instance.isPeer) return;
+    setState(() => _leavingSync = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.maybePop(context);
+    });
+  }
+
+  @override
+  void dispose() {
+    if (widget.syncPeer) SyncSessionService.instance.removeListener(_onSyncChanged);
+    super.dispose();
+  }
+
+  Future<void> _leaveSync() async {
+    if (_leavingSync) return;
+    setState(() => _leavingSync = true);
+    await SyncSessionService.instance.leave();
+    if (mounted) Navigator.pop(context, true);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -427,6 +464,7 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
           preserveOledSurface: themeProvider.hasArtworkPalette && themeProvider.preserveOledPlayerSurface,
         );
         return PopScope(
+          canPop: !widget.syncPeer || _leavingSync,
           onPopInvokedWithResult: (didPop, _) {
             if (didPop && widget.playlistTrack) handler.setStandalonePresentation(false);
           },
@@ -436,6 +474,7 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
             onPrevious: handler.previous,
             onQueue: () => _showUpcomingQueue(context, handler),
             onExit: () => Navigator.maybePop(context),
+            queueOnly: widget.syncPeer,
             child: StandaloneGradientSurface(
               colors: gradientColors,
               child: Theme(
@@ -448,15 +487,15 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                     elevation: 0,
                     centerTitle: true,
                     leading: IconButton(
-                      icon: const Icon(Icons.keyboard_arrow_down_rounded),
-                      tooltip: 'Back to playlist',
-                      onPressed: () => Navigator.pop(context),
+                      icon: Icon(widget.syncPeer ? Icons.logout_rounded : Icons.keyboard_arrow_down_rounded),
+                      tooltip: widget.syncPeer ? 'Leave Resonance Sync' : 'Back to playlist',
+                      onPressed: widget.syncPeer ? _leaveSync : () => Navigator.pop(context),
                     ),
                     title: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          'PLAYING FROM',
+                          widget.syncPeer ? 'PLAYING WITH' : 'PLAYING FROM',
                           style: theme.textTheme.labelSmall?.copyWith(
                             fontSize: 9,
                             fontWeight: FontWeight.w700,
@@ -464,7 +503,11 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                           ),
                         ),
                         Text(
-                          artist == null || artist.isEmpty ? 'Resonance' : artist,
+                          widget.syncPeer
+                              ? SyncSessionService.instance.hostName ?? 'Resonance Sync'
+                              : artist == null || artist.isEmpty
+                              ? 'Resonance'
+                              : artist,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
@@ -520,7 +563,7 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                           ),
                         ),
                         _StandaloneMetadata(item: item),
-                        const PlayerControls(standalone: true),
+                        PlayerControls(standalone: true, transportLocked: widget.syncPeer),
                       ],
                     ),
                   ),
@@ -552,6 +595,7 @@ void _showUpcomingQueue(BuildContext context, PlayerHandler handler) {
           initialMediaItem: handler.mediaItem.value,
           revision: handler.playbackModeRevision,
           loadSnapshot: handler.playbackQueueSnapshot,
+          resolveArtwork: handler.queueArtworkUri,
           onClose: () => Navigator.pop(sheetContext),
         ),
       );
@@ -632,25 +676,59 @@ class _LyricsPanel extends StatefulWidget {
   State<_LyricsPanel> createState() => _LyricsPanelState();
 }
 
-class _LyricsPanelState extends State<_LyricsPanel> {
+enum _LyricsFollowState { following, pausedByUser }
+
+class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderStateMixin {
   final _scrollController = ScrollController();
   LyricsDocument? _document;
   Object? _error;
   bool _loading = true;
   int _generation = 0;
   int _activeLine = -1;
-  DateTime _manualScrollUntil = DateTime.fromMillisecondsSinceEpoch(0);
+  _LyricsFollowState _followState = _LyricsFollowState.following;
+  StreamSubscription<Duration>? _positionSubscription;
+  final ValueNotifier<Duration> _lyricPosition = ValueNotifier(Duration.zero);
+  final Stopwatch _interpolationClock = Stopwatch()..start();
+  late final Ticker _lyricsTicker;
+  Duration _anchorPosition = Duration.zero;
+  Duration _anchorClock = Duration.zero;
+  Duration _lastFrameClock = Duration.zero;
+  bool _anchorPlaying = false;
+  double _anchorSpeed = 1;
+  bool _scrollScheduled = false;
+  int? _pendingScrollIndex;
+  bool _pendingScrollJump = false;
   List<GlobalKey> _lineKeys = const [];
 
   @override
   void initState() {
     super.initState();
+    _anchorPosition = widget.handler.currentPosition;
+    _anchorClock = _interpolationClock.elapsed;
+    _anchorPlaying = widget.handler.playbackVisualNotifier.value.playing;
+    _anchorSpeed = widget.handler.speedNotifier.value;
+    _lyricsTicker = createTicker(_onLyricsTick)..start();
+    widget.handler.playbackVisualNotifier.addListener(_onPlaybackVisualChanged);
+    widget.handler.speedNotifier.addListener(_onPlaybackSpeedChanged);
+    _positionSubscription = widget.handler.positionStream.listen(_onPosition);
     _load();
   }
 
   @override
   void didUpdateWidget(covariant _LyricsPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.handler != widget.handler) {
+      oldWidget.handler.playbackVisualNotifier.removeListener(_onPlaybackVisualChanged);
+      oldWidget.handler.speedNotifier.removeListener(_onPlaybackSpeedChanged);
+      unawaited(_positionSubscription?.cancel());
+      _anchorPosition = widget.handler.currentPosition;
+      _anchorClock = _interpolationClock.elapsed;
+      _anchorPlaying = widget.handler.playbackVisualNotifier.value.playing;
+      _anchorSpeed = widget.handler.speedNotifier.value;
+      widget.handler.playbackVisualNotifier.addListener(_onPlaybackVisualChanged);
+      widget.handler.speedNotifier.addListener(_onPlaybackSpeedChanged);
+      _positionSubscription = widget.handler.positionStream.listen(_onPosition);
+    }
     final oldItem = oldWidget.item;
     final item = widget.item;
     final durationBecameAvailable = (oldItem?.duration?.inSeconds ?? 0) <= 0 && (item?.duration?.inSeconds ?? 0) > 0;
@@ -666,6 +744,11 @@ class _LyricsPanelState extends State<_LyricsPanel> {
   @override
   void dispose() {
     _generation++;
+    widget.handler.playbackVisualNotifier.removeListener(_onPlaybackVisualChanged);
+    widget.handler.speedNotifier.removeListener(_onPlaybackSpeedChanged);
+    unawaited(_positionSubscription?.cancel());
+    _lyricsTicker.dispose();
+    _lyricPosition.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -678,6 +761,8 @@ class _LyricsPanelState extends State<_LyricsPanel> {
       _document = null;
       _error = null;
       _activeLine = -1;
+      _lyricPosition.value = Duration.zero;
+      _followState = _LyricsFollowState.following;
       _lineKeys = const [];
     });
     if (item == null) {
@@ -759,6 +844,7 @@ class _LyricsPanelState extends State<_LyricsPanel> {
         _document = document;
         _lineKeys = List.generate(document.lines.length, (_) => GlobalKey());
         _activeLine = -1;
+        _followState = _LyricsFollowState.following;
         _loading = false;
       });
     } catch (error) {
@@ -783,22 +869,136 @@ class _LyricsPanelState extends State<_LyricsPanel> {
     return active;
   }
 
-  void _follow(int index) {
-    if (index < 0 || index == _activeLine) return;
-    _activeLine = index;
-    if (DateTime.now().isBefore(_manualScrollUntil)) return;
+  Duration _interpolatedPosition() {
+    if (!_anchorPlaying) return _anchorPosition;
+    final elapsed = _interpolationClock.elapsed - _anchorClock;
+    return _anchorPosition + Duration(microseconds: (elapsed.inMicroseconds * _anchorSpeed).round());
+  }
+
+  void _reanchor({bool? playing, double? speed}) {
+    _anchorPosition = _interpolatedPosition();
+    _anchorClock = _interpolationClock.elapsed;
+    _anchorPlaying = playing ?? _anchorPlaying;
+    _anchorSpeed = speed ?? _anchorSpeed;
+  }
+
+  void _onPlaybackVisualChanged() => _reanchor(playing: widget.handler.playbackVisualNotifier.value.playing);
+
+  void _onPlaybackSpeedChanged() => _reanchor(speed: widget.handler.speedNotifier.value);
+
+  void _onLyricsTick(Duration _) {
+    final clock = _interpolationClock.elapsed;
+    final interval = lyricsFrameInterval(LyricsDisplayPreferences.instance.framesPerSecond.value);
+    // A small tolerance avoids 30 FPS accidentally falling to 20 FPS on
+    // displays whose nominal 16.67 ms frame callbacks arrive just early.
+    if (clock - _lastFrameClock < interval - const Duration(milliseconds: 1)) return;
+    _lastFrameClock = clock;
+    if (!_anchorPlaying && _lyricPosition.value == _anchorPosition) return;
+    _publishPosition(_interpolatedPosition());
+  }
+
+  void _onPosition(Duration position) {
+    final predicted = _interpolatedPosition();
+    final drift = position - predicted;
+    if (!_anchorPlaying || drift.abs() > const Duration(milliseconds: 220)) {
+      _anchorPosition = position;
+      _anchorClock = _interpolationClock.elapsed;
+      _publishPosition(position);
+      return;
+    }
+    // Backend samples can arrive a few milliseconds late. Snapping to each
+    // one creates a visible saw-tooth even though every individual correction
+    // is small. Ignore imperceptible drift and ease larger drift into the
+    // display clock while it continues moving forward.
+    if (drift.abs() > const Duration(milliseconds: 45)) {
+      _anchorPosition = predicted + Duration(microseconds: (drift.inMicroseconds * .18).round());
+      _anchorClock = _interpolationClock.elapsed;
+    }
+  }
+
+  void _publishPosition(Duration position) {
+    _lyricPosition.value = position;
+    final document = _document;
+    if (document == null) return;
+    final index = _lineAt(document, position);
+    if (index == _activeLine) return;
+    if (mounted) setState(() => _activeLine = index);
+    if (_followState == _LyricsFollowState.following) _scrollToLine(index);
+  }
+
+  void _scrollToLine(int index, {bool jumpToUnbuilt = false}) {
+    if (index < 0) return;
+    _pendingScrollIndex = index;
+    _pendingScrollJump = _pendingScrollJump || jumpToUnbuilt;
+    if (_scrollScheduled) return;
+    _scrollScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || index >= _lineKeys.length) return;
-      final context = _lineKeys[index].currentContext;
-      if (context != null) {
-        Scrollable.ensureVisible(
-          context,
+      if (!mounted) return;
+      unawaited(_drainPendingLyricsScroll());
+    });
+  }
+
+  Future<void> _drainPendingLyricsScroll() async {
+    try {
+      while (mounted && _pendingScrollIndex != null) {
+        final index = _pendingScrollIndex!;
+        final jumpToUnbuilt = _pendingScrollJump;
+        _pendingScrollIndex = null;
+        _pendingScrollJump = false;
+        await _revealLyricsLine(index, jumpToUnbuilt: jumpToUnbuilt);
+      }
+    } finally {
+      _scrollScheduled = false;
+      if (mounted && _pendingScrollIndex != null) _scrollToLine(_pendingScrollIndex!);
+    }
+  }
+
+  Future<void> _revealLyricsLine(int index, {required bool jumpToUnbuilt}) async {
+    if (index < 0 || index >= _lineKeys.length || !_scrollController.hasClients) return;
+    for (var attempt = 0; attempt < 4 && mounted; attempt++) {
+      final lineContext = _lineKeys[index].currentContext;
+      if (lineContext != null) {
+        await Scrollable.ensureVisible(
+          lineContext,
           duration: const Duration(milliseconds: 480),
           curve: Curves.easeOutCubic,
           alignment: 0.38,
         );
+        return;
       }
-    });
+
+      // ListView.builder has no render object for distant rows. Move to the
+      // target's proportional position first so Flutter materializes it, then
+      // use ensureVisible for the exact variable-height alignment.
+      final fraction = _lineKeys.length <= 1 ? 0.0 : index / (_lineKeys.length - 1);
+      final target = (_scrollController.position.maxScrollExtent * fraction).clamp(
+        _scrollController.position.minScrollExtent,
+        _scrollController.position.maxScrollExtent,
+      );
+      if (jumpToUnbuilt || attempt > 0) {
+        _scrollController.jumpTo(target);
+      } else {
+        await _scrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      await WidgetsBinding.instance.endOfFrame;
+    }
+  }
+
+  void _resumeFollowing() {
+    if (_document?.timingQuality == LyricTimingQuality.plain) return;
+    setState(() => _followState = _LyricsFollowState.following);
+    _scrollToLine(_activeLine, jumpToUnbuilt: true);
+  }
+
+  Future<void> _seekLine(LyricLine line) async {
+    if (line.start == null) return;
+    setState(() => _followState = _LyricsFollowState.following);
+    await widget.handler.seek(line.start!);
+    _scrollToLine(_activeLine);
   }
 
   @override
@@ -851,6 +1051,19 @@ class _LyricsPanelState extends State<_LyricsPanel> {
                 ),
                 const SizedBox(width: 4),
                 IconButton(
+                  key: const Key('lyrics-follow-button'),
+                  tooltip: document.timingQuality == LyricTimingQuality.plain
+                      ? 'Timed lyrics are required for auto-scroll'
+                      : _followState == _LyricsFollowState.following
+                      ? 'Following current lyric'
+                      : 'Return to current lyric',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: document.timingQuality == LyricTimingQuality.plain ? null : _resumeFollowing,
+                  isSelected: _followState == _LyricsFollowState.following,
+                  icon: const Icon(Icons.my_location_outlined, size: 20),
+                  selectedIcon: const Icon(Icons.my_location_rounded, size: 20),
+                ),
+                IconButton(
                   key: const Key('change-lyrics-button'),
                   tooltip: 'Choose different lyrics',
                   visualDensity: VisualDensity.compact,
@@ -861,42 +1074,101 @@ class _LyricsPanelState extends State<_LyricsPanel> {
             ),
           ),
           Expanded(
-            child: StreamBuilder<Duration>(
-              stream: widget.handler.positionStream,
-              initialData: Duration.zero,
-              builder: (context, snapshot) {
-                final position = snapshot.data ?? Duration.zero;
-                final active = _lineAt(document, position);
-                _follow(active);
-                return NotificationListener<UserScrollNotification>(
-                  onNotification: (notification) {
-                    if (notification.direction != ScrollDirection.idle) {
-                      _manualScrollUntil = DateTime.now().add(const Duration(seconds: 4));
-                    }
-                    return false;
-                  },
-                  child: ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(24, 28, 24, 120),
-                    itemCount: document.lines.length,
-                    itemBuilder: (context, index) {
-                      final line = document.lines[index];
-                      final isActive = index == active;
-                      final isPast = active >= 0 && index < active;
-                      return InkWell(
-                        key: _lineKeys[index],
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: line.start == null ? null : () => widget.handler.seek(line.start!),
-                        child: AnimatedPadding(
-                          duration: const Duration(milliseconds: 220),
-                          padding: EdgeInsets.symmetric(vertical: isActive ? 13 : 10, horizontal: 4),
-                          child: _LyricLineText(line: line, position: position, active: isActive, past: isPast),
-                        ),
-                      );
-                    },
-                  ),
-                );
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (notification) {
+                final manuallyScrolled =
+                    (notification is ScrollStartNotification && notification.dragDetails != null) ||
+                    (notification is ScrollUpdateNotification && notification.dragDetails != null) ||
+                    (notification is OverscrollNotification && notification.dragDetails != null);
+                if (manuallyScrolled && _followState != _LyricsFollowState.pausedByUser) {
+                  // Cancel any queued reveal from the automatic follower. It
+                  // must stay paused until the user explicitly presses Follow.
+                  _pendingScrollIndex = null;
+                  _pendingScrollJump = false;
+                  setState(() => _followState = _LyricsFollowState.pausedByUser);
+                }
+                return false;
               },
+              child: ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.fromLTRB(20, 28, 20, 120),
+                itemCount: document.lines.length,
+                itemBuilder: (context, index) {
+                  final line = document.lines[index];
+                  final isActive = index == _activeLine;
+                  final isPast = _activeLine >= 0 && index < _activeLine;
+                  return InkWell(
+                    key: _lineKeys[index],
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: line.start == null ? null : () => _seekLine(line),
+                    child: AnimatedScale(
+                      scale: isActive ? 1.025 : 1,
+                      alignment: Alignment.centerLeft,
+                      duration: const Duration(milliseconds: 260),
+                      curve: Curves.easeOutBack,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 260),
+                        curve: Curves.easeOutCubic,
+                        margin: EdgeInsets.symmetric(vertical: isActive ? 5 : 2),
+                        padding: EdgeInsets.fromLTRB(isActive ? 14 : 8, isActive ? 16 : 10, 10, isActive ? 16 : 10),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          gradient: isActive
+                              ? LinearGradient(
+                                  colors: [
+                                    theme.colorScheme.primary.withValues(alpha: .22),
+                                    theme.colorScheme.secondary.withValues(alpha: .08),
+                                    Colors.transparent,
+                                  ],
+                                )
+                              : null,
+                          border: isActive ? Border.all(color: theme.colorScheme.primary.withValues(alpha: .34)) : null,
+                          boxShadow: isActive
+                              ? [
+                                  BoxShadow(
+                                    color: theme.colorScheme.primary.withValues(alpha: .20),
+                                    blurRadius: 24,
+                                    spreadRadius: -5,
+                                  ),
+                                ]
+                              : null,
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            AnimatedContainer(
+                              duration: const Duration(milliseconds: 240),
+                              width: isActive ? 4 : 0,
+                              height: isActive ? 30 : 0,
+                              margin: EdgeInsets.only(right: isActive ? 12 : 0, top: 1),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.primary,
+                                borderRadius: BorderRadius.circular(99),
+                                boxShadow: isActive
+                                    ? [
+                                        BoxShadow(
+                                          color: theme.colorScheme.primary.withValues(alpha: .75),
+                                          blurRadius: 12,
+                                        ),
+                                      ]
+                                    : null,
+                              ),
+                            ),
+                            Expanded(
+                              child: _LyricLineText(
+                                line: line,
+                                position: _lyricPosition,
+                                active: isActive,
+                                past: isPast,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
           ),
           Padding(
@@ -918,7 +1190,7 @@ class _LyricsPanelState extends State<_LyricsPanel> {
 
 class _LyricLineText extends StatelessWidget {
   final LyricLine line;
-  final Duration position;
+  final ValueListenable<Duration> position;
   final bool active;
   final bool past;
 
@@ -930,26 +1202,116 @@ class _LyricLineText extends StatelessWidget {
     final base = theme.textTheme.headlineSmall?.copyWith(
       height: 1.16,
       fontWeight: active ? FontWeight.w900 : FontWeight.w700,
+      fontSize: active ? (theme.textTheme.headlineSmall?.fontSize ?? 24) * 1.08 : null,
       letterSpacing: -0.5,
       color: active ? theme.colorScheme.onSurface : theme.colorScheme.onSurface.withValues(alpha: past ? 0.48 : 0.30),
     );
-    if (!active || line.words.isEmpty) return Text(line.text.isEmpty ? '♪' : line.text, style: base);
-    return Text.rich(
-      TextSpan(
-        children: [
-          for (final word in line.words)
-            TextSpan(
-              text: word.text,
-              style: base?.copyWith(
-                color: position >= word.start
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurface.withValues(alpha: 0.42),
-              ),
-            ),
-        ],
+    if (!active || line.words.isEmpty || base == null) {
+      return Text(line.text.isEmpty ? '♪' : line.text, style: base);
+    }
+    return _KaraokeText(
+      line: line,
+      position: position,
+      baseStyle: base.copyWith(color: theme.colorScheme.onSurface.withValues(alpha: .42)),
+      activeStyle: base.copyWith(
+        color: theme.colorScheme.primary,
+        shadows: [Shadow(color: theme.colorScheme.primary.withValues(alpha: .72), blurRadius: 12)],
       ),
     );
   }
+}
+
+class _KaraokeText extends StatelessWidget {
+  final LyricLine line;
+  final ValueListenable<Duration> position;
+  final TextStyle baseStyle;
+  final TextStyle activeStyle;
+
+  const _KaraokeText({required this.line, required this.position, required this.baseStyle, required this.activeStyle});
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final painter = _KaraokePainter(
+        line: line,
+        position: position,
+        baseStyle: baseStyle,
+        activeStyle: activeStyle,
+        maxWidth: constraints.maxWidth,
+        textScaler: MediaQuery.textScalerOf(context),
+        textDirection: Directionality.of(context),
+      );
+      return RepaintBoundary(
+        child: CustomPaint(size: Size(constraints.maxWidth, painter.height), painter: painter),
+      );
+    },
+  );
+}
+
+class _KaraokePainter extends CustomPainter {
+  final LyricLine line;
+  final ValueListenable<Duration> position;
+  final TextStyle baseStyle;
+  final TextStyle activeStyle;
+  final double maxWidth;
+  final TextScaler textScaler;
+  final TextDirection textDirection;
+  late final String text = line.words.map((word) => word.text).join();
+  late final TextPainter _base = _layout(baseStyle);
+  late final TextPainter _active = _layout(activeStyle);
+
+  _KaraokePainter({
+    required this.line,
+    required this.position,
+    required this.baseStyle,
+    required this.activeStyle,
+    required this.maxWidth,
+    required this.textScaler,
+    required this.textDirection,
+  }) : super(repaint: position);
+
+  TextPainter _layout(TextStyle style) => TextPainter(
+    text: TextSpan(text: text, style: style),
+    textScaler: textScaler,
+    textDirection: textDirection,
+  )..layout(maxWidth: maxWidth);
+
+  double get height => _base.height;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    _base.paint(canvas, Offset.zero);
+    final path = Path();
+    var offset = 0;
+    final currentPosition = position.value;
+    for (final word in line.words) {
+      final end = offset + word.text.length;
+      final span = word.end - word.start;
+      final fraction = currentPosition <= word.start
+          ? 0.0
+          : currentPosition >= word.end || span <= Duration.zero
+          ? 1.0
+          : (currentPosition - word.start).inMicroseconds / span.inMicroseconds;
+      if (fraction > 0) {
+        for (final box in _active.getBoxesForSelection(TextSelection(baseOffset: offset, extentOffset: end))) {
+          final filledRight = box.left + box.toRect().width * fraction;
+          path.addRect(Rect.fromLTRB(box.left, box.top, filledRight, box.bottom));
+        }
+      }
+      offset = end;
+    }
+    canvas.save();
+    canvas.clipPath(path);
+    _active.paint(canvas, Offset.zero);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _KaraokePainter oldDelegate) =>
+      oldDelegate.line != line ||
+      oldDelegate.maxWidth != maxWidth ||
+      oldDelegate.baseStyle != baseStyle ||
+      oldDelegate.activeStyle != activeStyle;
 }
 
 class _LyricsMessage extends StatelessWidget {

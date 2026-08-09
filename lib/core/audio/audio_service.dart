@@ -194,6 +194,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> _seekOperationQueue = Future<void>.value();
   int _crossfadeGeneration = 0;
   bool _crossfadeInProgress = false;
+  bool _syncSessionActive = false;
+  bool _syncPeerControlled = false;
+  int _syncCommandDepth = 0;
   bool _equalizerEffectApplied = false;
   double _transitionVolumeMultiplier = 1.0;
   double _normalizationMultiplier = 1.0;
@@ -223,6 +226,29 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   bool _currentTrackIsStream = false;
 
   bool get isStandaloneMode => standaloneModeNotifier.value || mediaItem.value?.extras?['resonanceStandalone'] == true;
+
+  bool get syncPeerControlled => _syncPeerControlled;
+  bool get syncSessionActive => _syncSessionActive;
+
+  void setSyncSessionMode({required bool active, required bool peerControlled}) {
+    _syncSessionActive = active;
+    _syncPeerControlled = active && peerControlled;
+    if (active && _crossfadeInProgress) {
+      _crossfadeGeneration++;
+      _crossfadeInProgress = false;
+    }
+  }
+
+  Future<T> runSynchronizedCommand<T>(Future<T> Function() command) async {
+    _syncCommandDepth++;
+    try {
+      return await command();
+    } finally {
+      _syncCommandDepth--;
+    }
+  }
+
+  bool get _syncControlLocked => _syncPeerControlled && _syncCommandDepth == 0;
 
   double get visualizerAmplitude {
     final envelope = _audioEnvelope;
@@ -1297,6 +1323,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   // ─── Automatic crossfade ─────────────────────────────────────────
   void _maybeStartAutomaticCrossfade() {
     if (_crossfadeInProgress ||
+        _syncSessionActive ||
         _activeTrackLoadGeneration != null ||
         _activeSeekGeneration != null ||
         !crossfadeEnabledNotifier.value ||
@@ -1658,6 +1685,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   // ─── Core playback ────────────────────────────────────────────────
   @override
   Future<void> play() async {
+    if (_syncControlLocked) return;
     final restored = _pendingRestoredTrack;
     if (restored != null) {
       _pendingRestoredTrack = null;
@@ -1710,6 +1738,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   @override
   Future<void> pause() async {
+    if (_syncControlLocked) return;
     _playbackRequested = false;
     _playbackHealthTimer?.cancel();
     await saveCurrentPlaybackPosition();
@@ -1726,6 +1755,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   @override
   Future<void> seek(Duration position) async {
+    if (_syncControlLocked) return;
     final generation = ++_seekGeneration;
     _activeSeekGeneration = generation;
     final operation = _seekOperationQueue.then((_) => _seekBackend(position));
@@ -1884,6 +1914,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   @override
   Future<void> setSpeed(double speed) async {
+    if (_syncControlLocked) return;
     await _applyPlaybackAdjustments(
       _requestedPlaybackAdjustments.copyWith(speed: speed.clamp(0.5, 2.0)),
       persist: true,
@@ -1891,6 +1922,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> setPitch(double pitch) async {
+    if (_syncControlLocked) return;
     await _applyPlaybackAdjustments(
       _requestedPlaybackAdjustments.copyWith(pitch: pitch.clamp(0.5, 2.0)),
       persist: true,
@@ -1898,6 +1930,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> setEqualizer(EqualizerSettings settings) async {
+    if (_syncControlLocked) return;
     await _applyPlaybackAdjustments(_requestedPlaybackAdjustments.copyWith(equalizer: settings), persist: true);
   }
 
@@ -1919,6 +1952,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     TrackTransitionDirection transitionDirection = TrackTransitionDirection.none,
     bool preserveFailureHistory = false,
   }) async {
+    if (_syncControlLocked) return;
     final generation = ++_loadGeneration;
     _playbackRequested = false;
     _playbackUnavailable = false;
@@ -2408,6 +2442,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> next() async {
+    if (_syncControlLocked) return;
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
     final standalonePlaylistNumber = _standalonePlaylistNumber;
@@ -2433,6 +2468,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   /// Moves to the previous track. Standard previous buttons restart the
   /// current track after three seconds; direct gestures can opt out.
   Future<void> previous({bool restartCurrent = true}) async {
+    if (_syncControlLocked) return;
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
     final standalonePlaylistNumber = _standalonePlaylistNumber;
@@ -2473,6 +2509,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   /// FIX: Use the correct player for the current platform.
   Future<void> playPause() async {
+    if (_syncControlLocked) return;
     if (Platform.isWindows) {
       if (_isWindowsPlaying) {
         await pause();
@@ -2509,6 +2546,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   );
 
   Future<void> toggleLoopMode() async {
+    if (_syncControlLocked) return;
     if (currentLoopMode == LoopMode.off) {
       currentLoopMode = LoopMode.one;
     } else if (currentLoopMode == LoopMode.one) {
@@ -2522,6 +2560,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> setLoopMode(LoopMode mode) async {
+    if (_syncControlLocked) return;
     if (currentLoopMode == mode) return;
     currentLoopMode = mode;
     final prefs = await SharedPreferences.getInstance();
@@ -2530,6 +2569,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> toggleShuffle() async {
+    if (_syncControlLocked) return;
     isShuffle = !isShuffle;
     if (isShuffle) await shuffleQueue();
     final prefs = await SharedPreferences.getInstance();
@@ -2538,6 +2578,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> setShuffleEnabled(bool enabled) async {
+    if (_syncControlLocked) return;
     if (isShuffle == enabled) return;
     isShuffle = enabled;
     if (isShuffle) await shuffleQueue();
@@ -2662,6 +2703,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       shuffled: isShuffle,
     );
   }
+
+  /// Resolves queue artwork on demand. Queue surfaces call this only for rows
+  /// Flutter actually builds, avoiding an expensive metadata scan of a long
+  /// local playlist before the queue can open.
+  Future<Uri?> queueArtworkUri(String trackId) => _albumArtUri(trackId);
 
   Future<void> playPlaybackQueueEntry(PlaybackQueueEntry entry) =>
       loadTrack(entry.id, entry.title, entry.artist, transitionDirection: TrackTransitionDirection.next);

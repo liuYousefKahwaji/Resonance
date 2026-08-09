@@ -107,30 +107,41 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
   }
 
   Future<void> _pickQrImages() async {
+    if (_processingInput || _stage != _ImportStage.receiving) return;
+    _processingInput = true;
+    if (mounted) setState(() {});
+    await _scannerController?.stop();
     final result = await FilePicker.pickFiles(
       dialogTitle: 'Upload Resonance playlist QR images',
       type: FileType.custom,
       allowedExtensions: const ['png', 'jpg', 'jpeg'],
       allowMultiple: true,
     );
-    if (result == null) return;
-    setState(() => _processingInput = true);
-    for (final file in result.files) {
-      if (_stage != _ImportStage.receiving) break;
-      final path = file.path;
-      if (path == null) {
-        _addNotice('${file.name}: no readable file path.');
-        continue;
+    try {
+      if (result == null) return;
+      for (final file in result.files) {
+        if (_stage != _ImportStage.receiving) break;
+        final path = file.path;
+        if (path == null) {
+          _addNotice('${file.name}: no readable file path.');
+          continue;
+        }
+        try {
+          final raw = await PlaylistQrImageService.decodeFile(path);
+          // _acceptRawPayload owns the guard while it validates a chunk. The
+          // camera is stopped, so briefly releasing it cannot race a scan.
+          _processingInput = false;
+          await _acceptRawPayload(raw, sourceLabel: file.name);
+          _processingInput = true;
+        } catch (error) {
+          _addNotice('${file.name}: no readable QR code ($error).');
+        }
       }
-      try {
-        final raw = await PlaylistQrImageService.decodeFile(path);
-        _processingInput = false;
-        await _acceptRawPayload(raw, sourceLabel: file.name);
-      } catch (error) {
-        _addNotice('${file.name}: no readable QR code ($error).');
-      }
+    } finally {
+      _processingInput = false;
+      if (mounted) setState(() {});
+      if (_stage == _ImportStage.receiving) await _scannerController?.start();
     }
-    if (mounted) setState(() => _processingInput = false);
   }
 
   Future<void> _reconstruct() async {
@@ -392,6 +403,15 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
                     ),
                   ),
                 ),
+              if (Platform.isAndroid) ...[
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  key: const Key('android-upload-qr-images'),
+                  onPressed: _processingInput ? null : _pickQrImages,
+                  icon: const Icon(Icons.add_photo_alternate_rounded),
+                  label: Text(_processingInput ? 'Reading images…' : 'Upload QR image(s)'),
+                ),
+              ],
               const SizedBox(height: 14),
               LinearProgressIndicator(value: progress),
               const SizedBox(height: 8),
@@ -405,17 +425,19 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
                 const SizedBox(height: 10),
                 Text(_notices.first, maxLines: 2, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
               ],
-              if (!Platform.isAndroid && _session.receivedChunkCount > 0) ...[
+              if (_session.receivedChunkCount > 0) ...[
                 const SizedBox(height: 10),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    OutlinedButton.icon(
-                      onPressed: _processingInput ? null : _pickQrImages,
-                      icon: const Icon(Icons.add_photo_alternate_outlined),
-                      label: const Text('Add more images'),
-                    ),
-                    const SizedBox(width: 8),
+                    if (!Platform.isAndroid) ...[
+                      OutlinedButton.icon(
+                        onPressed: _processingInput ? null : _pickQrImages,
+                        icon: const Icon(Icons.add_photo_alternate_outlined),
+                        label: const Text('Add more images'),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                     TextButton(onPressed: _clearReceived, child: const Text('Start over')),
                   ],
                 ),

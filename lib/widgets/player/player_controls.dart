@@ -16,8 +16,9 @@ import 'package:resonance/widgets/player/volume_bar.dart';
 
 class PlayerControls extends StatelessWidget {
   final bool standalone;
+  final bool transportLocked;
 
-  const PlayerControls({super.key, this.standalone = false});
+  const PlayerControls({super.key, this.standalone = false, this.transportLocked = false});
 
   @override
   Widget build(BuildContext context) {
@@ -39,13 +40,20 @@ class PlayerControls extends StatelessWidget {
             border: standalone ? null : Border(top: BorderSide(color: panelBorder, width: 1)),
           ),
           child: screenWidth < 500
-              ? _MobileControls(handler: handler, isPlaying: isPlaying, isMobile: isMobile, standalone: standalone)
+              ? _MobileControls(
+                  handler: handler,
+                  isPlaying: isPlaying,
+                  isMobile: isMobile,
+                  standalone: standalone,
+                  transportLocked: transportLocked,
+                )
               : _DesktopControls(
                   handler: handler,
                   isPlaying: isPlaying,
                   isMobile: isMobile,
                   screenWidth: screenWidth,
                   standalone: standalone,
+                  transportLocked: transportLocked,
                 ),
         );
       },
@@ -58,12 +66,14 @@ class _MobileControls extends StatelessWidget {
   final bool isPlaying;
   final bool isMobile;
   final bool standalone;
+  final bool transportLocked;
 
   const _MobileControls({
     required this.handler,
     required this.isPlaying,
     required this.isMobile,
     required this.standalone,
+    required this.transportLocked,
   });
 
   @override
@@ -76,20 +86,23 @@ class _MobileControls extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             // ── Row 1: Seek bar ──────────────────────────────────────
-            const SeekBar(),
+            _LockedControl(locked: transportLocked, child: const SeekBar()),
 
             const SizedBox(height: 6),
 
             // ── Row 2: Transport controls (centred) ──────────────────
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: standalone ? 40 : 26),
-                SizedBox(width: standalone ? 28 : 16),
-                _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: standalone ? 76 : 48),
-                SizedBox(width: standalone ? 28 : 16),
-                _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: standalone ? 40 : 26),
-              ],
+            _LockedControl(
+              locked: transportLocked,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: standalone ? 40 : 26),
+                  SizedBox(width: standalone ? 28 : 16),
+                  _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: standalone ? 76 : 48),
+                  SizedBox(width: standalone ? 28 : 16),
+                  _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: standalone ? 40 : 26),
+                ],
+              ),
             ),
 
             const SizedBox(height: 4),
@@ -98,8 +111,13 @@ class _MobileControls extends StatelessWidget {
             Row(
               children: [
                 // Left cluster — loop, shuffle, speed/pitch
-                const PlayerModes(),
-                isMobile ? const PlaybackSettings() : const SpeedControl(),
+                _LockedControl(
+                  locked: transportLocked,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [const PlayerModes(), isMobile ? const PlaybackSettings() : const SpeedControl()],
+                  ),
+                ),
 
                 const SizedBox(width: 8),
 
@@ -120,6 +138,7 @@ class _DesktopControls extends StatelessWidget {
   final bool isMobile;
   final double screenWidth;
   final bool standalone;
+  final bool transportLocked;
 
   const _DesktopControls({
     required this.handler,
@@ -127,6 +146,7 @@ class _DesktopControls extends StatelessWidget {
     required this.isMobile,
     required this.screenWidth,
     required this.standalone,
+    required this.transportLocked,
   });
 
   @override
@@ -136,7 +156,7 @@ class _DesktopControls extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const SeekBar(),
+          _LockedControl(locked: transportLocked, child: const SeekBar()),
           const SizedBox(height: 8),
           SizedBox(
             height: standalone ? 96 : 52,
@@ -144,29 +164,39 @@ class _DesktopControls extends StatelessWidget {
               alignment: Alignment.center,
               children: [
                 // LEFT — modes + speed
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const PlayerModes(),
-                      const SizedBox(width: 4),
-                      Platform.isWindows || isMobile ? const PlaybackSettings() : const SpeedControl(),
-                    ],
+                _LockedControl(
+                  locked: transportLocked,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const PlayerModes(),
+                        const SizedBox(width: 4),
+                        Platform.isWindows || isMobile ? const PlaybackSettings() : const SpeedControl(),
+                      ],
+                    ),
                   ),
                 ),
 
                 // CENTER — prev / play-pause / next
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: standalone ? 44 : 24),
-                    SizedBox(width: standalone ? 28 : 12),
-                    _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: standalone ? 84 : 48),
-                    SizedBox(width: standalone ? 28 : 12),
-                    _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: standalone ? 44 : 24),
-                  ],
+                _LockedControl(
+                  locked: transportLocked,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _SkipButton(
+                        icon: Icons.skip_previous_rounded,
+                        onTap: handler.previous,
+                        size: standalone ? 44 : 24,
+                      ),
+                      SizedBox(width: standalone ? 28 : 12),
+                      _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: standalone ? 84 : 48),
+                      SizedBox(width: standalone ? 28 : 12),
+                      _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: standalone ? 44 : 24),
+                    ],
+                  ),
                 ),
 
                 // RIGHT — volume bar
@@ -178,6 +208,22 @@ class _DesktopControls extends StatelessWidget {
       ),
     );
   }
+}
+
+class _LockedControl extends StatelessWidget {
+  final bool locked;
+  final Widget child;
+
+  const _LockedControl({required this.locked, required this.child});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    enabled: !locked,
+    child: IgnorePointer(
+      ignoring: locked,
+      child: AnimatedOpacity(duration: const Duration(milliseconds: 180), opacity: locked ? .38 : 1, child: child),
+    ),
+  );
 }
 
 // ── Reusable button widgets ────────────────────────────────────────────────────

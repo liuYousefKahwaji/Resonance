@@ -223,6 +223,22 @@ class LyricsService {
           return _lrclibDocument(raw);
         }
       }
+
+      // Last-resort lookup: some LRCLIB records have missing or inconsistent
+      // artist metadata and therefore never appear for "artist + title".
+      // Search only the cleaned song title, then let the audio duration act as
+      // the identity check. This deliberately runs after every richer lookup.
+      if (artist.isNotEmpty && duration != null && duration.inMilliseconds > 0) {
+        final titleOnly = await _getLrclibJson(client, Uri.https('lrclib.net', '/api/search', {'q': title}));
+        if (titleOnly is List) {
+          final rawCandidates = titleOnly.whereType<Map>().map((item) => Map<String, dynamic>.from(item)).toList();
+          final candidate = selectTitleOnlyLrclibCandidate(rawCandidates.map(LrclibCandidate.fromJson), duration);
+          if (candidate != null) {
+            final raw = rawCandidates.firstWhere((item) => (item['id'] as num?)?.toInt() == candidate.id);
+            return _lrclibDocument(raw, source: 'LRCLIB · title fallback');
+          }
+        }
+      }
     } catch (error) {
       debugPrint('LRCLIB lookup failed: $error');
     } finally {
@@ -319,19 +335,14 @@ class LyricsService {
     return null;
   }
 
-  LyricsDocument? _lrclibDocument(Map<String, dynamic> json) {
+  LyricsDocument? _lrclibDocument(Map<String, dynamic> json, {String source = 'LRCLIB'}) {
     if (json['instrumental'] == true) {
-      return const LyricsDocument(
-        lines: [],
-        timingQuality: LyricTimingQuality.plain,
-        source: 'LRCLIB',
-        instrumental: true,
-      );
+      return LyricsDocument(lines: [], timingQuality: LyricTimingQuality.plain, source: source, instrumental: true);
     }
     final synced = json['syncedLyrics']?.toString().trim() ?? '';
-    if (synced.isNotEmpty) return LyricsParser.parseLrc(synced, source: 'LRCLIB');
+    if (synced.isNotEmpty) return LyricsParser.parseLrc(synced, source: source);
     final plain = json['plainLyrics']?.toString().trim() ?? '';
-    return plain.isEmpty ? null : LyricsParser.parsePlain(plain, source: 'LRCLIB');
+    return plain.isEmpty ? null : LyricsParser.parsePlain(plain, source: source);
   }
 
   Map<String, dynamic>? _bestAmllCandidate(
@@ -475,4 +486,22 @@ LrclibCandidate? selectAutomaticLrclibCandidate(Iterable<LrclibCandidate> candid
     if (difference <= const Duration(seconds: 3).inMilliseconds) return candidate;
   }
   return null;
+}
+
+@visibleForTesting
+LrclibCandidate? selectTitleOnlyLrclibCandidate(Iterable<LrclibCandidate> candidates, Duration? targetDuration) {
+  if (targetDuration == null || targetDuration.inMilliseconds <= 0) return null;
+  LrclibCandidate? best;
+  int? bestDifference;
+  for (final candidate in candidates) {
+    if (!candidate.hasLyrics || candidate.duration.inMilliseconds <= 0) continue;
+    final difference = (candidate.duration.inMilliseconds - targetDuration.inMilliseconds).abs();
+    if (difference <= const Duration(seconds: 2).inMilliseconds &&
+        (bestDifference == null || difference < bestDifference)) {
+      best = candidate;
+      bestDifference = difference;
+      if (difference == 0) break;
+    }
+  }
+  return best;
 }

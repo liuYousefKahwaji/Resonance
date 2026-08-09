@@ -1,8 +1,19 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+enum PlaylistMutationKind { created, replaced, appended, removed, reordered, deleted }
+
+class PlaylistMutation {
+  final int playlistNumber;
+  final int revision;
+  final PlaylistMutationKind kind;
+
+  const PlaylistMutation(this.playlistNumber, this.revision, this.kind);
+}
 
 class FileService {
   static const String _activePlaylistKey = 'active_resonance_playlist';
@@ -11,6 +22,11 @@ class FileService {
   static const int defaultPlaylistNumber = 1;
   final String? _documentsPathOverride;
   final bool? _isWindowsOverride;
+  static final StreamController<PlaylistMutation> _mutations = StreamController<PlaylistMutation>.broadcast(sync: true);
+  static final Map<String, Future<void>> _writeTails = {};
+  static final Map<String, int> _revisions = {};
+
+  static Stream<PlaylistMutation> get mutations => _mutations.stream;
 
   FileService({String? documentsPathOverride, bool? isWindowsOverride})
     : _documentsPathOverride = documentsPathOverride,
@@ -80,6 +96,7 @@ class FileService {
     final file = await _playlistFile(next);
     await file.writeAsString("#\n");
     await setActivePlaylistNumber(next);
+    await _publish(next, PlaylistMutationKind.created);
     return next;
   }
 
@@ -90,7 +107,7 @@ class FileService {
     final displayName = _availablePlaylistName(requestedName, names.values.toSet());
     final number = await createNextPlaylist();
     await renamePlaylist(number, displayName);
-    await reorderPlaylist(tracks);
+    await replacePlaylistTracks(number, tracks, kind: PlaylistMutationKind.replaced);
     return (number: number, displayName: displayName);
   }
 
@@ -173,6 +190,7 @@ class FileService {
     }
     await _savePlaylistNames(names);
     await setActivePlaylistNumber(nextActive);
+    await _publish(number, PlaylistMutationKind.deleted);
     return nextActive;
   }
 
@@ -269,6 +287,89 @@ class FileService {
     return file.writeAsString(text, mode: append ? FileMode.append : FileMode.write);
   }
 
+  /// Returns normalized track entries for an explicit playlist. Callers which
+  /// need to mutate a playlist should use the methods below so rapid operations
+  /// cannot overwrite one another.
+  Future<List<String>> readPlaylistTracks(int playlistNumber) async {
+    final contents = await readTextFromPlaylist(playlistNumber);
+    return contents
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty && !line.startsWith('#'))
+        .toList(growable: false);
+  }
+
+  Future<void> replacePlaylistTracks(
+    int playlistNumber,
+    List<String> tracks, {
+    PlaylistMutationKind kind = PlaylistMutationKind.replaced,
+  }) => _serialize(playlistNumber, () async {
+    final file = await _ensurePlaylistFile(playlistNumber);
+    final normalized = tracks.map((track) => track.trim()).where((track) => track.isNotEmpty);
+    await file.writeAsString('#\n${normalized.map((track) => '$track\n').join()}', flush: true);
+    await _publish(playlistNumber, kind);
+  });
+
+  Future<bool> appendTrack(int playlistNumber, String trackPath) async {
+    var changed = false;
+    await _serialize(playlistNumber, () async {
+      final clean = trackPath.trim();
+      if (clean.isEmpty) return;
+      final tracks = await readPlaylistTracks(playlistNumber);
+      if (tracks.any((candidate) => sameTrackPath(candidate, clean))) return;
+      final file = await _ensurePlaylistFile(playlistNumber);
+      await file.writeAsString('$clean\n', mode: FileMode.append, flush: true);
+      changed = true;
+      await _publish(playlistNumber, PlaylistMutationKind.appended);
+    });
+    return changed;
+  }
+
+  Future<bool> removeOccurrence(int playlistNumber, String trackPath, {int? playlistIndex}) async {
+    var changed = false;
+    await _serialize(playlistNumber, () async {
+      final tracks = (await readPlaylistTracks(playlistNumber)).toList();
+      var index = -1;
+      if (playlistIndex != null &&
+          playlistIndex >= 0 &&
+          playlistIndex < tracks.length &&
+          sameTrackPath(tracks[playlistIndex], trackPath)) {
+        index = playlistIndex;
+      } else {
+        index = findTrackIndex(tracks, trackPath);
+      }
+      if (index < 0) return;
+      tracks.removeAt(index);
+      final file = await _ensurePlaylistFile(playlistNumber);
+      await file.writeAsString('#\n${tracks.map((track) => '$track\n').join()}', flush: true);
+      changed = true;
+      await _publish(playlistNumber, PlaylistMutationKind.removed);
+    });
+    return changed;
+  }
+
+  Future<void> reorderPlaylistNumber(int playlistNumber, List<String> tracks) =>
+      replacePlaylistTracks(playlistNumber, tracks, kind: PlaylistMutationKind.reordered);
+
+  Future<void> _serialize(int playlistNumber, Future<void> Function() operation) async {
+    final key = '${await _localPath}|$playlistNumber';
+    final previous = _writeTails[key] ?? Future<void>.value();
+    final next = previous.catchError((_) {}).then((_) => operation());
+    _writeTails[key] = next;
+    try {
+      await next;
+    } finally {
+      if (identical(_writeTails[key], next)) _writeTails.remove(key);
+    }
+  }
+
+  Future<void> _publish(int playlistNumber, PlaylistMutationKind kind) async {
+    final key = '${await _localPath}|$playlistNumber';
+    final revision = (_revisions[key] ?? 0) + 1;
+    _revisions[key] = revision;
+    _mutations.add(PlaylistMutation(playlistNumber, revision, kind));
+  }
+
   Future<String> readTextFromPlaylist(int playlistNumber) async {
     final file = await _ensurePlaylistFile(playlistNumber);
     var contents = await file.readAsString();
@@ -280,15 +381,7 @@ class FileService {
   }
 
   Future<void> addToPlaylist(int playlistNumber, String trackPath) async {
-    final clean = trackPath.trim();
-    if (clean.isEmpty) return;
-    final content = await readTextFromPlaylist(playlistNumber);
-    final existing = content
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty && !line.startsWith('#'));
-    if (existing.any((candidate) => sameTrackPath(candidate, clean))) return;
-    await writeTextToPlaylist(playlistNumber, '$clean\n', append: true);
+    await appendTrack(playlistNumber, trackPath);
   }
 
   // 4. Read data from the file safely
@@ -317,29 +410,7 @@ class FileService {
 
   Future<void> removeFromPlaylist(String filePath, {int? playlistIndex}) async {
     try {
-      final file = await _localFile;
-      if (await file.exists()) {
-        final contents = await file.readAsString();
-        final lines = contents.split("\n");
-        var lineToRemove = -1;
-        if (playlistIndex != null && playlistIndex >= 0) {
-          var currentTrackIndex = 0;
-          for (var index = 0; index < lines.length; index++) {
-            final line = lines[index].trim();
-            if (line.isEmpty || line.startsWith('#')) continue;
-            if (currentTrackIndex == playlistIndex && sameTrackPath(line, filePath)) {
-              lineToRemove = index;
-              break;
-            }
-            currentTrackIndex++;
-          }
-        }
-        lineToRemove = lineToRemove >= 0
-            ? lineToRemove
-            : lines.indexWhere((line) => sameTrackPath(line.trim(), filePath));
-        if (lineToRemove >= 0) lines.removeAt(lineToRemove);
-        await file.writeAsString(lines.join("\n"));
-      }
+      await removeOccurrence(await getActivePlaylistNumber(), filePath, playlistIndex: playlistIndex);
     } catch (_) {}
   }
 
@@ -348,12 +419,7 @@ class FileService {
   /// (which re-read the file fresh each time) honour the new order.
   Future<void> reorderPlaylist(List<String> newOrder) async {
     try {
-      final file = await _localFile;
-      final buffer = StringBuffer('#\n');
-      for (final path in newOrder) {
-        buffer.write('$path\n');
-      }
-      await file.writeAsString(buffer.toString());
+      await reorderPlaylistNumber(await getActivePlaylistNumber(), newOrder);
     } catch (_) {}
   }
 }

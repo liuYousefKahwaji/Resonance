@@ -28,6 +28,7 @@ import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/core/youtube/android_download_event.dart';
 import 'package:resonance/services/download_history_repository.dart';
+import 'package:resonance/services/download/youtube_download_gate.dart';
 
 class AndroidYoutubeDownloader {
   static const _method = MethodChannel('resonance/android_youtube');
@@ -63,6 +64,15 @@ class AndroidYoutubeDownloader {
   Future<String> get outputDir => _resolveOutputDir();
 
   Future<List<YoutubeDownloadResult>> downloadAudio(
+    String url, {
+    required void Function(double percentage, String status) onProgress,
+    String? historyTitle,
+    String? historyArtist,
+  }) => YoutubeDownloadGate.instance.run(
+    () => _downloadAudioUnlocked(url, onProgress: onProgress, historyTitle: historyTitle, historyArtist: historyArtist),
+  );
+
+  Future<List<YoutubeDownloadResult>> _downloadAudioUnlocked(
     String url, {
     required void Function(double percentage, String status) onProgress,
     String? historyTitle,

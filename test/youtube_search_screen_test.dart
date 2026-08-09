@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/screens/youtube/youtube_search_screen.dart';
 import 'package:resonance/services/suggested_music_service.dart';
+import 'package:resonance/services/download/download_queue_controller.dart';
 
 void main() {
   testWidgets('shows a two-result preview after idle and full results on submit', (tester) async {
@@ -139,5 +141,37 @@ void main() {
     requests[0].complete(const SuggestedMusicResult(profile: profile, tracks: [], fromCache: false));
     await tester.pump();
     expect(find.text('Suggested Track'), findsOneWidget);
+  });
+
+  testWidgets('disabled queue mode never renders the Windows queue panel', (tester) async {
+    if (!Platform.isWindows) return;
+    final queue = DownloadQueueController.instance;
+    queue.setQueueMode(false);
+    addTearDown(() => queue.setQueueMode(false));
+    const track = YoutubeTrack(
+      title: 'Visible result',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=queuepanel1',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: YoutubeSearchScreen(
+          playlistNumber: 1,
+          playlistName: 'Playlist 1',
+          initialQuery: 'result',
+          searchLoader: (_, __) async => const [track],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Download queue'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('download-queue-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.text('Download queue'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('download-queue-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.text('Download queue'), findsNothing);
   });
 }

@@ -7,17 +7,19 @@ import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/models/download_queue_entry.dart';
 import 'package:resonance/screens/external_playlist/external_playlist_import_screen.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/services/external_playlist_service.dart';
-import 'package:resonance/services/import_service.dart';
-import 'package:resonance/services/lyrics_service.dart';
 import 'package:resonance/services/youtube_stats_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/suggested_music_service.dart';
+import 'package:resonance/services/download/download_queue_controller.dart';
 import 'package:resonance/widgets/youtube/android_youtube.dart';
+import 'package:resonance/widgets/youtube/download_queue_panel.dart';
 import 'package:resonance/widgets/youtube/windows_youtube.dart';
+import 'package:resonance/app/resonance_motion.dart';
 
 typedef YoutubeSearchLoader = Future<List<YoutubeTrack>> Function(String input, int limit);
 typedef YoutubeSuggestionsLoader =
@@ -57,8 +59,6 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   bool _loading = false;
   String? _error;
   String? _busyUrl;
-  String? _downloadingUrl;
-  double _progress = 0;
   PlaylistProfile? _suggestionProfile;
   List<YoutubeTrack> _suggestionTracks = const [];
   bool _suggestionLoading = false;
@@ -337,7 +337,14 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       await MetadataCacheService.set(track.url, track.title, track.artist, artworkUrl: track.thumbnailUrl);
       await _rememberSource(track, TrackSourceMethod.manuallySelected);
       await FileService().addToPlaylist(widget.playlistNumber, track.url);
-      if (mounted) Navigator.pop(context, track.url);
+      if (!mounted) return;
+      if (DownloadQueueController.instance.queueMode) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('${track.title} added to ${widget.playlistName}')));
+      } else {
+        Navigator.pop(context, track.url);
+      }
     } catch (error) {
       if (mounted) _showError('Could not add stream: $error');
     } finally {
@@ -346,84 +353,22 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   }
 
   Future<void> _download(YoutubeTrack track) async {
+    final queue = DownloadQueueController.instance;
+    if (queue.queueMode) {
+      unawaited(queue.enqueue(track, widget.playlistNumber).catchError((_) => null));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${track.title} queued')));
+      return;
+    }
     if (_busyUrl != null) return;
-    setState(() {
-      _busyUrl = track.url;
-      _downloadingUrl = track.url;
-      _progress = 0;
-    });
-    String? addedTrack;
+    setState(() => _busyUrl = track.url);
     try {
-      if (Platform.isWindows) {
-        await _windows.initBinaries();
-        await _windows.downloadAudio(
-          url: track.url,
-          historyTitle: track.title,
-          historyArtist: track.artist,
-          onProgress: (value, _) {
-            if (mounted) setState(() => _progress = value);
-          },
-          onTrackDownloaded: (path, videoId) async {
-            await ImportService.importFiles([path], (_) {}, playlistNumber: widget.playlistNumber);
-            addedTrack ??= path;
-            if (videoId != null) {
-              await const TrackSourceRepository().saveSource(
-                localPath: path,
-                youtubeVideoId: videoId,
-                method: TrackSourceMethod.downloadedByResonance,
-                lastVerifiedAt: DateTime.now().toUtc(),
-              );
-            }
-            unawaited(
-              const LyricsService().prefetch(
-                trackId: path,
-                title: track.title,
-                artist: track.artist,
-                duration: track.durationSeconds == null ? null : Duration(seconds: track.durationSeconds!),
-              ),
-            );
-          },
-        );
-      } else {
-        final downloads = await _android.downloadAudio(
-          track.url,
-          historyTitle: track.title,
-          historyArtist: track.artist,
-          onProgress: (value, _) {
-            if (mounted) setState(() => _progress = value);
-          },
-        );
-        for (final download in downloads) {
-          await ImportService.importFiles([download.localPath], (_) {}, playlistNumber: widget.playlistNumber);
-          addedTrack ??= download.localPath;
-          if (download.youtubeVideoId != null) {
-            await const TrackSourceRepository().saveSource(
-              localPath: download.localPath,
-              youtubeVideoId: download.youtubeVideoId!,
-              method: TrackSourceMethod.downloadedByResonance,
-              lastVerifiedAt: DateTime.now().toUtc(),
-            );
-          }
-          unawaited(
-            const LyricsService().prefetch(
-              trackId: download.localPath,
-              title: track.title,
-              artist: track.artist,
-              duration: track.durationSeconds == null ? null : Duration(seconds: track.durationSeconds!),
-            ),
-          );
-        }
-      }
+      final addedTrack = await queue.enqueue(track, widget.playlistNumber);
       if (mounted) Navigator.pop(context, addedTrack);
     } catch (error) {
       if (mounted) _showError('Download failed: $error');
     } finally {
       if (mounted) {
-        setState(() {
-          _busyUrl = null;
-          _downloadingUrl = null;
-          _progress = 0;
-        });
+        setState(() => _busyUrl = null);
       }
     }
   }
@@ -437,6 +382,27 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.recognitionLabel == null ? 'Search' : 'Song identified'),
+        actions: [
+          AnimatedBuilder(
+            animation: DownloadQueueController.instance,
+            builder: (context, _) => IconButton(
+              key: const Key('download-queue-toggle'),
+              tooltip: DownloadQueueController.instance.queueMode ? 'Disable download queue' : 'Enable download queue',
+              onPressed: () =>
+                  DownloadQueueController.instance.setQueueMode(!DownloadQueueController.instance.queueMode),
+              icon: Badge(
+                isLabelVisible: DownloadQueueController.instance.pendingCount > 0,
+                label: Text('${DownloadQueueController.instance.pendingCount}'),
+                child: Icon(
+                  DownloadQueueController.instance.queueMode
+                      ? Icons.playlist_add_check_circle_rounded
+                      : Icons.playlist_add_rounded,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(34),
           child: Padding(
@@ -455,30 +421,63 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       body: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-              child: TextField(
-                key: const Key('youtube-search-field'),
-                controller: _controller,
-                autofocus: true,
-                textInputAction: TextInputAction.search,
-                onSubmitted: (_) => _submit(),
-                onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
-                decoration: InputDecoration(
-                  hintText: 'Search YouTube or paste a link',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: IconButton(
-                    onPressed: _loading ? null : _submit,
-                    tooltip: 'Search',
-                    icon: const Icon(Icons.arrow_forward_rounded),
+        child: AnimatedBuilder(
+          animation: DownloadQueueController.instance,
+          builder: (context, _) {
+            final queue = DownloadQueueController.instance;
+            final showQueue = queue.queueMode;
+            final search = Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+                  child: TextField(
+                    key: const Key('youtube-search-field'),
+                    controller: _controller,
+                    autofocus: true,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (_) => _submit(),
+                    onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
+                    decoration: InputDecoration(
+                      hintText: 'Search YouTube or paste a link',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      suffixIcon: IconButton(
+                        onPressed: _loading ? null : _submit,
+                        tooltip: 'Search',
+                        icon: const Icon(Icons.arrow_forward_rounded),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-            Expanded(child: _buildBody()),
-          ],
+                Expanded(child: _buildBody()),
+                if (Platform.isAndroid && showQueue)
+                  InkWell(
+                    onTap: () => showModalBottomSheet<void>(
+                      context: context,
+                      isScrollControlled: true,
+                      showDragHandle: true,
+                      builder: (_) => DraggableScrollableSheet(
+                        expand: false,
+                        initialChildSize: .55,
+                        minChildSize: .25,
+                        maxChildSize: .92,
+                        builder: (_, __) => DownloadQueuePanel(controller: queue),
+                      ),
+                    ),
+                    child: DownloadQueuePanel(controller: queue, compact: true),
+                  ),
+              ],
+            );
+            if (Platform.isWindows && showQueue) {
+              return Row(
+                children: [
+                  Expanded(child: search),
+                  VerticalDivider(width: 1, color: Theme.of(context).dividerColor),
+                  SizedBox(width: 330, child: DownloadQueuePanel(controller: queue)),
+                ],
+              );
+            }
+            return search;
+          },
         ),
       ),
     );
@@ -573,14 +572,30 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     separatorBuilder: (_, __) => const SizedBox(height: 10),
     itemBuilder: (_, index) {
       final track = tracks[index];
-      return _ResultCard(
+      final pending = DownloadQueueController.instance.pendingEntryFor(track.url, widget.playlistNumber);
+      final card = _ResultCard(
         track: track,
         busy: _busyUrl == track.url,
-        downloading: _downloadingUrl == track.url,
-        progress: _downloadingUrl == track.url ? _progress : 0,
+        queued: pending != null,
+        downloading: pending?.status == DownloadQueueStatus.downloading,
+        progress: pending?.progress ?? 0,
         onPlay: () => _play(track),
         onStream: () => _stream(track),
         onDownload: () => _download(track),
+      );
+      return TweenAnimationBuilder<double>(
+        key: ValueKey('result-${track.url}'),
+        duration: resonanceDuration(
+          context,
+          index < 8 ? resonanceMotion(context).contentTransition + Duration(milliseconds: index * 35) : Duration.zero,
+        ),
+        curve: resonanceMotion(context).emphasizedCurve,
+        tween: Tween(begin: 0, end: 1),
+        builder: (context, value, child) => Opacity(
+          opacity: value,
+          child: Transform.translate(offset: Offset(0, 14 * (1 - value)), child: child),
+        ),
+        child: card,
       );
     },
   );
@@ -589,6 +604,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
 class _ResultCard extends StatelessWidget {
   final YoutubeTrack track;
   final bool busy;
+  final bool queued;
   final bool downloading;
   final double progress;
   final VoidCallback onPlay;
@@ -598,6 +614,7 @@ class _ResultCard extends StatelessWidget {
   const _ResultCard({
     required this.track,
     required this.busy,
+    required this.queued,
     required this.downloading,
     required this.progress,
     required this.onPlay,
@@ -651,9 +668,21 @@ class _ResultCard extends StatelessWidget {
                       label: const Text('Stream'),
                     ),
                     OutlinedButton.icon(
-                      onPressed: busy ? null : onDownload,
-                      icon: const Icon(Icons.download_rounded),
-                      label: const Text('Download'),
+                      onPressed: busy || queued ? null : onDownload,
+                      icon: Icon(
+                        queued
+                            ? downloading
+                                  ? Icons.downloading_rounded
+                                  : Icons.schedule_rounded
+                            : Icons.download_rounded,
+                      ),
+                      label: Text(
+                        queued
+                            ? downloading
+                                  ? 'Downloading'
+                                  : 'Queued'
+                            : 'Download',
+                      ),
                     ),
                   ],
                 ),

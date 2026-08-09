@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:resonance/app/resonance_motion.dart';
 
 @immutable
 class ResonancePlatformTheme extends ThemeExtension<ResonancePlatformTheme> {
@@ -275,7 +276,10 @@ ThemeData buildResonanceTheme(
     canvasColor: appSurface,
     cardColor: appSurface,
     colorScheme: scheme,
-    extensions: [ResonancePlatformTheme(windowsNativeControls: windowsNativeControls)],
+    extensions: [
+      ResonancePlatformTheme(windowsNativeControls: windowsNativeControls),
+      const ResonanceMotionTheme(),
+    ],
     appBarTheme: AppBarTheme(
       backgroundColor: windowsNativeControls ? appSurface : appBackground,
       foregroundColor: textPrimary,

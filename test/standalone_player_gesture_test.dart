@@ -64,6 +64,34 @@ void main() {
 
     expect(nextCount, 1);
   });
+
+  testWidgets('peer mode accepts only the upward queue gesture', (tester) async {
+    var nextCount = 0;
+    var previousCount = 0;
+    var queueCount = 0;
+    var exitCount = 0;
+    await tester.pumpWidget(
+      _GestureHarness(
+        queueOnly: true,
+        onNext: () => nextCount++,
+        onPrevious: ({required restartCurrent}) => previousCount++,
+        onQueue: () => queueCount++,
+        onExit: () => exitCount++,
+      ),
+    );
+
+    final surface = find.byKey(const Key('gesture-test-surface'));
+    await tester.drag(surface, const Offset(-160, 0));
+    await tester.drag(surface, const Offset(160, 0));
+    await tester.drag(surface, const Offset(0, 160));
+    await tester.drag(surface, const Offset(0, -160));
+    await tester.pump();
+
+    expect(nextCount, 0);
+    expect(previousCount, 0);
+    expect(exitCount, 0);
+    expect(queueCount, 1);
+  });
 }
 
 class _GestureHarness extends StatelessWidget {
@@ -71,8 +99,15 @@ class _GestureHarness extends StatelessWidget {
   final void Function({required bool restartCurrent}) onPrevious;
   final VoidCallback onQueue;
   final VoidCallback onExit;
+  final bool queueOnly;
 
-  const _GestureHarness({required this.onNext, required this.onPrevious, required this.onQueue, required this.onExit});
+  const _GestureHarness({
+    required this.onNext,
+    required this.onPrevious,
+    required this.onQueue,
+    required this.onExit,
+    this.queueOnly = false,
+  });
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -83,6 +118,7 @@ class _GestureHarness extends StatelessWidget {
         onPrevious: onPrevious,
         onQueue: onQueue,
         onExit: onExit,
+        queueOnly: queueOnly,
         child: const SizedBox.expand(),
       ),
     ),

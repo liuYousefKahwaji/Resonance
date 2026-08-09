@@ -30,6 +30,7 @@ import 'package:resonance/screens/settings/equalizer_screen.dart';
 import 'package:resonance/services/companion/companion_client_service.dart';
 import 'package:resonance/services/companion/companion_server_service.dart';
 import 'package:resonance/services/scroll_effects_preferences.dart';
+import 'package:resonance/services/lyrics_display_preferences.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -521,6 +522,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ],
+                _Divider(),
+                ValueListenableBuilder<int>(
+                  valueListenable: LyricsDisplayPreferences.instance.framesPerSecond,
+                  builder: (context, framesPerSecond, _) => _SettingsTile(
+                    icon: Icons.speed_rounded,
+                    title: 'Lyrics Animation',
+                    subtitle: framesPerSecond == 120
+                        ? 'Smoothest highlight motion; uses more power'
+                        : 'Battery-friendly highlight motion',
+                    trailing: DropdownButtonHideUnderline(
+                      child: DropdownButton<int>(
+                        key: const Key('lyrics-animation-fps-setting'),
+                        value: framesPerSecond,
+                        onChanged: (value) {
+                          if (value != null) {
+                            unawaited(LyricsDisplayPreferences.instance.setFramesPerSecond(value));
+                          }
+                        },
+                        items: const [
+                          DropdownMenuItem(value: 30, child: Text('30 FPS')),
+                          DropdownMenuItem(value: 120, child: Text('120 FPS')),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
 

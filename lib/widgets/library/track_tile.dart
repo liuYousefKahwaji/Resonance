@@ -22,6 +22,7 @@ import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/app/theme.dart';
+import 'package:resonance/app/resonance_motion.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
@@ -608,8 +609,8 @@ class _TrackTileContent extends StatelessWidget {
         return Padding(
           padding: EdgeInsets.symmetric(horizontal: 12, vertical: windowsNative ? 2 : 3),
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
+            duration: resonanceDuration(context, resonanceMotion(context).stateChange),
+            curve: resonanceMotion(context).standardCurve,
             decoration: BoxDecoration(
               color: selected
                   ? primary.withValues(alpha: isDark ? 0.22 : 0.12)
@@ -645,6 +646,23 @@ class _TrackTileContent extends StatelessWidget {
                   padding: EdgeInsets.symmetric(horizontal: windowsNative ? 10 : 12, vertical: windowsNative ? 8 : 10),
                   child: Row(
                     children: [
+                      AnimatedContainer(
+                        duration: resonanceDuration(context, resonanceMotion(context).stateChange),
+                        curve: resonanceMotion(context).standardCurve,
+                        width: isCurrentTrack ? 3 : 0,
+                        height: isCurrentTrack ? 32 : 0,
+                        decoration: BoxDecoration(
+                          color: primary,
+                          borderRadius: BorderRadius.circular(99),
+                          boxShadow: isCurrentTrack
+                              ? [BoxShadow(color: primary.withValues(alpha: .42), blurRadius: 8)]
+                              : null,
+                        ),
+                      ),
+                      AnimatedContainer(
+                        duration: resonanceDuration(context, resonanceMotion(context).stateChange),
+                        width: isCurrentTrack ? 8 : 0,
+                      ),
                       // ── Drag handle / shuffle cue ─────────────
                       Padding(
                         padding: const EdgeInsets.only(right: 8),

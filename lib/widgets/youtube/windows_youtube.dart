@@ -20,6 +20,7 @@ import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/download_history_repository.dart';
+import 'package:resonance/services/download/youtube_download_gate.dart';
 import 'package:resonance/core/youtube/windows_process_output.dart';
 import 'package:resonance/services/youtube_stats_service.dart';
 
@@ -218,6 +219,24 @@ class MediaDownloader {
   ///   every await onTrackDownloaded() is properly awaited before the next.
 
   Future<void> downloadAudio({
+    required String url,
+
+    required Function(double percentage, String status) onProgress,
+
+    required Function(String filePath, String? youtubeVideoId) onTrackDownloaded,
+    String? historyTitle,
+    String? historyArtist,
+  }) => YoutubeDownloadGate.instance.run(
+    () => _downloadAudioUnlocked(
+      url: url,
+      onProgress: onProgress,
+      onTrackDownloaded: onTrackDownloaded,
+      historyTitle: historyTitle,
+      historyArtist: historyArtist,
+    ),
+  );
+
+  Future<void> _downloadAudioUnlocked({
     required String url,
 
     required Function(double percentage, String status) onProgress,

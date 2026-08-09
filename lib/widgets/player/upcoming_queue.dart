@@ -11,6 +11,7 @@ class UpcomingQueuePanel extends StatelessWidget {
   final ValueListenable<int> revision;
   final Future<PlaybackQueueSnapshot> Function() loadSnapshot;
   final Future<void> Function(PlaybackQueueEntry entry)? onPlay;
+  final Future<Uri?> Function(String trackId)? resolveArtwork;
   final VoidCallback? onClose;
   final bool compact;
 
@@ -21,6 +22,7 @@ class UpcomingQueuePanel extends StatelessWidget {
     required this.revision,
     required this.loadSnapshot,
     this.onPlay,
+    this.resolveArtwork,
     this.onClose,
     this.compact = false,
   });
@@ -40,6 +42,7 @@ class UpcomingQueuePanel extends StatelessWidget {
             loading: snapshot.connectionState != ConnectionState.done,
             error: snapshot.hasError ? snapshot.error : null,
             onPlay: onPlay,
+            resolveArtwork: resolveArtwork,
             onClose: onClose,
             compact: compact,
           ),
@@ -54,6 +57,7 @@ class _QueueSurface extends StatelessWidget {
   final bool loading;
   final Object? error;
   final Future<void> Function(PlaybackQueueEntry entry)? onPlay;
+  final Future<Uri?> Function(String trackId)? resolveArtwork;
   final VoidCallback? onClose;
   final bool compact;
 
@@ -62,6 +66,7 @@ class _QueueSurface extends StatelessWidget {
     required this.loading,
     required this.error,
     required this.onPlay,
+    required this.resolveArtwork,
     required this.onClose,
     required this.compact,
   });
@@ -138,7 +143,7 @@ class _QueueSurface extends StatelessWidget {
           else ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-              child: _QueueTrackTile(entry: queue.current!, current: true),
+              child: _QueueTrackTile(entry: queue.current!, current: true, resolveArtwork: resolveArtwork),
             ),
             if (queue.upcoming.isEmpty)
               Expanded(
@@ -167,6 +172,7 @@ class _QueueSurface extends StatelessWidget {
                       entry: entry,
                       position: index + 1,
                       onTap: onPlay == null ? null : () => onPlay!(entry),
+                      resolveArtwork: resolveArtwork,
                     );
                   },
                 ),
@@ -184,8 +190,9 @@ class _QueueTrackTile extends StatelessWidget {
   final int? position;
   final bool current;
   final VoidCallback? onTap;
+  final Future<Uri?> Function(String trackId)? resolveArtwork;
 
-  const _QueueTrackTile({required this.entry, this.position, this.current = false, this.onTap});
+  const _QueueTrackTile({required this.entry, this.position, this.current = false, this.onTap, this.resolveArtwork});
 
   @override
   Widget build(BuildContext context) {
@@ -201,7 +208,13 @@ class _QueueTrackTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           child: Row(
             children: [
-              _QueueArtwork(uri: entry.artworkUri, current: current),
+              _QueueArtwork(
+                key: ValueKey(entry.id),
+                trackId: entry.id,
+                uri: entry.artworkUri,
+                current: current,
+                resolveArtwork: resolveArtwork,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -245,11 +258,34 @@ class _QueueTrackTile extends StatelessWidget {
   }
 }
 
-class _QueueArtwork extends StatelessWidget {
+class _QueueArtwork extends StatefulWidget {
+  final String trackId;
   final Uri? uri;
   final bool current;
+  final Future<Uri?> Function(String trackId)? resolveArtwork;
 
-  const _QueueArtwork({required this.uri, required this.current});
+  const _QueueArtwork({
+    super.key,
+    required this.trackId,
+    required this.uri,
+    required this.current,
+    required this.resolveArtwork,
+  });
+
+  @override
+  State<_QueueArtwork> createState() => _QueueArtworkState();
+}
+
+class _QueueArtworkState extends State<_QueueArtwork> {
+  late Future<Uri?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = widget.uri != null
+        ? Future.value(widget.uri)
+        : (widget.resolveArtwork?.call(widget.trackId) ?? Future<Uri?>.value());
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -259,22 +295,32 @@ class _QueueArtwork extends StatelessWidget {
       child: Icon(Icons.music_note_rounded, size: 19, color: accent),
     );
 
-    final artwork = uri == null
-        ? fallback()
-        : uri!.scheme == 'file'
-        ? Image.file(File.fromUri(uri!), fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback())
-        : uri!.scheme == 'http' || uri!.scheme == 'https'
-        ? Image.network(uri.toString(), fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback())
-        : fallback();
     return Container(
-      width: current ? 44 : 38,
-      height: current ? 44 : 38,
+      width: widget.current ? 44 : 38,
+      height: widget.current ? 44 : 38,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(8),
-        border: current ? Border.all(color: accent.withValues(alpha: 0.55), width: 1.5) : null,
+        border: widget.current ? Border.all(color: accent.withValues(alpha: 0.55), width: 1.5) : null,
+        boxShadow: widget.current ? [BoxShadow(color: accent.withValues(alpha: .2), blurRadius: 10)] : null,
       ),
       clipBehavior: Clip.antiAlias,
-      child: artwork,
+      child: FutureBuilder<Uri?>(
+        future: _future,
+        builder: (context, snapshot) {
+          final uri = snapshot.data;
+          final artwork = uri == null
+              ? fallback()
+              : uri.scheme == 'file'
+              ? Image.file(File.fromUri(uri), fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback())
+              : uri.scheme == 'http' || uri.scheme == 'https'
+              ? Image.network(uri.toString(), fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback())
+              : fallback();
+          return AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            child: KeyedSubtree(key: ValueKey(uri?.toString() ?? 'fallback'), child: artwork),
+          );
+        },
+      ),
     );
   }
 }
