@@ -7,6 +7,7 @@ import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/playlist_transfer_codec.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/youtube_transfer_service.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
 
 class UnresolvedPlaylistTrack {
   final String localPath;
@@ -149,6 +150,7 @@ class PlaylistTransferExportService {
         match.selected = candidates.firstOrNull;
         if (candidates.isEmpty) match.error = 'No YouTube results found.';
       } catch (error) {
+        if (error is YoutubeFailure && error.isAccessFailure) rethrow;
         match.error = 'Search failed: $error';
       }
       matches.add(match);

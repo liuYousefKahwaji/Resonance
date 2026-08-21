@@ -37,6 +37,11 @@ migrate_working_dir/
 /release/*/*
 !/release/*/patchnotes.md
 
+# Local Codex session memory. Kept in the working copy for future sessions,
+# but not included in product commits or releases.
+/AGENTS.md
+/docs/
+
 # Symbolication related
 app.*.symbols
 

@@ -8,11 +8,23 @@ import 'package:metadata_god/metadata_god.dart';
 import 'package:path/path.dart' as p;
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 typedef YoutubeSuggestionSearch = Future<List<YoutubeTrack>> Function(String query);
+
+Future<List<YoutubeTrack>> _runSuggestionSearch(YoutubeSuggestionSearch search, String query, Duration timeout) async {
+  try {
+    return await search(query).timeout(timeout);
+  } on YoutubeFailure catch (failure) {
+    if (failure.isAccessFailure) rethrow;
+    return const [];
+  } catch (_) {
+    return const [];
+  }
+}
 
 @immutable
 class PlaylistProfileTrack {
@@ -579,7 +591,7 @@ class SuggestedMusicService {
       if (isCancelled?.call() ?? false) throw const SuggestedMusicCancelled();
       final batch = jobs.skip(offset).take(math.min(2, requestCount - offset)).toList(growable: false);
       final batchResults = await Future.wait([
-        for (final job in batch) search(job.query).timeout(searchTimeout).catchError((_) => const <YoutubeTrack>[]),
+        for (final job in batch) _runSuggestionSearch(search, job.query, searchTimeout),
       ]);
       for (var batchIndex = 0; batchIndex < batch.length; batchIndex++) {
         final job = batch[batchIndex];

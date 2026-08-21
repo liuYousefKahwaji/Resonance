@@ -45,8 +45,12 @@ import 'package:resonance/services/scroll_effects_preferences.dart';
 import 'package:resonance/services/lyrics_display_preferences.dart';
 import 'package:resonance/services/download/download_queue_controller.dart';
 import 'package:resonance/services/sync/sync_session_service.dart';
+import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
+import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:resonance/screens/sync/sync_screens.dart';
 import 'package:resonance/widgets/music_recognition/music_recognition_dialog.dart';
+import 'package:resonance/widgets/youtube/windows_youtube.dart';
+import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 
 // Desktop-only imports — guarded at runtime with Platform checks
 import 'package:resonance/platform/desktop/hotkey_service.dart'
@@ -87,8 +91,19 @@ Future<void> main() async {
   final session = await AudioSession.instance;
   await session.configure(AudioSessionConfiguration.music());
 
+  final youtubeAccessService = YoutubeAccessService();
+  await youtubeAccessService.initialize();
+  WindowsYtdlpRunner.instance.configure(youtubeAccessService);
+  youtubeAccessService.setWindowsTester(WindowsYtdlpRunner.instance.testAccess);
+  var youtubeSearchRevision = youtubeAccessService.revision;
+  youtubeAccessService.addListener(() {
+    if (youtubeAccessService.revision == youtubeSearchRevision) return;
+    youtubeSearchRevision = youtubeAccessService.revision;
+    MediaDownloader.clearSearchCache();
+  });
+
   final handler = await AudioService.init(
-    builder: () => PlayerHandler(),
+    builder: () => PlayerHandler(youtubeAccessService: youtubeAccessService),
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.resonance.audio',
       androidNotificationChannelName: 'Resonance Playback',
@@ -150,6 +165,7 @@ Future<void> main() async {
     MultiProvider(
       providers: [
         Provider<PlayerHandler>.value(value: handler),
+        ChangeNotifierProvider<YoutubeAccessService>.value(value: youtubeAccessService),
         ChangeNotifierProvider<DownloadQueueController>.value(value: DownloadQueueController.instance),
         ChangeNotifierProvider<SyncSessionService>.value(value: SyncSessionService.instance),
         ChangeNotifierProvider<ThemeProvider>.value(value: themeProvider),
@@ -280,12 +296,22 @@ class _MainAppState extends State<MainApp> {
   @override
   void initState() {
     super.initState();
+    widget.handler.youtubeFailureNotifier.addListener(_showPlaybackYoutubeFailure);
     _initIntro();
     _loadPlaylistFromDisk();
     if (Platform.isAndroid) unawaited(AndroidEntrypointService.initialize(_handleAndroidAction));
     if (_isDesktop) {
       _initDesktop();
     }
+  }
+
+  void _showPlaybackYoutubeFailure() {
+    final failure = widget.handler.youtubeFailureNotifier.value;
+    if (failure == null) return;
+    widget.handler.youtubeFailureNotifier.value = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(showYoutubeFailure(context, failure, sourceUrl: failure.sourceUrl));
+    });
   }
 
   Future<void> _initIntro() async {
@@ -328,6 +354,7 @@ class _MainAppState extends State<MainApp> {
 
   @override
   void dispose() {
+    widget.handler.youtubeFailureNotifier.removeListener(_showPlaybackYoutubeFailure);
     unawaited(_introPlayer?.dispose());
     _playlistScrollController.dispose();
     _desktopHandler?.dispose();

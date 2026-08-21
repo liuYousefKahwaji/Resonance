@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/services/playlist_qr_image_service.dart';
@@ -191,6 +193,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
       _currentDownloadIndex = 0;
       _downloadPercentage = 0;
     });
+    YoutubeFailure? accessFailure;
     for (var index = 0; index < ids.length; index++) {
       if (_stopRequested) {
         _cancelledDuringDownload = true;
@@ -218,10 +221,17 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
         _resolvedById[videoId] = result.localPath;
         _downloadedCount++;
       } catch (error) {
-        _downloadFailures[videoId] = error.toString();
+        _downloadFailures[videoId] = error is YoutubeFailure ? error.userMessage : error.toString();
+        if (error is YoutubeFailure && error.isAccessFailure) {
+          accessFailure = error;
+          break;
+        }
       }
     }
     if (!mounted) return;
+    if (accessFailure != null) {
+      unawaited(showYoutubeFailure(context, accessFailure));
+    }
     if (_downloadFailures.isNotEmpty || _cancelledDuringDownload) {
       setState(() => _stage = _ImportStage.failures);
     } else {

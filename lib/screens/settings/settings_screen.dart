@@ -31,6 +31,12 @@ import 'package:resonance/services/companion/companion_client_service.dart';
 import 'package:resonance/services/companion/companion_server_service.dart';
 import 'package:resonance/services/scroll_effects_preferences.dart';
 import 'package:resonance/services/lyrics_display_preferences.dart';
+import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
+import 'package:resonance/screens/settings/youtube_access_screen.dart';
+import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
+import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -282,6 +288,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             updatedArtist: metadata.artist?.trim().isNotEmpty == true ? metadata.artist!.trim() : 'Unknown Artist',
           );
           updated++;
+        } on YoutubeFailure catch (failure) {
+          if (failure.isAccessFailure) rethrow;
+          failed++;
         } catch (_) {
           failed++;
         }
@@ -293,9 +302,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Cover lookup failed: $e'), backgroundColor: Theme.of(context).colorScheme.error),
-        );
+        await showYoutubeFailure(context, e, actionLabel: 'Cover lookup failed');
       }
     } finally {
       if (mounted) {
@@ -310,28 +317,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<String?> _lookupFirstThumbnail(String query) async {
     if (Platform.isAndroid) {
       const channel = MethodChannel('resonance/android_youtube');
-      final raw = await channel.invokeMethod<String>('getFirstThumbnail', {'query': query});
-      final data = jsonDecode(raw ?? '{}') as Map<String, dynamic>;
-      return data['thumbnail'] as String?;
+      try {
+        final raw = await channel.invokeMethod<String>('getFirstThumbnail', {'query': query});
+        final data = jsonDecode(raw ?? '{}') as Map<String, dynamic>;
+        return data['thumbnail'] as String?;
+      } catch (error) {
+        final failure = YoutubeFailureClassifier.classify(
+          error,
+          authenticated: YoutubeAccessService.active?.isConfigured ?? false,
+        );
+        YoutubeAccessService.active?.observeFailure(failure);
+        throw failure;
+      }
     }
 
     if (Platform.isWindows) {
-      final binDir = p.join(p.dirname(Platform.resolvedExecutable), 'bin');
-      final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
-      final denoPath = p.join(binDir, 'deno.exe');
-      final process = await Process.start(ytDlpPath, [
-        '--js-runtimes',
-        'deno:$denoPath',
+      final result = await WindowsYtdlpRunner.instance.run([
         '--dump-single-json',
         '--skip-download',
         '--no-warnings',
         'ytsearch1:$query',
-      ]);
-      process.stderr.drain();
-      final output = await process.stdout.transform(utf8.decoder).join();
-      final exitCode = await process.exitCode;
-      if (exitCode != 0 || output.trim().isEmpty) return null;
-      final data = jsonDecode(output) as Map<String, dynamic>;
+      ], requireOutput: true);
+      final data = jsonDecode(result.stdout) as Map<String, dynamic>;
       final entries = data['entries'];
       final first = entries is List && entries.isNotEmpty && entries.first is Map
           ? Map<String, dynamic>.from(entries.first as Map)
@@ -718,6 +725,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         onTap: () => Navigator.push<void>(
                           context,
                           MaterialPageRoute<void>(builder: (_) => const CompanionScreen()),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
+
+            if (Platform.isAndroid || Platform.isWindows) ...[
+              _SectionHeader(label: 'YouTube Access'),
+              AnimatedBuilder(
+                animation: context.read<YoutubeAccessService>(),
+                builder: (context, _) {
+                  final access = context.read<YoutubeAccessService>();
+                  return _SettingsCard(
+                    children: [
+                      _SettingsTile(
+                        icon: access.isReady ? Icons.verified_user_rounded : Icons.shield_outlined,
+                        title: 'YouTube access',
+                        subtitle: access.settingsSubtitle,
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        onTap: () => Navigator.push<void>(
+                          context,
+                          MaterialPageRoute<void>(builder: (_) => const YoutubeAccessScreen()),
                         ),
                       ),
                     ],

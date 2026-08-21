@@ -21,6 +21,10 @@ import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 import 'package:metadata_god/metadata_god.dart';
+import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
+import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
 
 @immutable
 class PlaybackVisualState {
@@ -174,6 +178,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   final ValueNotifier<PlaybackVisualState> playbackVisualNotifier = ValueNotifier<PlaybackVisualState>(
     const PlaybackVisualState(),
   );
+  final ValueNotifier<YoutubeFailure?> youtubeFailureNotifier = ValueNotifier<YoutubeFailure?>(null);
   final ValueNotifier<TrackTransitionState> trackTransitionNotifier = ValueNotifier<TrackTransitionState>(
     const TrackTransitionState(),
   );
@@ -326,7 +331,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   // Session-scoped cache: YouTube URL → resolved CDN/HLS URL.
-  final Map<String, String> _streamUrlCache = {};
+  final Map<String, ResolvedYoutubeStream> _streamUrlCache = {};
   final _windowsStreamProxy = _WindowsStreamProxy();
   bool _windowsIsBuffering = false;
   bool _windowsIsCompleted = false;
@@ -335,7 +340,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Duration _windowsBufferedPosition = Duration.zero;
   DateTime _lastPlaybackBroadcast = DateTime.fromMillisecondsSinceEpoch(0);
 
-  PlayerHandler() {
+  PlayerHandler({YoutubeAccessService? youtubeAccessService}) : _youtubeAccessService = youtubeAccessService {
+    _youtubeAccessService?.addListener(_handleYoutubeAccessChanged);
     _playbackPreferenceStore = PlaybackPreferenceStore.load();
     _loudnessCacheFuture = LoudnessProfileCache.load();
     if (Platform.isWindows) {
@@ -355,6 +361,16 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (_isBackendPlaying) unawaited(saveCurrentPlaybackPosition());
     });
     unawaited(_initSavedState());
+  }
+
+  final YoutubeAccessService? _youtubeAccessService;
+  int _youtubeAccessRevision = 0;
+
+  void _handleYoutubeAccessChanged() {
+    final revision = _youtubeAccessService?.revision ?? 0;
+    if (revision == _youtubeAccessRevision) return;
+    _youtubeAccessRevision = revision;
+    _streamUrlCache.clear();
   }
 
   ({AudioPlayer player, AndroidLoudnessEnhancer loudnessEnhancer, AndroidEqualizer equalizer})
@@ -514,66 +530,79 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   // ─── Stream URL resolution ────────────────────────────────────────
-  Future<String> _resolveStreamUrl(String url) async {
-    if (_streamUrlCache.containsKey(url)) {
+  Future<ResolvedYoutubeStream> _resolveStream(String url) async {
+    final accessRevision = _youtubeAccessService?.revision ?? 0;
+    final cached = _streamUrlCache[url];
+    if (cached != null && cached.accessRevision == accessRevision) {
       debugPrint('[PlayerHandler] Stream URL cache hit for $url');
-      return _streamUrlCache[url]!;
+      return cached;
     }
 
     debugPrint('[PlayerHandler] Resolving stream URL for $url');
-    String resolved;
+    late ResolvedYoutubeStream resolved;
 
     if (Platform.isWindows) {
-      final binDir = p.join(p.dirname(Platform.resolvedExecutable), 'bin');
-      final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
-      final denoPath = p.join(binDir, 'deno.exe');
-
-      final process = await Process.start(ytDlpPath, [
-        '--js-runtimes',
-        'deno:$denoPath',
-        '--force-ipv4',
-        '--dump-single-json',
-        '--no-warnings',
-        '--no-playlist',
-        '--skip-download',
-        '--format',
-        'bestaudio[has_drm!=true]/best[has_drm!=true]',
-        url,
-      ]);
-      final stderr = StringBuffer();
-      process.stderr.transform(utf8.decoder).listen(stderr.write);
-      final output = await process.stdout.transform(utf8.decoder).join();
-      final exitCode = await process.exitCode;
-      if (exitCode != 0) {
-        throw Exception('yt-dlp failed: ${stderr.toString().trim()}');
-      }
-      final info = jsonDecode(output) as Map<String, dynamic>;
-      resolved = await _windowsStreamProxy.register(info);
+      final result = await WindowsYtdlpRunner.instance.run(
+        [
+          '--dump-single-json',
+          '--no-warnings',
+          '--no-playlist',
+          '--skip-download',
+          '--format',
+          'bestaudio[has_drm!=true]/best[has_drm!=true]',
+          url,
+        ],
+        sourceUrl: url,
+        requireOutput: true,
+      );
+      final info = jsonDecode(result.stdout) as Map<String, dynamic>;
+      final proxyUrl = await _windowsStreamProxy.register(info);
+      resolved = ResolvedYoutubeStream(uri: Uri.parse(proxyUrl), accessRevision: accessRevision);
     } else if (Platform.isAndroid) {
       const channel = MethodChannel('resonance/android_youtube');
-      final result = await channel.invokeMethod<String>('getStreamUrl', {'url': url});
-      if (result == null || result.isEmpty) {
-        throw Exception('Android bridge returned empty stream URL');
+      try {
+        final result = await channel.invokeMethod<Object?>('getStreamData', {'url': url});
+        if (result is! Map) throw StateError('Android bridge returned invalid stream data');
+        final data = Map<String, Object?>.from(result);
+        final streamUrl = data['url']?.toString();
+        if (streamUrl == null || streamUrl.isEmpty) throw StateError('Android bridge returned empty stream URL');
+        final rawHeaders = data['headers'];
+        final headers = rawHeaders is Map
+            ? rawHeaders.map((key, value) => MapEntry(key.toString(), value.toString()))
+            : const <String, String>{};
+        resolved = ResolvedYoutubeStream(
+          uri: Uri.parse(streamUrl),
+          headers: Map.unmodifiable(headers),
+          accessRevision: accessRevision,
+        );
+      } catch (error) {
+        final failure = YoutubeFailureClassifier.classify(
+          error,
+          authenticated: _youtubeAccessService?.isConfigured ?? false,
+          sourceUrl: url,
+        );
+        _youtubeAccessService?.observeFailure(failure);
+        throw failure;
       }
-      resolved = result;
     } else {
       throw UnsupportedError('Streaming not supported on this platform');
     }
 
-    if (resolved.isEmpty) throw Exception('Resolved stream URL is empty');
     if (!_streamUrlCache.containsKey(url) && _streamUrlCache.length >= 32) {
       _streamUrlCache.remove(_streamUrlCache.keys.first);
     }
     _streamUrlCache[url] = resolved;
-    debugPrint('[PlayerHandler] Resolved stream URL: ${resolved.substring(0, resolved.length.clamp(0, 80))}...');
+    debugPrint('[PlayerHandler] Resolved YouTube stream for access revision $accessRevision');
     return resolved;
   }
+
+  Future<String> _resolveStreamUrl(String url) async => (await _resolveStream(url)).uri.toString();
 
   Future<AudioSource> _buildAudioSource(String filePath) async {
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
     if (isStream) {
-      final resolvedUrl = await _resolveStreamUrl(filePath);
-      return AudioSource.uri(Uri.parse(resolvedUrl));
+      final resolved = await _resolveStream(filePath);
+      return AudioSource.uri(resolved.uri, headers: resolved.headers);
     } else {
       return AudioSource.uri(Uri.file(filePath));
     }
@@ -1963,6 +1992,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _retryLoadGeneration = null;
     }
     _activeTrackLoadGeneration = generation;
+    _lastTrackLoadFailure = null;
     try {
       await _loadTrackRequest(
         filePath,
@@ -1981,6 +2011,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       }
     }
   }
+
+  Object? _lastTrackLoadFailure;
 
   Future<void> _loadTrackRequest(
     String filePath,
@@ -2146,6 +2178,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       unawaited(_prepareLoudnessAnalysis(generation: myGen, filePath: filePath));
     } catch (e, st) {
       if (_loadGeneration == myGen) {
+        _lastTrackLoadFailure = e;
+        if (!standalone && e is YoutubeFailure && e.isAccessFailure) {
+          youtubeFailureNotifier.value = e;
+        }
         debugPrint('[PlayerHandler] Error loading track "$filePath": $e\n$st');
         _streamUrlCache.remove(filePath);
         if (standalone) setStandalonePresentation(false);
@@ -2220,6 +2256,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (!isStandaloneMode ||
         mediaItem.value?.id != url ||
         playbackState.value.processingState == AudioProcessingState.idle) {
+      final failure = _lastTrackLoadFailure;
+      if (failure != null) throw failure;
       throw StateError('The YouTube stream could not be loaded.');
     }
   }
@@ -2716,6 +2754,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    _youtubeAccessService?.removeListener(_handleYoutubeAccessChanged);
     WidgetsBinding.instance.removeObserver(this);
     _periodicPositionSaveTimer?.cancel();
     _playbackHealthTimer?.cancel();
@@ -2752,6 +2791,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     playbackModeRevision.dispose();
     standaloneModeNotifier.dispose();
     playbackVisualNotifier.dispose();
+    youtubeFailureNotifier.dispose();
     trackTransitionNotifier.dispose();
     uiVisibleNotifier.dispose();
   }
@@ -2776,20 +2816,23 @@ class _WindowsStreamProxy {
   HttpServer? _server;
   final _streams = <String, _WindowsStreamInfo>{};
   int _nextId = 0;
+  static const _maximumRegistrations = 64;
 
   Future<String> register(Map<String, dynamic> info) async {
     if (!Platform.isWindows) {
       return info['url'] as String? ?? '';
     }
 
-    final url = _pickPlayableUrl(info);
+    final selected = _pickPlayableFormat(info);
+    final url = selected?['url']?.toString();
     if (url == null || url.isEmpty) {
       throw Exception('yt-dlp returned no playable stream URL');
     }
 
     final server = await _ensureServer();
+    _pruneRegistrations();
     final id = (++_nextId).toString();
-    _streams[id] = _WindowsStreamInfo(url: url, headers: _readHeaders(info));
+    _streams[id] = _WindowsStreamInfo(url: url, headers: _readHeaders(selected!, info));
 
     return Uri(
       scheme: 'http',
@@ -2816,6 +2859,7 @@ class _WindowsStreamProxy {
       await request.response.close();
       return;
     }
+    stream.lastAccessedAt = DateTime.now();
 
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 20);
@@ -2856,20 +2900,20 @@ class _WindowsStreamProxy {
     }
   }
 
-  String? _pickPlayableUrl(Map<String, dynamic> info) {
+  Map<String, dynamic>? _pickPlayableFormat(Map<String, dynamic> info) {
     final direct = info['url'] as String?;
-    if (direct != null && direct.startsWith('http')) return direct;
+    if (direct != null && direct.startsWith('http')) return info;
 
     final requestedDownloads = info['requested_downloads'];
     if (requestedDownloads is List && requestedDownloads.isNotEmpty) {
       final first = requestedDownloads.first;
-      if (first is Map && first['url'] is String) return first['url'] as String;
+      if (first is Map && first['url'] is String) return Map<String, dynamic>.from(first);
     }
 
     final requestedFormats = info['requested_formats'];
     if (requestedFormats is List && requestedFormats.isNotEmpty) {
       for (final format in requestedFormats.reversed) {
-        if (format is Map && format['url'] is String) return format['url'] as String;
+        if (format is Map && format['url'] is String) return Map<String, dynamic>.from(format);
       }
     }
 
@@ -2877,7 +2921,7 @@ class _WindowsStreamProxy {
     if (formats is List && formats.isNotEmpty) {
       for (final format in formats.reversed) {
         if (format is Map && format['url'] is String && (format['acodec'] as String?) != 'none') {
-          return format['url'] as String;
+          return Map<String, dynamic>.from(format);
         }
       }
     }
@@ -2885,8 +2929,8 @@ class _WindowsStreamProxy {
     return null;
   }
 
-  Map<String, String> _readHeaders(Map<String, dynamic> info) {
-    final rawHeaders = info['http_headers'];
+  Map<String, String> _readHeaders(Map<String, dynamic> selected, Map<String, dynamic> info) {
+    final rawHeaders = selected['http_headers'] ?? info['http_headers'];
     final headers = <String, String>{};
     if (rawHeaders is Map) {
       for (final entry in rawHeaders.entries) {
@@ -2901,6 +2945,17 @@ class _WindowsStreamProxy {
     return headers;
   }
 
+  void _pruneRegistrations() {
+    final cutoff = DateTime.now().subtract(const Duration(hours: 2));
+    _streams.removeWhere((_, stream) => stream.lastAccessedAt.isBefore(cutoff));
+    while (_streams.length >= _maximumRegistrations) {
+      final oldest = _streams.entries.reduce(
+        (first, second) => first.value.lastAccessedAt.isBefore(second.value.lastAccessedAt) ? first : second,
+      );
+      _streams.remove(oldest.key);
+    }
+  }
+
   Future<void> dispose() async {
     await _server?.close(force: true);
     _server = null;
@@ -2911,5 +2966,6 @@ class _WindowsStreamProxy {
 class _WindowsStreamInfo {
   final String url;
   final Map<String, String> headers;
-  const _WindowsStreamInfo({required this.url, required this.headers});
+  DateTime lastAccessedAt;
+  _WindowsStreamInfo({required this.url, required this.headers}) : lastAccessedAt = DateTime.now();
 }

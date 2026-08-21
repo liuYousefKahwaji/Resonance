@@ -23,6 +23,9 @@ import 'package:resonance/services/download_history_repository.dart';
 import 'package:resonance/services/download/youtube_download_gate.dart';
 import 'package:resonance/core/youtube/windows_process_output.dart';
 import 'package:resonance/services/youtube_stats_service.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
+import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -35,6 +38,12 @@ class MediaDownloader {
   static final Map<String, ({DateTime storedAt, List<YoutubeTrack> tracks})> _searchCache = {};
   static final Map<String, Future<List<YoutubeTrack>>> _searchesInFlight = {};
   static final Set<Process> _backgroundSearchProcesses = {};
+  static final WindowsYtdlpRunner _runner = WindowsYtdlpRunner.instance;
+
+  static void clearSearchCache() {
+    _searchCache.clear();
+    _searchesInFlight.clear();
+  }
 
   Future<String> get binDirPath async {
     return p.join(p.dirname(Platform.resolvedExecutable), 'bin');
@@ -95,41 +104,22 @@ class MediaDownloader {
   }
 
   Future<List<YoutubeTrack>> _runSearch(String query, {required bool background}) async {
-    final binDir = await binDirPath;
+    final started = await _runner.start([
+      '--flat-playlist',
 
-    final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
+      '--dump-json',
 
-    final denoPath = p.join(binDir, 'deno.exe');
+      '--no-download',
 
-    final process = await Process.start(
-      ytDlpPath,
-      [
-        '--js-runtimes',
-        'deno:$denoPath',
-
-        '--force-ipv4',
-
-        ...windowsYtDlpUtf8Arguments,
-
-        '--flat-playlist',
-
-        '--dump-json',
-
-        '--no-download',
-
-        // Always fill the small cache with the complete result page. This
-        // lets a two-item type-ahead preview and the subsequent Enter key
-        // share one native process instead of paying Windows startup twice.
-        'ytsearch10:$query',
-      ],
-      environment: windowsYtDlpUtf8Environment,
-      includeParentEnvironment: true,
-    );
+      // Always fill the small cache with the complete result page. This
+      // lets a two-item type-ahead preview and the subsequent Enter key
+      // share one native process instead of paying Windows startup twice.
+      'ytsearch10:$query',
+    ]);
+    final process = started.process;
     if (background) _backgroundSearchProcesses.add(process);
 
-    // Drain stderr to prevent pipe deadlock
-
-    final stderrDone = process.stderr.drain<void>();
+    final stderrFuture = collectWindowsProcessOutput(process.stderr);
 
     // Collect all stdout lines then parse — avoids async-forEach gotcha
 
@@ -137,10 +127,17 @@ class MediaDownloader {
 
     final lines = const LineSplitter().convert(stdout);
 
-    await process.exitCode;
+    final exitCode = await process.exitCode;
     _backgroundSearchProcesses.remove(process);
 
-    await stderrDone;
+    final stderr = await stderrFuture;
+
+    if (exitCode != 0) {
+      throw _runner.failureForDiagnostics(
+        stderr.isEmpty ? 'yt-dlp exited with code $exitCode' : stderr,
+        authenticated: started.authenticated,
+      );
+    }
 
     final results = <YoutubeTrack>[];
 
@@ -160,31 +157,12 @@ class MediaDownloader {
   }
 
   Future<YoutubeTrack> lookup(String url) async {
-    final binDir = await binDirPath;
-    final process = await Process.start(
-      p.join(binDir, 'yt-dlp.exe'),
-      [
-        '--js-runtimes',
-        'deno:${p.join(binDir, 'deno.exe')}',
-        '--force-ipv4',
-        ...windowsYtDlpUtf8Arguments,
-        '--dump-single-json',
-        '--no-download',
-        '--no-playlist',
-        url,
-      ],
-      environment: windowsYtDlpUtf8Environment,
-      includeParentEnvironment: true,
+    final result = await _runner.run(
+      ['--dump-single-json', '--no-download', '--no-playlist', url],
+      sourceUrl: url,
+      requireOutput: true,
     );
-    final stderrFuture = collectWindowsProcessOutput(process.stderr);
-    final stdoutFuture = collectWindowsProcessOutput(process.stdout);
-    final exitCode = await process.exitCode;
-    final stdout = await stdoutFuture;
-    final stderr = await stderrFuture;
-    if (exitCode != 0 || stdout.trim().isEmpty) {
-      throw StateError(stderr.trim().isEmpty ? 'Could not read this link' : stderr.trim());
-    }
-    return YoutubeTrack.fromJson(jsonDecode(stdout) as Map<String, dynamic>);
+    return YoutubeTrack.fromJson(jsonDecode(result.stdout) as Map<String, dynamic>);
   }
 
   /// Search already supplies views. Fill omitted engagement fields through a
@@ -247,8 +225,6 @@ class MediaDownloader {
   }) async {
     final binDir = await binDirPath;
 
-    final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
-
     final ffmpegPath = p.join(binDir, 'ffmpeg.exe');
 
     final prefs = await SharedPreferences.getInstance();
@@ -286,66 +262,55 @@ class MediaDownloader {
       }
 
       try {
-        final process = await Process.start(
-          ytDlpPath,
-          [
-            '--ffmpeg-location',
-            ffmpegPath,
+        final started = await _runner.start([
+          '--ffmpeg-location',
+          ffmpegPath,
 
-            '--js-runtimes',
-            'deno:${p.join(binDir, 'deno.exe')}',
+          '--format',
+          'bestaudio[has_drm!=true]/best[has_drm!=true]',
 
-            '--force-ipv4',
+          '--concurrent-fragments',
+          '4',
 
-            ...windowsYtDlpUtf8Arguments,
+          '--windows-filenames',
+          '-x',
 
-            '--format',
-            'bestaudio[has_drm!=true]/best[has_drm!=true]',
+          '--audio-format',
+          'mp3',
 
-            '--concurrent-fragments',
-            '4',
+          '--embed-metadata',
 
-            '--windows-filenames',
-            '-x',
+          '--embed-thumbnail',
 
-            '--audio-format',
-            'mp3',
+          '--convert-thumbnails',
+          'jpg',
 
-            '--embed-metadata',
+          // --progress forces progress output even when stderr is not a TTY
+          // (i.e. when piped). Without this yt-dlp silently suppresses all
+          // [download] XX.X% lines, leaving the bar stuck at 0%.
+          '--progress',
 
-            '--embed-thumbnail',
+          '--newline',
 
-            '--convert-thumbnails',
-            'jpg',
+          '--no-colors',
 
-            // --progress forces progress output even when stderr is not a TTY
-            // (i.e. when piped). Without this yt-dlp silently suppresses all
-            // [download] XX.X% lines, leaving the bar stuck at 0%.
-            '--progress',
+          '--progress-delta',
+          '0.2',
 
-            '--newline',
+          '--progress-template',
+          'download:resonance_progress:%(progress._percent_str)s',
 
-            '--no-colors',
+          '--yes-playlist',
 
-            '--progress-delta',
-            '0.2',
+          '--print',
+          'after_move:%(filepath)s|%(id)s',
 
-            '--progress-template',
-            'download:resonance_progress:%(progress._percent_str)s',
+          '-o',
+          outputTemplate,
 
-            '--yes-playlist',
-
-            '--print',
-            'after_move:%(filepath)s|%(id)s',
-
-            '-o',
-            outputTemplate,
-
-            url,
-          ],
-          environment: windowsYtDlpUtf8Environment,
-          includeParentEnvironment: true,
-        );
+          url,
+        ]);
+        final process = started.process;
 
         final playlistItemRegex = RegExp(r'\[download\]\s+Downloading item\s+(\d+)\s+of\s+(\d+)');
         final alreadyDownloadedRegex = RegExp(r'\[download\]\s+(.+?)\s+has already been downloaded');
@@ -358,7 +323,8 @@ class MediaDownloader {
         void handleLine(String line) {
           final trimmed = line.trim();
           if (trimmed.isEmpty) return;
-          outputLines.add(trimmed);
+          outputLines.add(trimmed.length > 512 ? trimmed.substring(trimmed.length - 512) : trimmed);
+          if (outputLines.length > 128) outputLines.removeRange(0, outputLines.length - 128);
 
           final parsedProgress = parseWindowsYtDlpProgress(trimmed);
           if (trimmed.contains('resonance_progress:') && parsedProgress != null) {
@@ -473,7 +439,11 @@ class MediaDownloader {
         final exitCode = await exitCodeFuture;
 
         if (exitCode != 0) {
-          throw Exception('yt-dlp exited with code $exitCode');
+          throw _runner.failureForDiagnostics(
+            outputLines.isEmpty ? 'yt-dlp exited with code $exitCode' : outputLines.join('\n'),
+            authenticated: started.authenticated,
+            sourceUrl: url,
+          );
         }
 
         // The printed after_move path is authoritative and avoids scanning a
@@ -495,6 +465,8 @@ class MediaDownloader {
         return;
       } catch (e) {
         debugPrint('Download failure on attempt $attempt: $e');
+
+        if (e is YoutubeFailure && e.kind != YoutubeFailureKind.network) attempt = maxAttempts;
 
         if (attempt >= maxAttempts) {
           try {
@@ -645,10 +617,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     } catch (e) {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);
-
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Theme.of(context).colorScheme.error));
+        await showYoutubeFailure(context, e, sourceUrl: url, actionLabel: 'Download failed');
       }
     }
   }
@@ -700,30 +669,12 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
   Future<({String title, String artist, String? thumbnailUrl})> _fetchMetadata(String url) async {
     try {
-      final binDir = await _downloader.binDirPath;
-      final ytDlpPath = p.join(binDir, 'yt-dlp.exe');
-      final denoPath = p.join(binDir, 'deno.exe');
-
-      final process = await Process.start(
-        ytDlpPath,
-        [
-          '--js-runtimes',
-          'deno:$denoPath',
-          '--force-ipv4',
-          ...windowsYtDlpUtf8Arguments,
-          '--dump-json',
-          '--no-download',
-          url,
-        ],
-        environment: windowsYtDlpUtf8Environment,
-        includeParentEnvironment: true,
+      final result = await WindowsYtdlpRunner.instance.run(
+        ['--dump-json', '--no-download', url],
+        sourceUrl: url,
+        requireOutput: true,
       );
-
-      final stderrDone = process.stderr.drain<void>();
-      final stdout = await collectWindowsProcessOutput(process.stdout);
-      final lines = const LineSplitter().convert(stdout);
-      await process.exitCode;
-      await stderrDone;
+      final lines = const LineSplitter().convert(result.stdout);
 
       if (lines.isNotEmpty) {
         final json = jsonDecode(lines.first) as Map<String, dynamic>;
@@ -733,6 +684,8 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
           thumbnailUrl: json['thumbnail']?.toString(),
         );
       }
+    } on YoutubeFailure {
+      rethrow;
     } catch (_) {}
     final videoId = TrackSourceRepository.videoIdFromUrlOrId(url);
     return (
@@ -752,9 +705,15 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
       _statusMessage = 'Extracting Video Info...';
     });
 
-    final meta = await _fetchMetadata(url);
-    if (!mounted) return;
-    await _startStream(url, title: meta.title, artist: meta.artist, thumbnailUrl: meta.thumbnailUrl);
+    try {
+      final meta = await _fetchMetadata(url);
+      if (!mounted) return;
+      await _startStream(url, title: meta.title, artist: meta.artist, thumbnailUrl: meta.thumbnailUrl);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _mode = _DialogMode.input);
+      await showYoutubeFailure(context, error, sourceUrl: url, actionLabel: 'Could not read stream');
+    }
   }
 
   Future<void> _runSearch() async {
@@ -781,14 +740,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     } catch (e) {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Search failed: ${e.toString()}'),
-
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
+        await showYoutubeFailure(context, e, actionLabel: 'Search failed');
       }
     }
   }

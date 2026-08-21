@@ -1,4 +1,5 @@
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
 
 enum DownloadQueueStatus { queued, downloading, completed, failed }
 
@@ -11,6 +12,7 @@ class DownloadQueueEntry {
   final String statusText;
   final String? localPath;
   final String? error;
+  final YoutubeFailureKind? failureKind;
 
   const DownloadQueueEntry({
     required this.id,
@@ -21,6 +23,7 @@ class DownloadQueueEntry {
     this.statusText = 'Waiting',
     this.localPath,
     this.error,
+    this.failureKind,
   });
 
   DownloadQueueEntry copyWith({
@@ -29,6 +32,7 @@ class DownloadQueueEntry {
     String? statusText,
     String? localPath,
     String? error,
+    YoutubeFailureKind? failureKind,
   }) => DownloadQueueEntry(
     id: id,
     track: track,
@@ -38,5 +42,6 @@ class DownloadQueueEntry {
     statusText: statusText ?? this.statusText,
     localPath: localPath ?? this.localPath,
     error: error ?? this.error,
+    failureKind: failureKind ?? this.failureKind,
   );
 }

@@ -3,9 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
-import 'package:path/path.dart' as p;
+import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
 import 'package:resonance/models/external_playlist.dart';
 import 'package:resonance/services/track_source_repository.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
+import 'package:resonance/services/youtube/youtube_access_service.dart';
 
 typedef ExternalPlaylistTextFetcher = Future<String> Function(Uri uri);
 typedef YoutubePlaylistJsonFetcher = Future<String> Function(Uri uri);
@@ -499,7 +502,13 @@ Future<String> _fetchYoutubePlaylistJson(Uri uri) async {
     } on TimeoutException {
       throw const ExternalPlaylistException('YouTube took too long to read this playlist.');
     } on PlatformException catch (error) {
-      throw ExternalPlaylistException(error.message ?? 'YouTube could not read this playlist.');
+      final failure = YoutubeFailureClassifier.classify(
+        error,
+        authenticated: YoutubeAccessService.active?.isConfigured ?? false,
+        sourceUrl: uri.toString(),
+      );
+      YoutubeAccessService.active?.observeFailure(failure);
+      throw failure;
     }
   }
   if (Platform.isWindows) return _fetchWindowsYoutubePlaylistJson(uri);
@@ -507,47 +516,29 @@ Future<String> _fetchYoutubePlaylistJson(Uri uri) async {
 }
 
 Future<String> _fetchWindowsYoutubePlaylistJson(Uri uri) async {
-  final binDirectory = p.join(p.dirname(Platform.resolvedExecutable), 'bin');
-  final ytDlpPath = p.join(binDirectory, 'yt-dlp.exe');
-  final denoPath = p.join(binDirectory, 'deno.exe');
-  if (!await File(ytDlpPath).exists()) {
-    throw ExternalPlaylistException('Missing Windows downloader tool: $ytDlpPath');
-  }
-  if (!await File(denoPath).exists()) {
-    throw ExternalPlaylistException('Missing Windows JavaScript runtime: $denoPath');
-  }
-
-  final process = await Process.start(ytDlpPath, [
-    '--js-runtimes',
-    'deno:$denoPath',
-    '--force-ipv4',
-    '--flat-playlist',
-    '--dump-single-json',
-    '--skip-download',
-    '--yes-playlist',
-    '--playlist-end',
-    YoutubePlaylistProvider.maximumPlaylistEntries.toString(),
-    '--no-warnings',
-    uri.toString(),
-  ]);
-  final stdoutFuture = process.stdout.transform(utf8.decoder).join();
-  final stderrFuture = process.stderr.transform(utf8.decoder).join();
   try {
-    final values = await Future.wait<Object>([
-      stdoutFuture,
-      stderrFuture,
-      process.exitCode,
-    ]).timeout(const Duration(seconds: 60));
-    final stdout = values[0] as String;
-    final stderr = values[1] as String;
-    final exitCode = values[2] as int;
-    if (exitCode != 0 || stdout.trim().isEmpty) {
-      throw ExternalPlaylistException(stderr.trim().isEmpty ? 'YouTube could not read this playlist.' : stderr.trim());
-    }
-    return stdout;
+    final result = await WindowsYtdlpRunner.instance.run(
+      [
+        '--flat-playlist',
+        '--dump-single-json',
+        '--skip-download',
+        '--yes-playlist',
+        '--playlist-end',
+        YoutubePlaylistProvider.maximumPlaylistEntries.toString(),
+        '--no-warnings',
+        uri.toString(),
+      ],
+      timeout: const Duration(seconds: 60),
+      sourceUrl: uri.toString(),
+      requireOutput: true,
+    );
+    return result.stdout;
   } on TimeoutException {
-    process.kill();
     throw const ExternalPlaylistException('YouTube took too long to read this playlist.');
+  } on YoutubeFailure {
+    rethrow;
+  } catch (error) {
+    throw ExternalPlaylistException(error.toString());
   }
 }
 

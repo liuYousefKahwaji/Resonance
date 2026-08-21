@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:resonance/models/download_queue_entry.dart';
 import 'package:resonance/services/download/download_queue_controller.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/screens/settings/youtube_access_screen.dart';
 
 class DownloadQueuePanel extends StatelessWidget {
   final DownloadQueueController controller;
@@ -42,6 +44,12 @@ class DownloadQueuePanel extends StatelessWidget {
                     itemBuilder: (context, index) {
                       final entry = entries[index];
                       final failed = entry.status == DownloadQueueStatus.failed;
+                      final accessFailure =
+                          entry.failureKind == YoutubeFailureKind.verificationRequired ||
+                          entry.failureKind == YoutubeFailureKind.sessionRejected ||
+                          entry.failureKind == YoutubeFailureKind.browserProfileMissing ||
+                          entry.failureKind == YoutubeFailureKind.browserCookiesLocked ||
+                          entry.failureKind == YoutubeFailureKind.browserDecryptionFailed;
                       return ListTile(
                         leading: _statusIcon(entry.status),
                         title: Text(entry.track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -57,10 +65,26 @@ class DownloadQueuePanel extends StatelessWidget {
                           ],
                         ),
                         trailing: failed
-                            ? IconButton(
-                                tooltip: 'Retry',
-                                icon: const Icon(Icons.refresh_rounded),
-                                onPressed: () => controller.retry(entry.id),
+                            ? Wrap(
+                                spacing: 2,
+                                children: [
+                                  if (accessFailure)
+                                    IconButton(
+                                      tooltip: 'Fix access',
+                                      icon: const Icon(Icons.verified_user_outlined),
+                                      onPressed: () => Navigator.push<void>(
+                                        context,
+                                        MaterialPageRoute<void>(
+                                          builder: (_) => YoutubeAccessScreen(sourceUrl: entry.track.url),
+                                        ),
+                                      ),
+                                    ),
+                                  IconButton(
+                                    tooltip: 'Retry',
+                                    icon: const Icon(Icons.refresh_rounded),
+                                    onPressed: () => controller.retry(entry.id),
+                                  ),
+                                ],
                               )
                             : null,
                       );

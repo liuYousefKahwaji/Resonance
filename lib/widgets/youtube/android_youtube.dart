@@ -29,19 +29,42 @@ import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/core/youtube/android_download_event.dart';
 import 'package:resonance/services/download_history_repository.dart';
 import 'package:resonance/services/download/youtube_download_gate.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
+import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 
 class AndroidYoutubeDownloader {
   static const _method = MethodChannel('resonance/android_youtube');
   static const _event = EventChannel('resonance/android_youtube/events');
 
+  static YoutubeFailure _failure(Object error, {String? sourceUrl}) {
+    final service = YoutubeAccessService.active;
+    final failure = YoutubeFailureClassifier.classify(
+      error,
+      authenticated: service?.isConfigured ?? false,
+      sourceUrl: sourceUrl,
+    );
+    service?.observeFailure(failure);
+    return failure;
+  }
+
+  static Future<T?> _invoke<T>(String method, Map<String, Object?> arguments, {String? sourceUrl}) async {
+    try {
+      return await _method.invokeMethod<T>(method, arguments);
+    } catch (error) {
+      throw _failure(error, sourceUrl: sourceUrl);
+    }
+  }
+
   Future<List<YoutubeTrack>> search(String query, {int limit = 10}) async {
-    final raw = await _method.invokeMethod<String>('search', {'query': query, 'limit': limit.clamp(1, 10)});
+    final raw = await _invoke<String>('search', {'query': query, 'limit': limit.clamp(1, 10)});
     final decoded = jsonDecode(raw ?? '[]') as List;
     return decoded.map((e) => YoutubeTrack.fromJson(Map<String, dynamic>.from(e as Map))).toList();
   }
 
   Future<YoutubeTrack> lookup(String url) async {
-    final raw = await _method.invokeMethod<String>('getMetadata', {'url': url});
+    final raw = await _invoke<String>('getMetadata', {'url': url}, sourceUrl: url);
     if (raw == null || raw.isEmpty) throw StateError('Could not read this link');
     final data = Map<String, dynamic>.from(jsonDecode(raw) as Map);
     data['url'] ??= url;
@@ -112,7 +135,7 @@ class AndroidYoutubeDownloader {
             if (pendingTracks.isNotEmpty) {
               done.complete();
             } else {
-              done.completeError(Exception(event.substring('error:'.length)));
+              done.completeError(_failure(event.substring('error:'.length), sourceUrl: url));
             }
           }
         }
@@ -320,9 +343,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     } catch (error) {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Download failed: $error'), backgroundColor: Theme.of(context).colorScheme.error),
-        );
+        await showYoutubeFailure(context, error, sourceUrl: url, actionLabel: 'Download failed');
       }
     }
   }
@@ -383,19 +404,24 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     String? thumbnailUrl;
 
     try {
-      const channel = MethodChannel('resonance/android_youtube');
-      final raw = await channel.invokeMethod<String>('getMetadata', {'url': url});
-      final data = jsonDecode(raw ?? '{}') as Map<String, dynamic>;
-      title = (data['title'] as String?)?.trim().isNotEmpty == true ? data['title'] as String : _titleFromUrl(url);
-      artist = (data['artist'] as String?)?.trim().isNotEmpty == true ? data['artist'] as String : 'YouTube';
-      thumbnailUrl = data['thumbnail']?.toString();
-    } catch (_) {
-      title = _titleFromUrl(url);
-      artist = 'YouTube';
-    }
+      try {
+        final track = await _downloader.lookup(url);
+        title = track.title.trim().isNotEmpty ? track.title : _titleFromUrl(url);
+        artist = track.artist.trim().isNotEmpty ? track.artist : 'YouTube';
+        thumbnailUrl = track.thumbnailUrl;
+      } catch (error) {
+        if (error is YoutubeFailure && error.isAccessFailure) rethrow;
+        title = _titleFromUrl(url);
+        artist = 'YouTube';
+      }
 
-    if (!mounted) return;
-    await _startStream(url, title: title, artist: artist, thumbnailUrl: thumbnailUrl);
+      if (!mounted) return;
+      await _startStream(url, title: title, artist: artist, thumbnailUrl: thumbnailUrl);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _mode = _DialogMode.input);
+      await showYoutubeFailure(context, error, sourceUrl: url, actionLabel: 'Could not read stream');
+    }
   }
 
   String _titleFromUrl(String url) {
@@ -429,9 +455,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     } catch (e) {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Search failed: $e'), backgroundColor: Theme.of(context).colorScheme.error),
-        );
+        await showYoutubeFailure(context, e, actionLabel: 'Search failed');
       }
     }
   }

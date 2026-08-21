@@ -10,6 +10,9 @@ import 'package:resonance/services/lyrics_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/widgets/youtube/android_youtube.dart';
 import 'package:resonance/widgets/youtube/windows_youtube.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
+import 'package:resonance/services/youtube/youtube_access_service.dart';
 
 typedef DownloadTaskRunner =
     Future<String?> Function(DownloadQueueEntry entry, void Function(double progress, String status) onProgress);
@@ -121,12 +124,21 @@ class DownloadQueueController extends ChangeNotifier {
           _completions.remove(entry.id)?.complete(path);
         } catch (error, stackTrace) {
           debugPrint('Queued download failed: $error\n$stackTrace');
+          final failure = error is YoutubeFailure
+              ? error
+              : YoutubeFailureClassifier.classify(
+                  error,
+                  authenticated: YoutubeAccessService.active?.isConfigured ?? false,
+                  sourceUrl: entry.track.url,
+                );
+          YoutubeAccessService.active?.observeFailure(failure);
           final liveIndex = _entries.indexWhere((candidate) => candidate.id == entry.id);
           if (liveIndex >= 0) {
             _entries[liveIndex] = _entries[liveIndex].copyWith(
               status: DownloadQueueStatus.failed,
-              statusText: 'Failed',
-              error: error.toString().replaceFirst('Exception: ', ''),
+              statusText: failure.isAccessFailure ? 'Verification required' : 'Failed',
+              error: failure.userMessage,
+              failureKind: failure.kind,
             );
           }
           _completions.remove(entry.id)?.completeError(error, stackTrace);

@@ -31,6 +31,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONObject
 
 class MainActivity : AudioServiceFragmentActivity() {
 
@@ -119,6 +120,17 @@ class MainActivity : AudioServiceFragmentActivity() {
 
         val py     = Python.getInstance()
         val bridge = py.getModule("ytdlp_bridge")
+        val youtubeCookieStore = YoutubeCookieStore(applicationContext)
+        YoutubeAccessBridge(this, youtubeCookieStore, bridge).register(flutterEngine)
+
+        fun <T> withYoutubeCookieCopy(operation: (String?) -> T): T {
+            val workingCopy = youtubeCookieStore.createWorkingCopy()
+            return try {
+                operation(workingCopy?.absolutePath)
+            } finally {
+                workingCopy?.delete()
+            }
+        }
 
         // ── EventChannel ─────────────────────────────────────────────────────
         var activeSink: EventChannel.EventSink? = null
@@ -147,7 +159,9 @@ class MainActivity : AudioServiceFragmentActivity() {
                         val limit = (call.argument<Int>("limit") ?: 10).coerceIn(1, 10)
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                val json = bridge.callAttr("search", query, limit).toString()
+                                val json = withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr("search", query, limit, cookiePath).toString()
+                                }
                                 withContext(Dispatchers.Main) { result.success(json) }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
@@ -162,7 +176,9 @@ class MainActivity : AudioServiceFragmentActivity() {
                         val url = call.argument<String>("url") ?: ""
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                val json = bridge.callAttr("get_metadata", url).toString()
+                                val json = withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr("get_metadata", url, cookiePath).toString()
+                                }
                                 withContext(Dispatchers.Main) { result.success(json) }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
@@ -177,7 +193,9 @@ class MainActivity : AudioServiceFragmentActivity() {
                         val url = call.argument<String>("url") ?: ""
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                val json = bridge.callAttr("get_playlist_metadata", url).toString()
+                                val json = withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr("get_playlist_metadata", url, cookiePath).toString()
+                                }
                                 withContext(Dispatchers.Main) { result.success(json) }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
@@ -192,7 +210,9 @@ class MainActivity : AudioServiceFragmentActivity() {
                         val query = call.argument<String>("query") ?: ""
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                val json = bridge.callAttr("get_first_thumbnail", query).toString()
+                                val json = withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr("get_first_thumbnail", query, cookiePath).toString()
+                                }
                                 withContext(Dispatchers.Main) { result.success(json) }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
@@ -218,12 +238,15 @@ class MainActivity : AudioServiceFragmentActivity() {
 
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                bridge.callAttr(
-                                    "download",
-                                    url,
-                                    outputDir,
-                                    KotlinEventSink(sinkProvider, pendingEvents),
-                                )
+                                withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr(
+                                        "download",
+                                        url,
+                                        outputDir,
+                                        KotlinEventSink(sinkProvider, pendingEvents),
+                                        cookiePath,
+                                    )
+                                }
                             } catch (e: Exception) {
                                 Handler(Looper.getMainLooper()).post {
                                     val message = "error:${e.message}"
@@ -238,13 +261,23 @@ class MainActivity : AudioServiceFragmentActivity() {
                         }
                     }
 
-                    // ── getStreamUrl ──────────────────────────────────────────
-                    "getStreamUrl" -> {
+                    // ── getStreamData ─────────────────────────────────────────
+                    "getStreamData" -> {
                         val url = call.argument<String>("url") ?: ""
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                val streamUrl = bridge.callAttr("get_stream_url", url).toString()
-                                withContext(Dispatchers.Main) { result.success(streamUrl) }
+                                val json = withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr("get_stream_data", url, cookiePath).toString()
+                                }
+                                val payload = JSONObject(json)
+                                val headerObject = payload.optJSONObject("headers") ?: JSONObject()
+                                val headers = mutableMapOf<String, String>()
+                                headerObject.keys().forEach { key -> headers[key] = headerObject.optString(key) }
+                                val streamData = mapOf(
+                                    "url" to payload.getString("url"),
+                                    "headers" to headers,
+                                )
+                                withContext(Dispatchers.Main) { result.success(streamData) }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     result.error("STREAM_ERROR", e.message, null)

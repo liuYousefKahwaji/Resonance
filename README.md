@@ -63,6 +63,15 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 - Unicode titles and artists are preserved across Android search and download events.
 - Uses bundled tools: yt-dlp, FFmpeg, and Deno on Windows; embedded Python/yt-dlp with Android-safe conversion on Android.
 
+#### YouTube verification and cookies
+
+YouTube sometimes blocks an IP address until a signed-in session is supplied. If Resonance shows **YouTube verification required**, open **Settings → YouTube Access**:
+
+- On Windows, connect the browser where YouTube is signed in. Resonance asks yt-dlp to read that browser session locally each time; it stores only the browser choice and never creates a Windows cookie file.
+- On Android, follow the in-app Firefox guide. Disable Firefox's **Open links in apps**, install the third-party [cookies.txt add-on](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/), sign in from one private tab, confirm your profile avatar is visible, open and reload `https://www.youtube.com/robots.txt` in that tab, and choose **Current Site → Download**. Import that file into Resonance, close the private tabs, and delete the original export from Downloads. Resonance rejects exports which contain only logged-out YouTube cookies.
+
+Treat `cookies.txt` like a password. Do not export **ALL** sites. Resonance validates the import and keeps its copy in Android's private no-backup storage, but automated requests can still cause YouTube to restrict an account; use access only when required, avoid large batches, and consider a separate account.
+
 ### Playlist transfer
 
 - Move playlists between Windows and Android with one or more QR codes—no account, server, cloud storage, or background sync.
@@ -117,10 +126,10 @@ Windows playback includes fixes for local tracks that could previously stall ind
 
 ## Download
 
-The latest stable release is **v2.7.0**:
+The latest stable release is **v3.0.0**:
 
-- [Android APK](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.7.0/Resonance-Android-v2.7.0.apk) — Android 7.0 (API 24) or newer.
-- [Windows x64 package](https://github.com/liuYousefKahwaji/Resonance/releases/download/2.7.0/Resonance-Windows-v2.7.0.rar) — extract the entire archive, then run `resonance.exe`.
+- [Android APK](https://github.com/liuYousefKahwaji/Resonance/releases/download/3.0.0/Resonance-Android-v3.0.0.apk) — Android 7.0 (API 24) or newer.
+- [Windows x64 package](https://github.com/liuYousefKahwaji/Resonance/releases/download/3.0.0/Resonance-Windows-v3.0.0.zip) — extract the entire archive, then run `resonance.exe`.
 
 All versions and their notes are on the [Releases page](https://github.com/liuYousefKahwaji/Resonance/releases). Keep the Windows package together after extraction; its `bin` folder contains the tools used for YouTube features.
 
@@ -189,6 +198,7 @@ The table condenses every published changelog; each version links to its full re
 
 | Release | What changed |
 | --- | --- |
+| [v3.0.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/3.0.0) | Cross-platform YouTube Access with Windows browser-session connection and Android Firefox cookies.txt import; signed-in session validation, private cookie storage, sanitized diagnostics, and Android-safe cookie-free fallback for current yt-dlp JavaScript challenges; updated nightly reliability fixes and release packaging. |
 | [v2.7.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.7.0) | Quartz and Aurum themes; distinct full-style Obsidian; animated gradients and fixed overflowing titles; reliable end-of-playlist metadata edits; persistent Global/Per-track Custom EQ curves; bounded Android widget expansion. |
 | [v2.6.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.6.0) | Compact, standard, and expanded Android playback widgets with synchronized controls; updated playback-settings flow and vinyl presentation; reliable background Discord Companion shortcuts that preserve application focus. |
 | [v2.5.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.5.0) | Cross-platform five-band equalizer and presets; cached local-track volume normalization; equalizer-aware playback scopes and Companion controls; Pocket Vinyl; Windows stalled-track playback fix. |

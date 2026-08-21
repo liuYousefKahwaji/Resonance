@@ -31,6 +31,13 @@
     <!-- Keep CPU alive when screen is off during background playback -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <queries>
+        <package android:name="org.mozilla.firefox" />
+        <package android:name="org.mozilla.firefox_beta" />
+        <package android:name="org.mozilla.fenix" />
+        <package android:name="com.google.android.youtube" />
+    </queries>
+
     <application
         android:label="Resonance"
         android:name="${applicationName}"

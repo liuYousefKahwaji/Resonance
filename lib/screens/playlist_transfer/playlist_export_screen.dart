@@ -6,6 +6,8 @@ import 'package:resonance/services/playlist_qr_image_service.dart';
 import 'package:resonance/services/playlist_transfer_codec.dart';
 import 'package:resonance/services/playlist_transfer_export_service.dart';
 import 'package:resonance/services/youtube_transfer_service.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 
 class PlaylistSourceResolutionScreen extends StatefulWidget {
   final PlaylistSourceScan scan;
@@ -71,9 +73,12 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
     } catch (error) {
       if (mounted) {
         setState(() {
-          _error = 'Source matching failed: $error';
+          _error = error is YoutubeFailure ? error.userMessage : 'Source matching failed: $error';
           _matching = false;
         });
+        if (error is YoutubeFailure && error.isAccessFailure) {
+          unawaited(showYoutubeFailure(context, error));
+        }
       }
     }
   }
@@ -370,7 +375,12 @@ class _SourceMatchEditorDialogState extends State<_SourceMatchEditorDialog> {
       final results = await widget.youtube.search(query);
       if (mounted) setState(() => _results = results);
     } catch (error) {
-      if (mounted) setState(() => _error = 'Search failed: $error');
+      if (mounted) {
+        setState(() => _error = error is YoutubeFailure ? error.userMessage : 'Search failed: $error');
+        if (error is YoutubeFailure && error.isAccessFailure) {
+          unawaited(showYoutubeFailure(context, error));
+        }
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }

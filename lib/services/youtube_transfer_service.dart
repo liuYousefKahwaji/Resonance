@@ -8,6 +8,7 @@ import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/widgets/youtube/android_youtube.dart' as android_youtube;
 import 'package:resonance/widgets/youtube/windows_youtube.dart' as windows_youtube;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
 
 class YoutubeSearchCandidate {
   final String title;
@@ -126,6 +127,8 @@ class YoutubeTransferService {
           final metadata = await downloader.lookup(url);
           resolvedTitle ??= _nonEmpty(metadata.title);
           resolvedArtist ??= _nonEmpty(metadata.artist);
+        } on YoutubeFailure catch (failure) {
+          if (failure.isAccessFailure) rethrow;
         } catch (_) {
           // Metadata improves download history, but must not make the actual
           // transfer fail when yt-dlp can still download the source.

@@ -26,6 +26,7 @@ class FakeYoutubeDL:
 
     def __init__(self, options):
         self.options = options
+        self.cookiejar = FakeCookieJar()
         self.calls.append(options)
 
     def __enter__(self):
@@ -36,6 +37,13 @@ class FakeYoutubeDL:
 
     def extract_info(self, target, download=False):
         return type(self).responder(self, target, download)
+
+
+class FakeCookieJar:
+    header = None
+
+    def get_cookie_header(self, _url):
+        return type(self).header
 
 
 fake_yt_dlp = types.ModuleType("yt_dlp")
@@ -57,8 +65,9 @@ class EventSink:
 class AndroidYtdlpBridgeTests(unittest.TestCase):
     def setUp(self):
         FakeYoutubeDL.calls = []
+        FakeCookieJar.header = None
 
-    def test_stream_uses_yt_dlp_defaults_before_android_fallback(self):
+    def test_stream_uses_yt_dlp_defaults_before_android_vr_fallback(self):
         def respond(ydl, _target, _download):
             if "extractor_args" not in ydl.options:
                 raise RuntimeError("No video formats found; use --list-formats")
@@ -71,13 +80,85 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         )
         self.assertNotIn("extractor_args", FakeYoutubeDL.calls[0])
         clients = FakeYoutubeDL.calls[1]["extractor_args"]["youtube"]["player_client"]
-        self.assertEqual(clients, ["android_vr", "web_embedded"])
+        self.assertEqual(clients, ["android_vr"])
+
+    def test_android_vr_fallback_omits_cookies_instead_of_being_skipped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_file = os.path.join(directory, "cookies.txt")
+            Path(cookie_file).write_text(
+                "# Netscape HTTP Cookie File\n", encoding="utf-8"
+            )
+
+            def respond(ydl, _target, _download):
+                clients = (
+                    ydl.options.get("extractor_args", {})
+                    .get("youtube", {})
+                    .get("player_client", [])
+                )
+                if clients == ["android_vr"]:
+                    return {"url": "https://cdn.example/combined.mp4"}
+                raise RuntimeError("Signature solving failed; only images are available")
+
+            FakeYoutubeDL.responder = respond
+            result = bridge.get_stream_url(
+                "https://youtu.be/UWt4fIDMJ00", cookie_file
+            )
+
+            self.assertEqual(result, "https://cdn.example/combined.mp4")
+            self.assertEqual(FakeYoutubeDL.calls[0]["cookiefile"], cookie_file)
+            self.assertNotIn("cookiefile", FakeYoutubeDL.calls[1])
+            self.assertEqual(
+                FakeYoutubeDL.calls[1]["extractor_args"]["youtube"]["player_client"],
+                ["android_vr"],
+            )
+
+    def test_web_embedded_remains_last_cookie_capable_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_file = os.path.join(directory, "cookies.txt")
+            Path(cookie_file).write_text(
+                "# Netscape HTTP Cookie File\n", encoding="utf-8"
+            )
+
+            def respond(ydl, _target, _download):
+                clients = (
+                    ydl.options.get("extractor_args", {})
+                    .get("youtube", {})
+                    .get("player_client", [])
+                )
+                if clients == ["web_embedded"]:
+                    return {"url": "https://cdn.example/embedded.m4a"}
+                raise RuntimeError("No playable formats")
+
+            FakeYoutubeDL.responder = respond
+            result = bridge.get_stream_url("https://youtu.be/test", cookie_file)
+
+            self.assertEqual(result, "https://cdn.example/embedded.m4a")
+            self.assertEqual(len(FakeYoutubeDL.calls), 3)
+            self.assertEqual(FakeYoutubeDL.calls[2]["cookiefile"], cookie_file)
+            self.assertEqual(
+                FakeYoutubeDL.calls[2]["extractor_args"]["youtube"]["player_client"],
+                ["web_embedded"],
+            )
 
     def test_stream_accepts_hls_and_does_not_filter_protocols(self):
         FakeYoutubeDL.responder = lambda *_: {"url": "https://cdn.example/audio.m3u8"}
         self.assertTrue(bridge.get_stream_url("https://youtu.be/test").endswith(".m3u8"))
         self.assertEqual(len(FakeYoutubeDL.calls), 1)
         self.assertNotIn("protocol^=http", FakeYoutubeDL.calls[0]["format"])
+
+    def test_stream_data_returns_selected_headers_and_url_scoped_cookie(self):
+        FakeCookieJar.header = "scoped=fake"
+        FakeYoutubeDL.responder = lambda *_: {
+            "requested_downloads": [{
+                "url": "https://cdn.example/audio.m4a",
+                "http_headers": {"User-Agent": "fake-agent", "Referer": "https://www.youtube.com/"},
+            }],
+            "http_headers": {"User-Agent": "wrong"},
+        }
+        result = json.loads(bridge.get_stream_data("https://youtu.be/test"))
+        self.assertEqual(result["url"], "https://cdn.example/audio.m4a")
+        self.assertEqual(result["headers"]["User-Agent"], "fake-agent")
+        self.assertEqual(result["headers"]["Cookie"], "scoped=fake")
 
     def test_search_uses_default_clients_and_returns_json(self):
         FakeYoutubeDL.responder = lambda *_: {
@@ -93,6 +174,72 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         result = json.loads(bridge.search("me at the zoo"))
         self.assertEqual(result[0]["title"], "Me at the zoo")
         self.assertNotIn("extractor_args", FakeYoutubeDL.calls[0])
+
+    def test_cookie_file_is_optional_and_propagates_to_all_operations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_file = os.path.join(directory, "cookies.txt")
+            Path(cookie_file).write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+
+            FakeYoutubeDL.responder = lambda ydl, target, download: (
+                {"entries": [{"id": "jNQXAC9IVRw", "url": "https://cdn.example/a", "thumbnail": "https://img.example/a"}]}
+                if target.startswith("ytsearch")
+                else {"id": "jNQXAC9IVRw", "title": "Track", "url": "https://cdn.example/a", "entries": [{"id": "jNQXAC9IVRw"}]}
+            )
+
+            bridge.search("test", 1, cookie_file)
+            bridge.get_metadata("https://youtu.be/test", cookie_file)
+            bridge.get_playlist_metadata("https://youtube.com/playlist?list=test", cookie_file)
+            bridge.get_first_thumbnail("test", cookie_file)
+            bridge.get_stream_data("https://youtu.be/test", cookie_file)
+            bridge.test_access("https://youtu.be/test", cookie_file)
+
+            self.assertGreaterEqual(len(FakeYoutubeDL.calls), 6)
+            self.assertTrue(all(call.get("cookiefile") == cookie_file for call in FakeYoutubeDL.calls))
+
+            FakeYoutubeDL.calls = []
+            bridge.search("anonymous", 1)
+            self.assertNotIn("cookiefile", FakeYoutubeDL.calls[0])
+
+    def test_access_probe_uses_a_live_search_result_video_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_file = os.path.join(directory, "cookies.txt")
+            Path(cookie_file).write_text(
+                "# Netscape HTTP Cookie File\n", encoding="utf-8"
+            )
+            FakeYoutubeDL.responder = lambda *_: {
+                "id": "YouTube music",
+                "entries": [{"id": "jNQXAC9IVRw"}],
+            }
+
+            result = json.loads(
+                bridge.test_access("ytsearch1:YouTube music", cookie_file)
+            )
+
+            self.assertEqual(result, {"ok": True, "id": "jNQXAC9IVRw"})
+            self.assertEqual(FakeYoutubeDL.calls[0]["cookiefile"], cookie_file)
+
+    def test_stream_preserves_the_underlying_verification_error(self):
+        FakeYoutubeDL.responder = lambda *_: (_ for _ in ()).throw(
+            RuntimeError("Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies")
+        )
+        with self.assertRaisesRegex(RuntimeError, "Sign in to confirm"):
+            bridge.get_stream_data("https://youtu.be/test")
+
+    def test_rotated_account_cookie_warning_is_preserved_as_an_error(self):
+        def respond(ydl, _target, _download):
+            ydl.options["logger"].warning(
+                "The provided YouTube account cookies are no longer valid"
+            )
+            return {"id": "jNQXAC9IVRw"}
+
+        FakeYoutubeDL.responder = respond
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_file = os.path.join(directory, "cookies.txt")
+            Path(cookie_file).write_text(
+                "# Netscape HTTP Cookie File\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(RuntimeError, "no longer valid"):
+                bridge.test_access("https://youtu.be/test", cookie_file)
 
     def test_playlist_metadata_preserves_order_and_uses_flat_extraction(self):
         FakeYoutubeDL.responder = lambda *_: {
@@ -139,6 +286,8 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "track.webm")
             Path(path).write_bytes(b"audio")
+            cookie_file = os.path.join(directory, "cookies.txt")
+            Path(cookie_file).write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
 
             def respond(ydl, _target, download):
                 self.assertTrue(download)
@@ -153,7 +302,7 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
                 return info
 
             FakeYoutubeDL.responder = respond
-            bridge.download("https://youtu.be/jNQXAC9IVRw", directory, sink)
+            bridge.download("https://youtu.be/jNQXAC9IVRw", directory, sink, cookie_file)
 
         self.assertTrue(any(event.startswith("track-json:") for event in sink.events))
         self.assertEqual(sink.events[-1], "done")
@@ -162,6 +311,7 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
             "bestaudio[has_drm!=true]/best[has_drm!=true]",
         )
         self.assertNotIn("postprocessors", FakeYoutubeDL.calls[0])
+        self.assertEqual(FakeYoutubeDL.calls[0]["cookiefile"], cookie_file)
 
     def test_download_event_preserves_unicode_metadata_and_filename_as_utf8(self):
         cases = [

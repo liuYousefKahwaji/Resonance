@@ -15,6 +15,7 @@
 
 import base64
 import json
+import os
 import yt_dlp
 
 
@@ -22,53 +23,116 @@ import yt_dlp
 
 _BASE_OPTS = {
     "quiet": True,
-    "no_warnings": True,
     "extractor_retries": 3,
     "socket_timeout": 20,
 }
 
+_MAX_DIAGNOSTIC_CHARS = 4096
+
+
+class _DiagnosticLogger:
+    """Capture bounded yt-dlp warnings/errors instead of writing them to logcat."""
+
+    def __init__(self):
+        self.messages = []
+
+    def debug(self, _message):
+        pass
+
+    def info(self, _message):
+        pass
+
+    def warning(self, message):
+        self._record(message)
+
+    def error(self, message):
+        self._record(message)
+
+    def _record(self, message):
+        text = " ".join(str(message).split())
+        if text and text not in self.messages:
+            self.messages.append(text[:1024])
+            while len(" | ".join(self.messages)) > _MAX_DIAGNOSTIC_CHARS:
+                self.messages.pop(0)
+
+    @property
+    def summary(self):
+        return " | ".join(self.messages)
+
+    @property
+    def account_cookies_invalid(self):
+        return "account cookies are no longer valid" in self.summary.lower()
+
 # Let yt-dlp choose its maintained default clients first. Hard-coding
 # web_embedded,tv_simply caused ordinary public videos to return no formats as
-# YouTube changed its PO-token policy. android_vr remains a useful no-JavaScript
-# fallback, while web_embedded covers videos which explicitly allow embedding.
-_FALLBACK_EXTRACTOR_ARGS = {
-    "youtube": {"player_client": ["android_vr", "web_embedded"]},
+# YouTube changed its PO-token policy. android_vr remains the first fallback
+# because it does not need a JavaScript runtime, but yt-dlp intentionally skips
+# it whenever a cookie file is supplied. Run that attempt without cookies, then
+# try the cookie-capable web_embedded client last. This preserves authenticated
+# extraction as the primary path without making imported cookies disable the
+# Android-safe fallback.
+_ANDROID_VR_EXTRACTOR_ARGS = {
+    "youtube": {"player_client": ["android_vr"]},
+}
+_WEB_EMBEDDED_EXTRACTOR_ARGS = {
+    "youtube": {"player_client": ["web_embedded"]},
 }
 
 
-def _make_ydl(extra=None):
+def _make_ydl(extra=None, cookie_file=None, logger=None):
     opts = dict(_BASE_OPTS)
     if extra:
         opts.update(extra)
+    if cookie_file:
+        if not os.path.isfile(cookie_file):
+            raise RuntimeError("The configured YouTube cookie file is unavailable")
+        opts["cookiefile"] = cookie_file
+    if logger:
+        opts["logger"] = logger
     return yt_dlp.YoutubeDL(opts)
 
 
-def _extract_info(target, extra=None, download=False):
-    """Extract with yt-dlp defaults, then one Android-safe client fallback."""
-    attempts = [dict(extra or {})]
-    fallback = dict(extra or {})
-    fallback["extractor_args"] = _FALLBACK_EXTRACTOR_ARGS
-    attempts.append(fallback)
+def _extract_info(target, extra=None, download=False, cookie_file=None, transform=None):
+    """Extract with defaults, cookie-free android_vr, then web_embedded."""
+    android_vr = dict(extra or {})
+    android_vr["extractor_args"] = _ANDROID_VR_EXTRACTOR_ARGS
+    web_embedded = dict(extra or {})
+    web_embedded["extractor_args"] = _WEB_EMBEDDED_EXTRACTOR_ARGS
+    attempts = [
+        (dict(extra or {}), cookie_file),
+        (android_vr, None),
+        (web_embedded, cookie_file),
+    ]
     last_error = None
-    for opts in attempts:
+    for opts, attempt_cookie_file in attempts:
+        logger = _DiagnosticLogger()
         try:
-            with _make_ydl(opts) as ydl:
-                return ydl.extract_info(target, download=download), ydl
+            with _make_ydl(opts, cookie_file=attempt_cookie_file, logger=logger) as ydl:
+                info = ydl.extract_info(target, download=download)
+                if logger.account_cookies_invalid:
+                    raise RuntimeError(logger.summary)
+                return (transform(info, ydl) if transform else info), ydl
         except Exception as error:
-            last_error = error
+            detail = logger.summary
+            message = str(error)
+            last_error = (
+                RuntimeError(f"{message} | {detail}")
+                if detail and detail not in message
+                else error
+            )
     raise last_error or RuntimeError(f"Could not extract: {target}")
 
 
 # ── search ─────────────────────────────────────────────────────────────────────
 
-def search(query: str, limit: int = 10) -> str:
+def search(query: str, limit: int = 10, cookie_file=None) -> str:
     """Return a JSON array capped to the requested search result count."""
     result_limit = max(1, min(int(limit), 10))
     opts = {
         "extract_flat": True,
         "skip_download": True,
     }
-    info, _ = _extract_info(f"ytsearch{result_limit}:{query}", opts)
+    info, _ = _extract_info(f"ytsearch{result_limit}:{query}", opts, cookie_file=cookie_file)
 
     results = []
     for entry in (info.get("entries") or []):
@@ -103,13 +167,13 @@ def search(query: str, limit: int = 10) -> str:
 
 # ── get_metadata ───────────────────────────────────────────────────────────────
 
-def get_metadata(url: str) -> str:
+def get_metadata(url: str, cookie_file=None) -> str:
     """Return JSON object with title and artist for a single video."""
     opts = {
         "skip_download": True,
         "extract_flat": False,
     }
-    info, _ = _extract_info(url, opts)
+    info, _ = _extract_info(url, opts, cookie_file=cookie_file)
 
     title = info.get("title") or "Streaming Track"
     artist = (
@@ -135,7 +199,7 @@ def get_metadata(url: str) -> str:
 
 # ── get_playlist_metadata ────────────────────────────────────────────────────
 
-def get_playlist_metadata(url: str) -> str:
+def get_playlist_metadata(url: str, cookie_file=None) -> str:
     """Return compact, ordered metadata for a public YouTube playlist."""
     opts = {
         "skip_download": True,
@@ -143,7 +207,7 @@ def get_playlist_metadata(url: str) -> str:
         "noplaylist": False,
         "playlistend": 1000,
     }
-    info, _ = _extract_info(url, opts)
+    info, _ = _extract_info(url, opts, cookie_file=cookie_file)
     if not isinstance(info, dict) or not info.get("entries"):
         raise RuntimeError("YouTube did not return readable playlist metadata")
 
@@ -172,13 +236,13 @@ def get_playlist_metadata(url: str) -> str:
     }, ensure_ascii=False)
 
 
-def get_first_thumbnail(query: str) -> str:
+def get_first_thumbnail(query: str, cookie_file=None) -> str:
     """Search YouTube and return the first result's thumbnail URL."""
     opts = {
         "extract_flat": False,
         "skip_download": True,
     }
-    info, _ = _extract_info(f"ytsearch1:{query}", opts)
+    info, _ = _extract_info(f"ytsearch1:{query}", opts, cookie_file=cookie_file)
 
     entries = info.get("entries") or []
     first = entries[0] if entries else info
@@ -200,7 +264,37 @@ def get_first_thumbnail(query: str) -> str:
 
 # ── get_stream_url ─────────────────────────────────────────────────────────────
 
-def get_stream_url(url: str) -> str:
+def _stream_payload(info, ydl):
+    if not isinstance(info, dict):
+        raise RuntimeError("YouTube returned invalid stream data")
+    selected = info
+    requested = info.get("requested_downloads") or []
+    if requested and isinstance(requested[0], dict):
+        selected = requested[0]
+    stream_url = selected.get("url") or info.get("url")
+    if not stream_url:
+        formats = info.get("formats") or []
+        if formats:
+            selected = formats[-1] or {}
+            stream_url = selected.get("url")
+    if not stream_url:
+        raise RuntimeError("YouTube returned no playable stream URL")
+
+    raw_headers = selected.get("http_headers") or info.get("http_headers") or {}
+    headers = {
+        str(key): str(value)
+        for key, value in raw_headers.items()
+        if value is not None
+    }
+    cookie_jar = getattr(ydl, "cookiejar", None)
+    if cookie_jar is not None and hasattr(cookie_jar, "get_cookie_header"):
+        cookie_header = cookie_jar.get_cookie_header(stream_url)
+        if cookie_header:
+            headers["Cookie"] = str(cookie_header)
+    return {"url": stream_url, "headers": headers}
+
+
+def get_stream_data(url: str, cookie_file=None) -> str:
     """
     Return a URL that just_audio (ExoPlayer) can play and seek through.
 
@@ -216,6 +310,7 @@ def get_stream_url(url: str) -> str:
     # Prefer a single non-DRM audio stream. This may be a direct HTTPS URL or
     # HLS manifest; ExoPlayer handles both. Do not filter to protocol^=http,
     # because that rejects valid m3u8_native streams before ExoPlayer sees them.
+    last_error = None
     for fmt in [
         "bestaudio[has_drm!=true]/best[has_drm!=true]",
         "bestaudio/best",
@@ -226,28 +321,48 @@ def get_stream_url(url: str) -> str:
             "no_playlist": True,
         }
         try:
-            info, _ = _extract_info(url, opts)
+            payload, _ = _extract_info(
+                url,
+                opts,
+                cookie_file=cookie_file,
+                transform=_stream_payload,
+            )
+            return json.dumps(payload, ensure_ascii=False)
+        except Exception as error:
+            last_error = error
 
-            # When get_url=True, the url is in info["url"] or the first format
-            stream_url = None
-            if isinstance(info, dict):
-                stream_url = info.get("url")
-                if not stream_url:
-                    fmts = info.get("formats") or []
-                    if fmts:
-                        stream_url = fmts[-1].get("url")
+    raise last_error or RuntimeError(f"Could not resolve stream URL for: {url}")
 
-            if stream_url:
-                return stream_url
-        except Exception:
-            continue
 
-    raise RuntimeError(f"Could not resolve stream URL for: {url}")
+def get_stream_url(url: str, cookie_file=None) -> str:
+    """Compatibility wrapper for older native callers and bridge tests."""
+    return json.loads(get_stream_data(url, cookie_file))["url"]
+
+
+def test_access(url: str, cookie_file) -> str:
+    if not cookie_file:
+        raise RuntimeError("No YouTube cookies are configured")
+    info, _ = _extract_info(
+        url,
+        {"skip_download": True, "no_playlist": True},
+        cookie_file=cookie_file,
+    )
+    video_id = None
+    if isinstance(info, dict):
+        entries = info.get("entries") or []
+        if entries:
+            first = next((entry for entry in entries if isinstance(entry, dict)), None)
+            video_id = first.get("id") if first else None
+        else:
+            video_id = info.get("id")
+    if not video_id:
+        raise RuntimeError("YouTube did not return a valid video during the access test")
+    return json.dumps({"ok": True, "id": str(video_id)}, ensure_ascii=False)
 
 
 # ── download ───────────────────────────────────────────────────────────────────
 
-def download(url: str, output_dir: str, event_sink) -> None:
+def download(url: str, output_dir: str, event_sink, cookie_file=None) -> None:
     """
     Download audio to output_dir, reporting progress via event_sink.
 
@@ -369,7 +484,7 @@ def download(url: str, output_dir: str, event_sink) -> None:
     }
 
     try:
-        info, _ = _extract_info(url, opts, download=True)
+        info, _ = _extract_info(url, opts, download=True, cookie_file=cookie_file)
         entries = info.get("entries") if info else None
         if entries:
             total_items[0] = len(list(entries))

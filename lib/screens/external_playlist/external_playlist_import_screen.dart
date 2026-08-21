@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 import 'package:resonance/models/external_playlist.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_export_screen.dart';
 import 'package:resonance/services/external_playlist_service.dart';
@@ -162,9 +164,12 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = error.toString();
+        _error = error is YoutubeFailure ? error.userMessage : error.toString();
         _stage = _ExternalImportStage.error;
       });
+      if (error is YoutubeFailure && error.isAccessFailure) {
+        unawaited(showYoutubeFailure(context, error, sourceUrl: _urlController.text.trim()));
+      }
     }
   }
 
@@ -213,9 +218,12 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = error.toString();
+        _error = error is YoutubeFailure ? error.userMessage : error.toString();
         _stage = _ExternalImportStage.error;
       });
+      if (error is YoutubeFailure && error.isAccessFailure) {
+        unawaited(showYoutubeFailure(context, error));
+      }
     }
   }
 

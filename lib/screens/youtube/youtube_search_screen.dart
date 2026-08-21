@@ -20,6 +20,10 @@ import 'package:resonance/widgets/youtube/android_youtube.dart';
 import 'package:resonance/widgets/youtube/download_queue_panel.dart';
 import 'package:resonance/widgets/youtube/windows_youtube.dart';
 import 'package:resonance/app/resonance_motion.dart';
+import 'package:resonance/core/youtube/youtube_access_models.dart';
+import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
+import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 
 typedef YoutubeSearchLoader = Future<List<YoutubeTrack>> Function(String input, int limit);
 typedef YoutubeSuggestionsLoader =
@@ -186,8 +190,13 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       debugPrint('Suggested Music failed: $error');
       setState(() {
         _suggestionLoading = false;
-        _suggestionError = 'Could not build suggestions right now. Check the connection and try again.';
+        _suggestionError = error is YoutubeFailure
+            ? error.userMessage
+            : 'Could not build suggestions right now. Check the connection and try again.';
       });
+      if (error is YoutubeFailure && error.isAccessFailure) {
+        unawaited(showYoutubeFailure(context, error));
+      }
     }
   }
 
@@ -255,7 +264,17 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       }
     } catch (error) {
       if (mounted && generation == _searchGeneration && input == _controller.text.trim()) {
-        setState(() => _error = error.toString().replaceFirst('Bad state: ', ''));
+        final failure = error is YoutubeFailure
+            ? error
+            : YoutubeFailureClassifier.classify(
+                error,
+                authenticated: YoutubeAccessService.active?.isConfigured ?? false,
+                sourceUrl: _isLink(input) ? input : null,
+              );
+        setState(() => _error = failure.userMessage);
+        if (failure.isAccessFailure) {
+          unawaited(showYoutubeFailure(context, failure, sourceUrl: failure.sourceUrl));
+        }
       }
     } finally {
       if (mounted && generation == _searchGeneration) setState(() => _loading = false);
@@ -324,7 +343,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         ),
       );
     } catch (error) {
-      if (mounted) _showError('Could not play stream: $error');
+      if (mounted) await showYoutubeFailure(context, error, sourceUrl: track.url, actionLabel: 'Could not play stream');
     } finally {
       if (mounted) setState(() => _busyUrl = null);
     }
@@ -346,7 +365,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         Navigator.pop(context, track.url);
       }
     } catch (error) {
-      if (mounted) _showError('Could not add stream: $error');
+      if (mounted) await showYoutubeFailure(context, error, sourceUrl: track.url, actionLabel: 'Could not add stream');
     } finally {
       if (mounted) setState(() => _busyUrl = null);
     }
@@ -365,17 +384,13 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       final addedTrack = await queue.enqueue(track, widget.playlistNumber);
       if (mounted) Navigator.pop(context, addedTrack);
     } catch (error) {
-      if (mounted) _showError('Download failed: $error');
+      if (mounted) await showYoutubeFailure(context, error, sourceUrl: track.url, actionLabel: 'Download failed');
     } finally {
       if (mounted) {
         setState(() => _busyUrl = null);
       }
     }
   }
-
-  void _showError(String message) => ScaffoldMessenger.of(
-    context,
-  ).showSnackBar(SnackBar(content: Text(message), backgroundColor: Theme.of(context).colorScheme.error));
 
   @override
   Widget build(BuildContext context) {
