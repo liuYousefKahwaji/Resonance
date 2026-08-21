@@ -72,7 +72,10 @@ chaquopy {
         // and either add it to PATH or set buildPython explicitly like:
         // buildPython = "C:\\Users\\kawa\\AppData\\Local\\Programs\\Python\\Python310\\python.exe"
         pip {
-            install("yt-dlp")
+            // Keep Android on the same tested nightly snapshot bundled for
+            // Windows. Plain "yt-dlp" resolves PyPI's latest stable build,
+            // which can lag behind the YouTube extractor fixes we need.
+            install("yt-dlp==2026.8.20.234504.dev0")
         }
     }
 }
