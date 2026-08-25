@@ -16,6 +16,7 @@
 import base64
 import json
 import os
+import http.cookiejar
 import yt_dlp
 
 
@@ -28,6 +29,15 @@ _BASE_OPTS = {
 }
 
 _MAX_DIAGNOSTIC_CHARS = 4096
+_QUICKJS_PATH = None
+
+
+def configure_runtime(native_library_dir=None):
+    """Register Resonance's APK-bundled QuickJS executable with yt-dlp."""
+    global _QUICKJS_PATH
+    candidate = os.path.join(str(native_library_dir or ""), "libresonance_qjs.so")
+    _QUICKJS_PATH = candidate if os.path.isfile(candidate) else None
+    return bool(_QUICKJS_PATH)
 
 
 class _DiagnosticLogger:
@@ -79,8 +89,247 @@ _WEB_EMBEDDED_EXTRACTOR_ARGS = {
 }
 
 
+def _ytmusic_cookie_header(cookie_file):
+    """Build a cookie header from the private Netscape copy only."""
+    if not cookie_file or not os.path.isfile(cookie_file):
+        raise RuntimeError("YouTube cookies are not configured")
+    jar = http.cookiejar.MozillaCookieJar(cookie_file)
+    jar.load(ignore_discard=True, ignore_expires=True)
+    pairs = []
+    for cookie in jar:
+        if cookie.domain and ("youtube.com" in cookie.domain or "google.com" in cookie.domain):
+            pairs.append(f"{cookie.name}={cookie.value}")
+    if not pairs:
+        raise RuntimeError("The configured YouTube cookie file is empty")
+    return "; ".join(pairs)
+
+
+def _normalize_music_item(item):
+    """Convert a ytmusicapi parsed item to the app's safe track schema."""
+    if not isinstance(item, dict):
+        return None
+    video_id = item.get("videoId") or item.get("video_id")
+    if not video_id or len(str(video_id)) != 11:
+        return None
+    title = str(item.get("title") or "Unknown").strip()
+    if not title:
+        return None
+    artists = item.get("artists") or []
+    artist = "Unknown"
+    if artists and isinstance(artists[0], dict):
+        artist = str(artists[0].get("name") or "Unknown")
+    elif item.get("artist"):
+        artist = str(item.get("artist"))
+    thumbnail = _normalize_music_thumbnail(item, str(video_id))
+    duration = item.get("duration_seconds")
+    if duration is None:
+        duration = item.get("duration")
+    try:
+        duration = int(duration) if duration is not None else None
+    except (TypeError, ValueError):
+        duration = None
+    return {
+        "title": title,
+        "artist": artist,
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "duration_seconds": duration,
+        "thumbnail": thumbnail,
+    }
+
+
+def _normalize_music_thumbnail(item, video_id=None):
+    direct = item.get("thumbnail")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    if isinstance(direct, dict) and direct.get("url"):
+        return str(direct["url"])
+    for thumb in reversed(item.get("thumbnails") or []):
+        if isinstance(thumb, dict) and thumb.get("url"):
+            return str(thumb["url"])
+    if video_id:
+        return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    return ""
+
+
+def _normalize_music_home_item(item):
+    if not isinstance(item, dict):
+        return None
+    track = _normalize_music_item(item)
+    artists = item.get("artists") or []
+    subtitle = " · ".join(
+        str(artist.get("name")) for artist in artists if isinstance(artist, dict) and artist.get("name")
+    )
+    kind = str(item.get("resultType") or item.get("type") or ("track" if track else "collection"))
+    if not subtitle and kind.lower() not in ("track", "collection"):
+        subtitle = kind
+    thumbnail = track["thumbnail"] if track else _normalize_music_thumbnail(item)
+    title = str(item.get("title") or "").strip()
+    if not title:
+        return None
+    playlist_id = item.get("audioPlaylistId") or item.get("playlistId")
+    return {
+        "title": title,
+        "subtitle": subtitle,
+        "thumbnail": thumbnail,
+        "kind": kind,
+        "track": track,
+        "playlistId": str(playlist_id) if playlist_id else None,
+        "browseId": str(item.get("browseId")) if item.get("browseId") else None,
+    }
+
+
+def get_music_home(limit: int = 12, cookie_file=None) -> str:
+    """Return normalized authenticated shelves from YouTube Music home."""
+    try:
+        from ytmusicapi import YTMusic
+        from ytmusicapi.helpers import get_authorization
+    except ImportError as error:
+        raise RuntimeError("YouTube Music support is missing from this build") from error
+    cookie = _ytmusic_cookie_header(cookie_file)
+    sapisid = None
+    for part in cookie.split("; "):
+        if part.startswith("__Secure-3PAPISID="):
+            sapisid = part.split("=", 1)[1]
+            break
+    if not sapisid:
+        raise RuntimeError("The YouTube session is missing its authenticated SAPISID cookie")
+    origin = "https://music.youtube.com"
+    auth = {
+        "cookie": cookie,
+        "origin": origin,
+        "x-origin": origin,
+        # ytmusicapi identifies browser auth from this prefix and refreshes the
+        # timestamped value for each request internally.
+        "authorization": get_authorization(sapisid + " " + origin),
+    }
+    ytmusic = YTMusic(auth=auth)
+    home = ytmusic.get_home(limit=max(1, min(int(limit), 80)))
+    shelves = []
+    for shelf in home or []:
+        title = str(shelf.get("title") or "").strip()
+        tracks = []
+        items = []
+        for item in shelf.get("contents") or []:
+            normalized = _normalize_music_item(item)
+            if normalized and normalized not in tracks:
+                tracks.append(normalized)
+            normalized_item = _normalize_music_home_item(item)
+            if normalized_item and normalized_item not in items:
+                items.append(normalized_item)
+        if title and items:
+            shelves.append({"title": title, "tracks": tracks, "items": items})
+    shelves.sort(key=lambda shelf: 0 if "quick pick" in shelf["title"].lower() else 1)
+    history_tracks = []
+    try:
+        for history_item in ytmusic.get_history() or []:
+            track = _normalize_music_item(history_item)
+            if track and track not in history_tracks:
+                history_tracks.append(track)
+    except Exception:
+        pass
+    existing_playable = []
+    for shelf in shelves:
+        for track in shelf["tracks"]:
+            if track not in existing_playable:
+                existing_playable.append(track)
+    fallback_tracks = []
+    if not history_tracks and len(existing_playable) < 20:
+        resolution_attempts = 0
+        for shelf in home or []:
+            for item in shelf.get("contents") or []:
+                try:
+                    playlist_id = item.get("playlistId") or item.get("audioPlaylistId")
+                    if playlist_id:
+                        resolution_attempts += 1
+                        resolved = (ytmusic.get_playlist(playlist_id, limit=20) or {}).get("tracks") or []
+                    elif item.get("browseId"):
+                        resolution_attempts += 1
+                        resolved = (ytmusic.get_album(item["browseId"]) or {}).get("tracks") or []
+                    else:
+                        continue
+                    for resolved_item in resolved:
+                        track = _normalize_music_item(resolved_item)
+                        if track and track not in fallback_tracks:
+                            fallback_tracks.append(track)
+                except Exception:
+                    continue
+                if len(fallback_tracks) >= 20 or resolution_attempts >= 6:
+                    break
+            if len(fallback_tracks) >= 20 or resolution_attempts >= 6:
+                break
+    pick_source = history_tracks or (existing_playable + [track for track in fallback_tracks if track not in existing_playable])
+    if pick_source and not any("quick pick" in shelf["title"].lower() for shelf in shelves):
+        picks = pick_source[:20]
+        pick_items = [
+            {"title": track["title"], "subtitle": track["artist"], "thumbnail": track["thumbnail"], "kind": "track", "track": track}
+            for track in picks
+        ]
+        shelves.insert(0, {"title": "Quick picks", "tracks": picks, "items": pick_items})
+    if not any("suggest" in shelf["title"].lower() for shelf in shelves):
+        seen = set()
+        suggestions = []
+        seed = next((track for shelf in shelves for track in shelf["tracks"]), None)
+        if seed:
+            try:
+                video_id = seed["url"].split("v=", 1)[1].split("&", 1)[0]
+                for item in (ytmusic.get_watch_playlist(videoId=video_id, radio=True, limit=25) or {}).get("tracks") or []:
+                    track = _normalize_music_item(item)
+                    if track and track["url"] != seed["url"] and track["url"] not in seen:
+                        seen.add(track["url"])
+                        suggestions.append(track)
+                    if len(suggestions) >= 20:
+                        break
+            except Exception:
+                pass
+        for shelf in shelves:
+            if "quick pick" in shelf["title"].lower():
+                continue
+            for track in shelf["tracks"]:
+                if track["url"] not in seen:
+                    seen.add(track["url"])
+                    suggestions.append(track)
+                if len(suggestions) >= 20:
+                    break
+            if len(suggestions) >= 20:
+                break
+        if suggestions:
+            suggestions = suggestions[:20]
+            suggestion_items = [
+                {"title": track["title"], "subtitle": track["artist"], "thumbnail": track["thumbnail"], "kind": "track", "track": track}
+                for track in suggestions
+            ]
+            shelves.insert(1 if shelves else 0, {"title": "Suggestions", "tracks": suggestions, "items": suggestion_items})
+    speed_dial = []
+    seen_speed_dial = set()
+    for shelf in shelves:
+        if any(token in shelf["title"].lower() for token in ("listen again", "forgotten", "quick pick")):
+            for track in shelf["tracks"]:
+                if track["url"] not in seen_speed_dial:
+                    seen_speed_dial.add(track["url"])
+                    speed_dial.append(track)
+                if len(speed_dial) >= 12:
+                    break
+        if len(speed_dial) >= 12:
+            break
+    for track in pick_source:
+        if track["url"] not in seen_speed_dial:
+            seen_speed_dial.add(track["url"])
+            speed_dial.append(track)
+        if len(speed_dial) >= 12:
+            break
+    if speed_dial and not any("speed dial" in shelf["title"].lower() for shelf in shelves):
+        speed_items = [
+            {"title": track["title"], "subtitle": track["artist"], "thumbnail": track["thumbnail"], "kind": "track", "track": track}
+            for track in speed_dial
+        ]
+        shelves.insert(min(2, len(shelves)), {"title": "Speed dial", "tracks": speed_dial, "items": speed_items})
+    return json.dumps({"shelves": shelves}, ensure_ascii=False)
+
+
 def _make_ydl(extra=None, cookie_file=None, logger=None):
     opts = dict(_BASE_OPTS)
+    if _QUICKJS_PATH:
+        opts["js_runtimes"] = {"quickjs": {"path": _QUICKJS_PATH}}
     if extra:
         opts.update(extra)
     if cookie_file:

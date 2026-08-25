@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -48,8 +49,46 @@ class WindowsBrowserDetector {
     }
   }
 
+  /// Resolves the browser profile which is active when the user completes the
+  /// connection flow. yt-dlp otherwise searches every profile and selects the
+  /// most recently modified cookie database, which can drift to a guest or a
+  /// different Google profile after Resonance restarts.
+  Future<String> resolveCookieSource(String browserId) async {
+    final baseId = baseBrowserId(browserId);
+    if (!Platform.isWindows) return baseId;
+    final existingProfile = browserProfile(browserId);
+    if (existingProfile != null) return '$baseId:$existingProfile';
+
+    if (baseId == 'firefox') {
+      final roaming = Platform.environment['APPDATA'];
+      if (roaming == null) return baseId;
+      final profilesIni = File(p.join(roaming, 'Mozilla', 'Firefox', 'profiles.ini'));
+      if (!await profilesIni.exists()) return baseId;
+      try {
+        final profile = defaultFirefoxProfile(await profilesIni.readAsString());
+        return profile == null ? baseId : '$baseId:$profile';
+      } catch (_) {
+        return baseId;
+      }
+    }
+
+    if (baseId == 'opera') return baseId;
+    final userData = _chromiumUserDataDirectory(baseId);
+    if (userData == null) return baseId;
+    final localState = File(p.join(userData, 'Local State'));
+    if (!await localState.exists()) return baseId;
+    try {
+      final profile = lastUsedChromiumProfile(await localState.readAsString());
+      if (profile == null || !await Directory(p.join(userData, profile)).exists()) return baseId;
+      return '$baseId:$profile';
+    } catch (_) {
+      return baseId;
+    }
+  }
+
   Future<bool> launchBrowser(String browserId, String url) async {
     if (!Platform.isWindows || Uri.tryParse(url)?.scheme != 'https') return false;
+    browserId = baseBrowserId(browserId);
     final executableName = const {
       'edge': 'msedge.exe',
       'chrome': 'chrome.exe',
@@ -69,6 +108,69 @@ class WindowsBrowserDetector {
     } catch (_) {
       return false;
     }
+  }
+
+  static String baseBrowserId(String source) => source.split(':').first.trim().toLowerCase();
+
+  static String? browserProfile(String source) {
+    final separator = source.indexOf(':');
+    if (separator < 0) return null;
+    return _safeProfileName(source.substring(separator + 1));
+  }
+
+  static String? lastUsedChromiumProfile(String localStateJson) {
+    final decoded = jsonDecode(localStateJson);
+    if (decoded is! Map) return null;
+    final profile = decoded['profile'];
+    if (profile is! Map) return null;
+    return _safeProfileName(profile['last_used']?.toString());
+  }
+
+  static String? defaultFirefoxProfile(String profilesIni) {
+    final sections = <Map<String, String>>[];
+    Map<String, String>? current;
+    for (final rawLine in profilesIni.split(RegExp(r'[\r\n]+'))) {
+      final line = rawLine.trim();
+      if (line.startsWith('[') && line.endsWith(']')) {
+        current = <String, String>{'_section': line.substring(1, line.length - 1)};
+        sections.add(current);
+        continue;
+      }
+      final separator = line.indexOf('=');
+      if (current == null || separator <= 0) continue;
+      current[line.substring(0, separator).trim()] = line.substring(separator + 1).trim();
+    }
+    final preferred =
+        sections.where((section) => section['_section']?.startsWith('Install') == true).firstOrNull ??
+        sections.where((section) => section['Default'] == '1').firstOrNull;
+    final installSection = preferred?['_section']?.startsWith('Install') == true;
+    final path = preferred == null
+        ? null
+        : installSection
+        ? preferred['Default']
+        : preferred['Path'];
+    if (path == null || path.isEmpty) return null;
+    return _safeProfileName(p.windows.basename(path.replaceAll('/', r'\')));
+  }
+
+  static String? _safeProfileName(String? value) {
+    final profile = value?.trim();
+    if (profile == null || profile.isEmpty || profile == '.' || profile == '..') return null;
+    if (profile.contains('/') || profile.contains(r'\') || profile.contains(':')) return null;
+    return profile;
+  }
+
+  static String? _chromiumUserDataDirectory(String browserId) {
+    final local = Platform.environment['LOCALAPPDATA'];
+    return switch (browserId) {
+      'edge' when local != null => p.join(local, 'Microsoft', 'Edge', 'User Data'),
+      'chrome' when local != null => p.join(local, 'Google', 'Chrome', 'User Data'),
+      'brave' when local != null => p.join(local, 'BraveSoftware', 'Brave-Browser', 'User Data'),
+      'vivaldi' when local != null => p.join(local, 'Vivaldi', 'User Data'),
+      'chromium' when local != null => p.join(local, 'Chromium', 'User Data'),
+      'whale' when local != null => p.join(local, 'Naver', 'Naver Whale', 'User Data'),
+      _ => null,
+    };
   }
 
   Future<String?> _findExecutable(String name) async {
@@ -137,5 +239,12 @@ class WindowsBrowserDetector {
     final quoted = RegExp(r'"([^"]+\.exe)"', caseSensitive: false).firstMatch(command)?.group(1);
     final unquoted = RegExp(r'([a-z]:\\[^\r\n]+?\.exe)', caseSensitive: false).firstMatch(command)?.group(1);
     return browserIdForExecutable(quoted ?? unquoted ?? command);
+  }
+}
+
+extension<T> on Iterable<T> {
+  T? get firstOrNull {
+    final iterator = this.iterator;
+    return iterator.moveNext() ? iterator.current : null;
   }
 }

@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/core/youtube/youtube_music_home_models.dart';
 import 'package:resonance/screens/youtube/youtube_search_screen.dart';
 import 'package:resonance/services/suggested_music_service.dart';
 import 'package:resonance/services/download/download_queue_controller.dart';
@@ -141,6 +143,178 @@ void main() {
     requests[0].complete(const SuggestedMusicResult(profile: profile, tracks: [], fromCache: false));
     await tester.pump();
     expect(find.text('Suggested Track'), findsOneWidget);
+  });
+
+  testWidgets('suggestions page keeps the source switch above the content', (tester) async {
+    const emptyProfile = PlaylistProfile(
+      playlistNumber: 1,
+      playlistName: 'Playlist 1',
+      fingerprint: 'empty',
+      tracks: [],
+      artistWeights: {},
+      tokenWeights: {},
+      variantTokens: {},
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: YoutubeSearchScreen(
+          playlistNumber: 1,
+          playlistName: 'Playlist 1',
+          searchLoader: (_, __) async => const [],
+          suggestionsLoader: ({required bool refresh, required bool Function() isCancelled}) async =>
+              const SuggestedMusicResult(profile: emptyProfile, tracks: [], fromCache: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('suggestions-mode-switcher')), findsOneWidget);
+    expect(find.text('Resonance Suggestions'), findsOneWidget);
+    expect(find.text('YouTube Music Home'), findsOneWidget);
+
+    await tester.tap(find.text('YouTube Music Home'));
+    await tester.pumpAndSettle();
+    expect(find.text('Connect YouTube access'), findsOneWidget);
+  });
+
+  testWidgets('YouTube Music Home renders compact picks and collection shelves', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const emptyProfile = PlaylistProfile(
+      playlistNumber: 1,
+      playlistName: 'Playlist 1',
+      fingerprint: 'empty-home-test',
+      tracks: [],
+      artistWeights: {},
+      tokenWeights: {},
+      variantTokens: {},
+    );
+    const pick = YoutubeTrack(
+      title: 'Playable pick',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=homepick001',
+    );
+    const home = YoutubeMusicHome(
+      shelves: [
+        YoutubeMusicHomeShelf(title: 'Quick picks', tracks: [pick]),
+        YoutubeMusicHomeShelf(
+          title: 'New releases',
+          tracks: [],
+          items: [
+            YoutubeMusicHomeItem(
+              title: 'Collection album',
+              subtitle: 'Album artist',
+              kind: 'Album',
+              playlistId: 'OLAK5uy_collection',
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: YoutubeSearchScreen(
+          playlistNumber: 1,
+          playlistName: 'Playlist 1',
+          searchLoader: (_, __) async => const [],
+          suggestionsLoader: ({required bool refresh, required bool Function() isCancelled}) async =>
+              const SuggestedMusicResult(profile: emptyProfile, tracks: [], fromCache: false),
+          youtubeMusicHomeLoader: () async => home,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('YouTube Music Home'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Your YouTube Music'), findsOneWidget);
+    expect(find.text('Quick picks'), findsOneWidget);
+    expect(find.text('Playable pick'), findsOneWidget);
+    expect(find.text('New releases'), findsOneWidget);
+    expect(find.text('Collection album'), findsOneWidget);
+    final collectionInk = tester.widget<InkWell>(find.byKey(const ValueKey('youtube-home-card-Collection album')));
+    expect(collectionInk.onTap, isNotNull);
+    await tester.tap(find.byTooltip('Playlist actions'));
+    await tester.pumpAndSettle();
+    expect(find.text('Stream playlist'), findsOneWidget);
+    expect(find.text('Download playlist'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Windows Home shelves support mouse grab-drag and right-scroll controls', (tester) async {
+    if (!Platform.isWindows) return;
+    await tester.binding.setSurfaceSize(const Size(760, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const emptyProfile = PlaylistProfile(
+      playlistNumber: 1,
+      playlistName: 'Playlist 1',
+      fingerprint: 'desktop-scroll-test',
+      tracks: [],
+      artistWeights: {},
+      tokenWeights: {},
+      variantTokens: {},
+    );
+    final home = YoutubeMusicHome(
+      shelves: [
+        YoutubeMusicHomeShelf(
+          title: 'Made for you',
+          tracks: const [],
+          items: List.generate(
+            12,
+            (index) => YoutubeMusicHomeItem(
+              title: 'Collection $index',
+              subtitle: 'Artist',
+              kind: 'Playlist',
+              playlistId: 'PLcollection$index',
+            ),
+          ),
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: YoutubeSearchScreen(
+          playlistNumber: 1,
+          playlistName: 'Playlist 1',
+          searchLoader: (_, __) async => const [],
+          suggestionsLoader: ({required bool refresh, required bool Function() isCancelled}) async =>
+              const SuggestedMusicResult(profile: emptyProfile, tracks: [], fromCache: false),
+          youtubeMusicHomeLoader: () async => home,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('YouTube Music Home'));
+    await tester.pumpAndSettle();
+
+    final horizontal = find.byWidgetPredicate(
+      (widget) => widget is Scrollable && widget.axisDirection == AxisDirection.right && widget.restorationId == null,
+    );
+    expect(horizontal, findsOneWidget);
+    final position = tester.state<ScrollableState>(horizontal).position;
+    expect(position.pixels, 0);
+    final shelfCenter = tester.getCenter(horizontal);
+    final mouse = await tester.startGesture(shelfCenter, kind: PointerDeviceKind.mouse);
+    await mouse.moveBy(const Offset(-40, 0));
+    await mouse.moveBy(const Offset(-240, 0));
+    await mouse.up();
+    await tester.pumpAndSettle();
+    expect(position.pixels, greaterThan(0));
+    position.jumpTo(0);
+    await tester.pumpAndSettle();
+    await tester.sendEventToBinding(PointerScrollEvent(position: shelfCenter, scrollDelta: const Offset(0, 180)));
+    await tester.pumpAndSettle();
+    expect(position.pixels, 0, reason: 'The vertical mouse wheel must not drive a horizontal shelf.');
+    final enabledRight = find.byWidgetPredicate(
+      (widget) =>
+          widget is IconButton && widget.key == const Key('youtube-shelf-scroll-right') && widget.onPressed != null,
+    );
+    expect(enabledRight, findsOneWidget);
+    await tester.tap(enabledRight);
+    await tester.pumpAndSettle();
+    expect(position.pixels, greaterThan(0));
   });
 
   testWidgets('disabled queue mode never renders the Windows queue panel', (tester) async {

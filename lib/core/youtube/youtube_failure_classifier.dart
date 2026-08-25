@@ -17,6 +17,9 @@ class YoutubeFailureClassifier {
       'login details are needed',
       'provided youtube account cookies are no longer valid',
       'account cookies are no longer valid',
+      'no youtube music cookies were found',
+      'missing its authenticated sapisid cookie',
+      'not signed in to youtube music',
       'this video may be inappropriate for some users',
       'confirm your age',
     ])) {

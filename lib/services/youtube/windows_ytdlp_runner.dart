@@ -45,8 +45,9 @@ class WindowsYtdlpRunner {
   String get ytDlpPath => p.join(binDirectory, 'yt-dlp.exe');
   String get denoPath => p.join(binDirectory, 'deno.exe');
   String get ffmpegPath => p.join(binDirectory, 'ffmpeg.exe');
+  String get ytMusicHomePath => p.join(binDirectory, 'resonance-ytmusic-home.exe');
 
-  List<String> buildArguments(List<String> arguments, {String? overrideBrowserId}) => [
+  List<String> buildArguments(List<String> arguments, {String? overrideBrowserId, String? overrideCookieFile}) => [
     '--js-runtimes',
     'deno:$denoPath',
     '--force-ipv4',
@@ -54,12 +55,19 @@ class WindowsYtdlpRunner {
     if (overrideBrowserId != null) ...[
       '--cookies-from-browser',
       overrideBrowserId,
+    ] else if (overrideCookieFile != null) ...[
+      '--cookies',
+      overrideCookieFile,
     ] else
       ...?_accessService?.windowsAuthArguments(),
     ...arguments,
   ];
 
-  Future<WindowsYtdlpProcess> start(List<String> arguments, {String? overrideBrowserId}) async {
+  Future<WindowsYtdlpProcess> start(
+    List<String> arguments, {
+    String? overrideBrowserId,
+    String? overrideCookieFile,
+  }) async {
     if (!await File(ytDlpPath).exists()) {
       throw const YoutubeFailure(
         kind: YoutubeFailureKind.unsupported,
@@ -74,11 +82,12 @@ class WindowsYtdlpRunner {
         technicalSummary: 'Missing Windows deno executable.',
       );
     }
-    final authenticated = overrideBrowserId != null || _accessService?.windowsBrowserId != null;
+    final authenticated =
+        overrideBrowserId != null || overrideCookieFile != null || _accessService?.isConfigured == true;
     try {
       final process = await Process.start(
         ytDlpPath,
-        buildArguments(arguments, overrideBrowserId: overrideBrowserId),
+        buildArguments(arguments, overrideBrowserId: overrideBrowserId, overrideCookieFile: overrideCookieFile),
         environment: windowsYtDlpUtf8Environment,
         includeParentEnvironment: true,
         runInShell: false,
@@ -92,11 +101,16 @@ class WindowsYtdlpRunner {
   Future<WindowsYtdlpResult> run(
     List<String> arguments, {
     String? overrideBrowserId,
+    String? overrideCookieFile,
     Duration? timeout,
     String? sourceUrl,
     bool requireOutput = false,
   }) async {
-    final started = await start(arguments, overrideBrowserId: overrideBrowserId);
+    final started = await start(
+      arguments,
+      overrideBrowserId: overrideBrowserId,
+      overrideCookieFile: overrideCookieFile,
+    );
     final stdoutFuture = collectWindowsProcessOutput(started.process.stdout);
     final stderrFuture = _collectTail(started.process.stderr);
     try {
@@ -149,6 +163,24 @@ class WindowsYtdlpRunner {
     );
     final output = result.stdout;
     if (!RegExp(r'"id"\s*:\s*"[A-Za-z0-9_-]{6,}"').hasMatch(output)) {
+      throw YoutubeFailure(
+        kind: YoutubeFailureKind.unknown,
+        userMessage: 'YouTube did not return a valid video during the access test.',
+        technicalSummary: 'Access test output did not contain a video ID.',
+        sourceUrl: sourceUrl,
+      );
+    }
+  }
+
+  Future<void> testCookies(String cookiePath, String sourceUrl) async {
+    final result = await run(
+      ['--dump-single-json', '--skip-download', '--no-playlist', '--playlist-end', '1', sourceUrl],
+      overrideCookieFile: cookiePath,
+      timeout: const Duration(seconds: 30),
+      sourceUrl: sourceUrl,
+      requireOutput: true,
+    );
+    if (!RegExp(r'"id"\s*:\s*"[A-Za-z0-9_-]{6,}"').hasMatch(result.stdout)) {
       throw YoutubeFailure(
         kind: YoutubeFailureKind.unknown,
         userMessage: 'YouTube did not return a valid video during the access test.',

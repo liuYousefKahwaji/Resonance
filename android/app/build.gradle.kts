@@ -44,6 +44,10 @@ android {
 
     packaging {
         jniLibs {
+            // yt-dlp launches QuickJS as a subprocess. Android's default
+            // direct-from-APK native loading leaves no executable filesystem
+            // path, so extract native libraries into nativeLibraryDir.
+            useLegacyPackaging = true
             // Some prebuilt plugins publish every ABI and bypass abiFilters.
             // Resonance's release target is arm64, so discard unreachable
             // FFmpeg/Python binaries from the final package explicitly.
@@ -77,6 +81,11 @@ chaquopy {
             // Windows. Plain "yt-dlp" resolves PyPI's latest stable build,
             // which can lag behind the YouTube extractor fixes we need.
             install("yt-dlp==2026.8.20.234504.dev0")
+            // The exact EJS version required by the pinned nightly. Cookies
+            // authenticate the request; EJS + QuickJS solve YouTube's player
+            // signature and n challenges for the resulting media formats.
+            install("yt-dlp-ejs==0.8.0")
+            install("ytmusicapi==1.12.2")
         }
     }
 }

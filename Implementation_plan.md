@@ -1,1037 +1,931 @@
-# Resonance YouTube Access and Cookie Authentication Implementation Plan
+# Resonance Authenticated YouTube Music Home Implementation Plan
 
-Last reviewed: 2026-08-21
+Last reviewed: 2026-08-25
 
-Implementation status: planning only. No product code has been changed for this feature.
+Implementation status: **executed**. The Suggestions/Home switch, expanded authenticated feed, distinct responsive Home layouts, standalone looping queues, Windows Unicode/helper fix, and Android EJS/QuickJS packaging are implemented. Automated verification and an on-device QuickJS/startup smoke test pass; only final human interaction checks for the formerly failing Android Play/Stream/Download flow remain.
 
 ## Outcome
 
-Implement one app-wide **YouTube Access** system that turns yt-dlp's raw “Sign in to confirm you're not a bot” failure into a guided, recoverable workflow:
+Add an authenticated **YouTube Music Home** experience to Resonance on Windows and Android. It must use the YouTube/YouTube Music session the user has already connected through Resonance's v3 YouTube Access feature and must never make an unauthenticated home-feed request.
 
-- On Windows, Resonance opens YouTube in the user's browser and uses yt-dlp's live `--cookies-from-browser` support. Resonance stores the selected browser identifier, never a copied cookie file or Google credentials.
-- On Android, Resonance provides a precise Firefox Android tutorial, imports a Netscape-format `cookies.txt`, validates it, stores it inside Resonance's app-private no-backup directory, and supplies it to every Android yt-dlp operation.
-- Search, metadata, streaming, downloads, playlist imports, transfer lookups, and cover lookup all use the same access state and error model.
-- Authentication failures produce a compact “YouTube verification required” dialog with a route to the new settings page instead of displaying raw multi-line yt-dlp output in a snackbar.
-- Replacing or clearing access credentials invalidates resolved-stream caches so stale guest URLs are not reused.
+The finished feature should:
 
-This feature does not replace the current nightly yt-dlp builds. The Windows executable and the Android `yt-dlp==2026.8.20.234504.dev0` pin remain exactly as they are unless a separate extractor-update task changes them.
+- Show personalized YouTube Music home shelves when the Search screen is empty.
+- Work on Windows with the selected live browser session and on Android with the imported `cookies.txt` session.
+- Render directly playable song/video recommendations as normal Resonance YouTube tracks, with Play, Stream, and Download actions.
+- Preserve the existing local playlist-based Suggested Music feature as a separate switch option rather than deleting it.
+- Show a clear Connect/Fix access state when the personalized home feed cannot run.
+- Keep cookie values, authorization hashes, browser database contents, and private cookie-file paths out of Dart, preferences, stdout, logs, diagnostics, and method-channel results.
+- Fix the separate Windows regression where the result card's main **Play** button fails with cookies connected even though adding the same result with **Stream** and playing it through the playlist works.
+- Fix the Android cookie-connected media regression where direct Play reports `Source error 0`, playlist streaming does not play, and Download can exhaust the extractor attempts with signature/n-challenge failures and `Requested format is not available`.
 
-## Executive decisions
+## Research findings and consequences
+
+### There is no supported official API for this feed
+
+The official YouTube Data API exposes resources such as activities, videos, playlists, subscriptions, and search, but it does not expose the personalized YouTube Music home surface. It also requires an API key or OAuth token for its supported calls. Therefore, do not spend implementation time trying to build this feature on `youtube/v3`, and do not introduce a Google Cloud API key or OAuth flow.
+
+Reference: <https://developers.google.com/youtube/v3/docs>
+
+### The practical endpoint is YouTube Music's internal browse endpoint
+
+`ytmusicapi` 1.12.2 implements `get_home(limit)` by POSTing a browse body containing `{"browseId": "FEmusic_home"}` and following section-list continuations. Its result is a list of titled rows. A row may mix songs, videos, albums, playlists, artists, and channels.
+
+References:
+
+- <https://ytmusicapi.readthedocs.io/en/stable/reference/browsing.html>
+- <https://github.com/sigma67/ytmusicapi/blob/main/ytmusicapi/mixins/browsing.py>
+
+This is an unofficial, reverse-engineered endpoint. Its response shape can change without notice. Use the maintained parser rather than copying its current JSON navigation into Dart, and isolate the dependency behind a narrow Resonance-owned contract.
+
+### Browser authentication needs more than a raw cookie header
+
+`ytmusicapi` browser authentication uses a YouTube Music cookie header, an `X-Goog-AuthUser` account index, the `https://music.youtube.com` origin, and a dynamically generated `SAPISIDHASH` authorization header. Its current implementation specifically requires `__Secure-3PAPISID`. Multiple signed-in Google accounts can return the wrong or empty library if the auth-user index is wrong; brand accounts require a separate on-behalf-of user ID.
+
+References:
+
+- <https://ytmusicapi.readthedocs.io/en/stable/setup/browser.html>
+- <https://github.com/sigma67/ytmusicapi/blob/main/ytmusicapi/ytmusic.py>
+- <https://github.com/sigma67/ytmusicapi/blob/main/docs/source/setup/browser.rst>
+
+Consequences:
+
+- Do not call `YTMusic()` without an authentication object, even though the library permits some anonymous calls.
+- Default `X-Goog-AuthUser` to `0`, store it only as non-secret configuration, and provide an Advanced account-slot selector for users with multiple Google accounts.
+- Treat brand-account selection as a documented limitation for the first implementation unless physical testing proves it is required for the intended user.
+- Do not strengthen the existing global Android cookie validator to require only `__Secure-3PAPISID`; a session may remain valid for yt-dlp even if it cannot power YouTube Music Home. Report a home-specific capability error instead of breaking streaming/download access.
+
+### The dependency is suitable for the existing Android runtime
+
+The current `ytmusicapi` project requires Python 3.10 or newer, depends on `requests >= 2.22`, and is MIT licensed. Resonance's Chaquopy runtime is Python 3.10, so 1.12.2 is compatible with the current APK. Pin the exact version; do not use an unbounded dependency.
+
+References:
+
+- <https://github.com/sigma67/ytmusicapi/blob/main/pyproject.toml>
+- <https://github.com/sigma67/ytmusicapi/releases/tag/1.12.2>
+
+### Windows must not export browser cookies to a file automatically
+
+yt-dlp can combine `--cookies-from-browser` and `--cookies` to create a Netscape file, but its own FAQ warns that this writes cookies for **all sites**, not only YouTube. That would reverse the v3 decision that Windows reads a browser profile live and never creates a Windows cookie export.
+
+References:
+
+- <https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp>
+- <https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies>
+
+Therefore, the Windows browser flow uses an in-memory helper process. A separate user-requested troubleshooting path now accepts an already-exported Netscape `cookies.txt` through the native file picker; it validates the file, passes only its path to yt-dlp as `--cookies`, and never exports or serializes browser cookies automatically.
+
+### Android's current yt-dlp package is missing the complete EJS stack
+
+yt-dlp's current official EJS guidance says full YouTube extraction requires both a supported external JavaScript runtime and the matching `yt-dlp-ejs` challenge-solver scripts. PyPI installations obtain the scripts from the `default` dependency group, but Resonance currently installs only bare `yt-dlp==2026.8.20.234504.dev0`. Chaquopy also has no Deno, Node, QuickJS, or Bun executable configured. The captured Android error explicitly reports both signature and n-challenge solving failures before only image formats remain.
+
+Reference: <https://github.com/yt-dlp/yt-dlp/wiki/EJS>
+
+The current cookie-free `android_vr` fallback can avoid JavaScript for some videos, but it is not a guarantee for every video/network/server response. The implementation must first prove what happened in each existing extractor attempt for the exact failing video `8mhMnaht-cM`; if `android_vr` cannot return playable media, Android needs a bundled, offline-capable EJS runtime rather than another format-string guess.
+
+The Python 3.10 deprecation warning is not the cause of this particular failure, but it is now part of the required Android runtime work. Plan and validate a move to Python 3.11 before relying on future yt-dlp builds. Do not change the pinned yt-dlp nightly while diagnosing this regression.
+
+## Verified repository baseline
+
+The implementation must begin from the current v3.0.0 source, not the stale baseline in the previous cookie-authentication plan:
+
+- Current HEAD is `afa640f` (`v3.0.0`), and `pubspec.yaml` is `3.0.0+3`.
+- Windows ships `assets/bin/yt-dlp.exe`, `deno.exe`, and `ffmpeg.exe`; `windows/CMakeLists.txt` installs them into the release `bin` directory.
+- `WindowsYtdlpRunner` is the only Dart owner of product yt-dlp launches. It adds Deno, IPv4, UTF-8 behavior, and the selected `--cookies-from-browser` browser.
+- Android pins exactly `yt-dlp==2026.8.20.234504.dev0` in `android/app/build.gradle.kts` and runs it through Chaquopy.
+- Android's canonical cookies file remains under `noBackupFilesDir`. `YoutubeCookieStore.createWorkingCopy()` creates one unique private copy per operation, and `MainActivity.withYoutubeCookieCopy` deletes it in `finally`.
+- Android cookie contents do not cross into Dart. Preserve that boundary.
+- `YoutubeAccessService` owns access method/state/revision. Windows persists only the browser ID and timestamps. Android obtains configuration metadata from the native store.
+- Empty-query Search currently runs `SuggestedMusicService`, which builds a local playlist profile and performs up to six ordinary YouTube searches. It is not the user's YouTube Music home feed.
+- `YoutubeSearchScreen._play` calls `PlayerHandler.playStandaloneStream` and immediately opens `StandalonePlayerScreen` after a successful load.
+- `YoutubeSearchScreen._stream` does not start playback; it stores metadata, adds the YouTube URL to the current playlist, and returns to the library. Later playlist playback goes through `PlayerHandler.loadTrack`.
+- Both Windows playback paths should ultimately use `PlayerHandler._resolveStream`, `WindowsYtdlpRunner`, and `_WindowsStreamProxy`. The reported Play-only failure is therefore a standalone activation/lifecycle regression until evidence shows otherwise; it is not a general cookie-streaming failure.
+
+## Product decisions
 
 | Area | Decision |
 | --- | --- |
-| Settings placement | Add a separate **YouTube Access** section before Downloads. Authentication affects search, playback, imports, covers, and downloads, so it must not be buried inside Download settings. |
-| Windows primary path | Detect the default browser when possible, open YouTube, then test that browser with `--cookies-from-browser`. Store only the yt-dlp browser ID and non-secret status timestamps. |
-| Windows cookie lifetime | Extract the current browser session on each authenticated yt-dlp invocation. Do not export or persist a Windows cookie file. |
-| Windows fallback | If default-browser detection fails, show a supported-browser picker. Do not add a raw-cookie text box in v1. |
-| Android browser | Use Firefox Android because it supports the requested `cookies.txt` add-on and private-browsing extension access. |
-| Android export scope | The tutorial must say **Current Site → Download**. It must explicitly warn against **ALL**, which would export unrelated site credentials. |
-| Android export page | Export from `https://www.youtube.com/robots.txt` in the same private tab used to sign in, then close all private tabs. This follows yt-dlp's current cookie-rotation guidance and is more durable than exporting from an open `m.youtube.com` page. |
-| Android redirect prevention | Put Firefox's **Open links in apps → Never** step before any YouTube link. Include Android's YouTube app “Open by default” settings as a fallback. Resonance cannot change either setting silently. |
-| Android storage | Store the validated file at a fixed path under `noBackupFilesDir`, using an atomic native write. Do not store cookie contents in SharedPreferences, Downloads, logs, sync, history, or analytics. |
-| Android import UX | File import is the primary path. Do not add a visible paste field in v1; a credential-sized text box is easier to leak, log, or partially corrupt. |
-| Auth usage | Access is explicit opt-in. Once configured and verified, use it for all yt-dlp-backed YouTube operations until the user clears it. This avoids a failed anonymous request before every operation on a challenged network. |
-| Streaming | Return a structured stream result containing the URL and scoped request headers. Never blindly promote all exported cookies into an HTTP `Cookie` header. |
-| Error classification | Match explicit verification/login phrases. A generic HTTP 403 is not enough to label a failure as authentication-related. |
-| Browser extension | Do not build a “Resonance Cookies” extension in v1. The Firefox add-on already covers Android; an extension adds store review, broad permissions, trust, and maintenance obligations. |
-| PO tokens/OAuth | Do not add OAuth, PO-token providers, or new forced YouTube player clients in this work. OAuth is no longer supported by yt-dlp for YouTube, and PO tokens are a separate problem. |
+| Eligibility | Fetch YouTube Music Home only when `YoutubeAccessStatus.isConfigured` is true and the state is not `rejected`, `verificationRequired`, or `unavailable`. `configuredUntested` may fetch because Android restarts currently restore that state; a successful home response counts as an authenticated success. |
+| No-cookie behavior | Do not call the home backend. Show a compact “Connect YouTube to see your Music Home” card linking to YouTube Access. Keep local Suggested Music below it. |
+| Broken-session behavior | Do not fall back to an anonymous `FEmusic_home` response. Show Fix access and keep any local Suggested Music available. |
+| Feed placement | The empty-query Search body becomes a vertically scrollable discovery surface. Authenticated YouTube Music shelves appear first; local “Based on this playlist” suggestions appear second. Search results continue to replace the discovery surface while a query is present. |
+| Initial feed size | Request at most six shelves and retain at most twelve items per shelf. This bounds network work and usually requires no more than one continuation request. Do not poll in the background. |
+| Playable scope | Display only items with a valid 11-character `videoId` in the first release. Preserve collection metadata in the internal model, but do not fake album/playlist/artist playback by searching its title. Hide collection-only shelves rather than showing dead controls. |
+| Actions | Convert a playable home item to the existing `YoutubeTrack` model and reuse the same Play, Stream, and Download workflows as search results. |
+| Cache | Use an in-memory 15-minute cache keyed by access revision and account slot. Do not persist a personalized feed to SharedPreferences. Clear it immediately on disconnect, cookie replacement, browser replacement, or account-slot change. |
+| Refresh | One explicit Refresh Home action bypasses the cache. Coalesce simultaneous loads and ignore stale results using a generation token. |
+| Account selection | Default to Google account slot `0`. Add an Advanced integer selector restricted to `0..9`; changing it increments the access revision and clears home/stream/search caches. Do not expose cookie/account IDs. |
+| Brand accounts | Out of scope for the first pass. Document that a brand account may need a future optional 21-digit on-behalf-of ID after the primary account-slot implementation is verified. |
+| Dependency | Pin `ytmusicapi==1.12.2` on both platforms. Keep the exact existing yt-dlp nightly pin wherever yt-dlp is embedded. |
+| Security | Platform code may see cookie values in memory. Dart, method-channel payloads, stdout, stderr, files created by Resonance on Windows, preferences, and logs may not. |
+| Failure isolation | A Music Home parser/server failure must not mark otherwise-working yt-dlp streaming/download access as disconnected. Only a clear missing/rejected authentication response should update YouTube Access to needs-attention. |
+| Android extraction recovery | Preserve the current attempt order initially, but record every attempt by stable label. If cookie-free `android_vr` cannot resolve the failing fixture/video, bundle the matching `yt-dlp-ejs` scripts and a supported arm64 Android JavaScript runtime; do not enable remote component downloads as the permanent fix. |
+| Android Python | Treat the Python 3.10 warning as scheduled runtime debt and validate Python 3.11 in the same Android media workstream, without changing the exact yt-dlp nightly pin. |
 
-## Scope
-
-This plan covers:
-
-- The Windows browser-session connection and verification flow.
-- The Android Firefox/cookies.txt tutorial, import, validation, storage, testing, replacement, and clearing flow.
-- Centralized Windows yt-dlp process construction so every call site receives the same authentication arguments and diagnostics behavior.
-- Android Kotlin-to-Python cookie-path propagation for every yt-dlp operation.
-- Structured access status, structured YouTube failures, concise user-facing recovery UI, and queue integration.
-- Stream URL/header propagation and cache invalidation after credential changes.
-- Unit, widget, Python, native, manual, and release validation on both supported platforms.
-- User-facing documentation and session handoff updates after implementation.
-
-## Non-goals
-
-Do not include any of the following in the first implementation:
-
-- A custom Chromium/Firefox Resonance browser extension.
-- A Google username/password form or embedded YouTube login page.
-- OAuth login.
-- Automatic Android yt-dlp updates after installation; Android's Python package remains embedded in the signed APK.
-- A PO-token provider, forced `mweb` client, or changes to the existing `android_vr` / `web_embedded` fallback.
-- Importing Windows cookie files or keeping a plaintext Windows cookie cache.
-- Automatically changing Firefox or Android app-link settings.
-- Deleting the user's original Android export from Downloads without a separate, explicit Storage Access Framework grant.
-- Treating all network errors, all 403 responses, or all unavailable videos as sign-in problems.
-- Uploading, syncing, backing up, or transferring credentials through Resonance Sync or PC Companion.
-
-## Confirmed current repository state
-
-The implementation model must begin from these verified facts, not older documentation:
-
-- `pubspec.yaml` is `2.9.2+2`; current HEAD is `0e737ac` / `v2.9.2`.
-- Windows ships yt-dlp nightly `2026.08.20.234504` in the release `bin` directory.
-- Android pins `yt-dlp==2026.8.20.234504.dev0` through Chaquopy.
-- The working tree already contains unrelated edits to `.gitignore` and `release/v2.9.2/patchnotes.md`. Preserve them and do not stage them as part of this feature.
-- `PlayerHandler` remains the playback authority. `FileService` remains the playlist mutation authority.
-- The active targets are Windows and Android only.
-
-### Current Windows yt-dlp call sites
-
-Direct yt-dlp processes currently exist in all of these paths:
-
-1. `lib/widgets/youtube/windows_youtube.dart`
-   - Search: `MediaDownloader._runSearch`
-   - Single-link metadata: `MediaDownloader.lookup`
-   - Download: `MediaDownloader._downloadAudioUnlocked`
-   - Dialog metadata: `_fetchMetadata`
-2. `lib/core/audio/audio_service.dart`
-   - Stream extraction: `PlayerHandler._resolveStreamUrl`
-3. `lib/screens/settings/settings_screen.dart`
-   - Cover lookup: `_lookupFirstThumbnail`
-4. `lib/services/external_playlist_service.dart`
-   - YouTube playlist metadata: `_fetchWindowsYoutubePlaylistJson`
-
-Search currently drains and discards stderr and does not reject a nonzero exit before parsing. Downloads eventually reduce the failure to `yt-dlp exited with code N`. Both behaviors hide the authentication message needed for recovery.
-
-All direct launches must move behind one Windows runner. After migration, this verification command should find no direct yt-dlp launch outside that runner:
-
-```powershell
-rg -n "Process\.(start|run).*yt-dlp|ytDlpPath" lib
-```
-
-References to a binary path for existence checks are acceptable; process construction is not.
-
-### Current Android boundary
-
-- Dart uses `resonance/android_youtube` in `lib/widgets/youtube/android_youtube.dart`, `PlayerHandler`, Settings cover lookup, and external playlist import.
-- `MainActivity.kt` starts Chaquopy and dispatches search, metadata, playlist metadata, first-thumbnail lookup, download, and stream resolution to `ytdlp_bridge.py`.
-- Python's `_make_ydl` applies `_BASE_OPTS`, while `_extract_info` tries yt-dlp defaults and then the existing Android-safe `android_vr,web_embedded` fallback.
-- No Python function currently accepts `cookiefile`.
-- `get_stream_url` discards both underlying exceptions and raises a generic final message, so the original sign-in error cannot be classified.
-- Android downloads use one EventChannel and are intentionally serialized by `YoutubeDownloadGate`.
-
-### Current settings and error UI
-
-- `SettingsScreen` uses section headers, bordered surface cards, and `_SettingsTile`. It has no width cap and tiles constrain subtitles to two lines.
-- Downloads currently contains download location, history, and cover lookup.
-- Raw errors are inserted into snackbars in `youtube_search_screen.dart`, both platform YouTube dialogs, cover lookup, and queue entries. This is the source of the oversized pink error shown by the user.
-- `DownloadQueueEntry` stores only a free-form error string, so it cannot offer an authentication-specific action.
-
-### Current streaming behavior
-
-- `PlayerHandler._resolveStreamUrl` caches `Map<String, String>` by webpage URL.
-- Windows parses a full yt-dlp info object and registers a loopback `_WindowsStreamProxy`, which forwards `http_headers` and range requests.
-- Android returns only a raw URL and constructs `AudioSource.uri` without headers.
-- Changing authentication without invalidating the cache can reuse a guest-resolved URL or old request headers.
-
-## Research-backed constraints
-
-The implementation must preserve the following externally verified behavior:
-
-1. [yt-dlp authentication options](https://github.com/yt-dlp/yt-dlp#authentication-options) define `--cookies FILE` as a Netscape-format cookie file and `--cookies-from-browser BROWSER[+KEYRING][:PROFILE][::CONTAINER]` for browser-session extraction. Supported Windows choices include Edge, Chrome, Firefox, Brave, Chromium, Opera, Vivaldi, and Whale.
-2. The [yt-dlp cookie FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp) requires the first cookie-file line to be `# HTTP Cookie File` or `# Netscape HTTP Cookie File`. It also warns that combining browser extraction with `--cookies` can export cookies for every site; Resonance must not do that.
-3. The [yt-dlp YouTube extractor guide](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies) says YouTube rotates cookies in open tabs. Its durable export sequence is: private window, sign in, same tab open `youtube.com/robots.txt`, export YouTube cookies, close the private window, and never reopen that session.
-4. The same yt-dlp guide warns that an account used with yt-dlp can be restricted or banned and recommends using cookies only when needed or using a separate account. The UI must disclose this before connection/import.
-5. The requested [cookies.txt Firefox add-on](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/) is listed on Mozilla Add-ons, is available for Firefox Android, and exports Netscape HTTP Cookie Files. It is third-party software by Lennon Hill, not a Resonance or Mozilla-authored extension.
-6. Mozilla documents that Firefox Android can enable an extension for private browsing under Extensions and that installation offers an **Allow in private browsing** choice: [Firefox Android extension help](https://support.mozilla.org/en-US/kb/find-and-install-add-ons-firefox-android).
-7. Mozilla's [Open links in apps guidance](https://support.mozilla.org/en-US/kb/set-firefox-android-open-links-native-apps) gives the exact path: menu → Settings → Advanced → Open links in apps → Never.
-8. Flutter's official [`url_launcher`](https://pub.dev/packages/url_launcher) supports Android and Windows and opens `https` URLs in an external handler. Call `launchUrl` and handle failure rather than disabling actions solely because `canLaunchUrl` returned false.
-9. Android's [`getNoBackupFilesDir`](https://developer.android.com/reference/android/content/Context#getNoBackupFilesDir()) is app-private and excluded from remote automatic backup. No storage permission is required for the app to read or write there.
-10. yt-dlp's cookie jar exposes a URL-scoped header operation in [`YoutubeDLCookieJar.get_cookie_header`](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/cookies.py#L1290-L1300). Use that only for the selected media URL; never concatenate an entire cookie file into a header.
-
-The add-on menu wording **ALL / Current Site / Current Container / Current Container and Site**, each with Copy and Download actions, was verified by the user in Firefox Android. Product copy must use the exact **Current Site → Download** wording.
-
-## Product and UI specification
-
-### Settings entry
-
-Add this section between PC Companion and Downloads:
+## Target architecture
 
 ```text
-YOUTUBE ACCESS
-┌──────────────────────────────────────────────────────────────┐
-│ [verified-user icon] YouTube access                     [>] │
-│                     No authenticated session configured     │
-└──────────────────────────────────────────────────────────────┘
+YoutubeSearchScreen
+        |
+        v
+YoutubeMusicHomeService  <---- YoutubeAccessService status/revision/account slot
+        |
+        +---- WindowsYoutubeMusicHomeBackend
+        |          |
+        |          v
+        |    resonance-ytmusic-home.exe
+        |      - reads selected browser cookies into memory with pinned yt-dlp code
+        |      - builds only the music.youtube.com Cookie header
+        |      - calls pinned ytmusicapi get_home()
+        |      - writes normalized non-secret JSON only
+        |
+        +---- AndroidYoutubeMusicHomeBackend
+                   |
+                   v
+             resonance/android_youtube MethodChannel
+                   |
+                   v
+             MainActivity.withYoutubeCookieCopy
+                   |
+                   v
+             ytmusic_home_bridge.py
+               - reads private Netscape copy
+               - calls pinned ytmusicapi get_home()
+               - returns normalized non-secret JSON only
 ```
 
-The subtitle is derived from `YoutubeAccessStatus`:
+`YoutubeMusicHomeService` must be the only UI-facing owner of cache, request coalescing, generation cancellation, payload validation, and platform selection. Platform backends must own authentication material and HTTP/API work.
 
-- Not configured: `No authenticated session configured`
-- Windows ready: `Using Edge browser session · tested 2 min ago`
-- Android ready: `YouTube cookies imported · tested 2 min ago`
-- Configured but untested: `Session configured · test required`
-- Auth challenge observed: `YouTube verification required`
-- Previously configured but rejected: `Session expired or was rejected`
-- Test/network failure: `Could not verify session · tap for details`
+## Shared contracts
 
-Use an `AnimatedBuilder`/provider listener so the subtitle updates after setup without reconstructing Settings manually.
+### Dart models
 
-### Dedicated screen structure
-
-Create `lib/screens/settings/youtube_access_screen.dart`.
-
-- Use an `AppBar` titled **YouTube access**.
-- On Windows, center content with a maximum width of approximately 720 logical pixels.
-- On Android, use the full available width with 16-pixel horizontal padding.
-- Use the current theme's `surface`, `surfaceContainer*`, `outline`, `primary`, and `error` colors. Do not hard-code a second design system.
-- Use compact custom cards rather than Flutter's stock `Stepper`; stock Stepper is visually heavy on desktop and tends to overflow when steps contain several actions.
-- Keep tap targets at least 48 logical pixels, support keyboard focus on Windows, and preserve readability at 2.0 text scale.
-- Status must always include an icon and text; do not communicate ready/error state with color alone.
-
-The top status card contains:
-
-- Icon: `verified_user_rounded`, `shield_outlined`, or `warning_amber_rounded` according to state.
-- Heading: `Ready`, `Setup required`, `Verification required`, `Testing…`, or `Could not verify`.
-- One short explanation.
-- Last successful test time when available.
-- No cookie names, cookie counts, account email, profile filesystem path, or raw yt-dlp output.
-
-### Windows flow
-
-#### Primary flow
-
-1. User presses **Connect browser session**.
-2. Detect the current `https` default browser using the read-only Windows `UserChoice` association. Map the ProgID or associated executable name to a supported yt-dlp browser ID.
-3. If detection succeeds, hold the browser choice as pending and open `https://www.youtube.com/` in the default browser.
-4. Show an in-app waiting card/dialog:
-   - `Sign in to YouTube or complete any verification page in the browser.`
-   - `Return to Resonance when YouTube opens normally.`
-   - Primary action: **I'm signed in — test access**
-   - Secondary action: **Cancel**
-5. Test the pending browser with an authenticated, non-downloading yt-dlp extraction and a 30-second timeout.
-6. Save the browser ID only after a successful test. Increment the access revision, update status, and clear stale resolution/search caches.
-7. Show `Browser session ready` and return to the access screen.
-
-There is no reliable callback from a normal browser login to Resonance. Do not fake a fully automatic completion. The one explicit **I'm signed in — test access** press is required and makes failures understandable.
-
-Use a normal Windows browser session, not an incognito/private window. The durable private-window export sequence is for Android's static cookie file; yt-dlp's Windows browser extractor does not read the private session, and Resonance instead reads the current regular session afresh for each invocation.
-
-#### Browser detection and selection
-
-Implement a Windows-only detector behind an injectable interface:
-
-1. Read, never write, this value:
-
-   ```text
-   HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice\ProgId
-   ```
-
-2. Recognize common ProgID prefixes directly (`MSEdgeHTM`, `ChromeHTML`, Firefox URL IDs, `BraveHTML`, Vivaldi, Opera, Chromium).
-3. For an unknown ProgID, query its `shell\open\command`, extract the executable basename, and map known names such as `msedge.exe`, `chrome.exe`, `firefox.exe`, `brave.exe`, `vivaldi.exe`, `opera.exe`, and `chromium.exe`.
-4. Keep registry parsing in a small class with fixture-driven tests. Do not scatter `reg.exe` output parsing through widgets.
-5. If detection is unsupported or permission fails, show a browser picker. Precede it with: `Choose the browser where you are signed in to YouTube.`
-6. The picker may include Edge, Chrome, Firefox, Brave, Vivaldi, Opera, Chromium, and Whale. Do not show Safari on Windows.
-7. yt-dlp defaults to the most recently accessed profile when no profile is supplied. Keep v1 profile-free. A failed test should explain that the signed-in profile must be the browser's currently active/recent profile.
-
-If the user chooses a non-default browser, resolve and launch that installed executable with `Process.start(executable, [url], runInShell: false, mode: detached)`. Search registered App Paths and validated common install locations; never interpolate the URL into a shell command. If no executable can be located, leave the selection intact, copy/open the URL through the default handler, and tell the user to open it in the selected browser manually.
-
-#### Windows ready state
-
-Show these actions:
-
-- **Test access**
-- **Reconnect** (opens YouTube again with the current browser pending)
-- **Choose another browser**
-- **Disconnect** (confirmation required; clears only browser selection/status)
-
-Include this disclosure near the actions:
-
-> yt-dlp reads the selected browser's cookies locally when Resonance uses YouTube. Resonance does not save a Windows cookie file or your Google password.
-
-Map common extraction failures to specific guidance:
-
-- Cookie database missing: `No browser profile was found. Open the browser once, sign in, and retry.`
-- Chromium cookie database locked/copy denied: `Close all browser windows, then retry the test.`
-- Cookie decryption failed: `Windows could not unlock this browser session. Try Firefox or another supported browser.`
-- Wrong/recent profile: `YouTube may be signed in under another browser profile. Make that profile active, then retry.`
-
-### Android flow
-
-The first-time screen is a vertical tutorial. Each card has a number, short title, two or three lines of body text, and at most two actions.
-
-#### Step 1 — Install Firefox
-
-Copy:
-
-```text
-Install Firefox for Android. Resonance uses Firefox because it can export a
-YouTube session as the cookie file yt-dlp understands.
-```
-
-Actions:
-
-- **Install Firefox** → `https://play.google.com/store/apps/details?id=org.mozilla.firefox`
-- If already installed: **Open Firefox**
-
-The native launcher should try `org.mozilla.firefox`, then known Firefox Beta/Nightly packages, before falling back to the Play Store or default browser.
-
-#### Step 2 — Keep YouTube inside Firefox
-
-This step must appear before any button which opens YouTube.
-
-Copy:
-
-```text
-In Firefox, open ⋮ → Settings → Advanced → Open links in apps, then choose Never.
-This stops YouTube links from jumping into the YouTube app while you sign in.
-```
-
-Actions:
-
-- **View Firefox instructions** → Mozilla's official link-in-app help page.
-- **YouTube app settings** → Android application details for `com.google.android.youtube`.
-
-Fallback copy beneath the second action:
-
-```text
-If links still jump away, open “Open by default” in YouTube's app settings and
-turn off supported-link opening, then return to Firefox.
-```
-
-Do not claim Resonance changed these settings; it only opens the relevant help/settings surface.
-
-#### Step 3 — Install cookies.txt
-
-Copy:
-
-```text
-Install the “cookies.txt” add-on by Lennon Hill from Mozilla Add-ons. During
-installation, allow it in private browsing so it can export the session below.
-```
-
-Action:
-
-- **Open cookies.txt add-on** in Firefox, using the exact link:
-  `https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/`
-
-Also show an expandable permission note: the third-party add-on requests access to site data, tabs, downloads, and the clipboard. Link to the Mozilla listing; do not call it an official Mozilla add-on.
-
-#### Step 4 — Create a durable YouTube session
-
-Copy:
-
-```text
-Open one new private Firefox tab and sign in at youtube.com. In that same tab,
-open youtube.com/robots.txt. Keep it as the only private tab.
-```
-
-Actions:
-
-- **Open YouTube in Firefox** → `https://www.youtube.com/`
-- **Open robots.txt in Firefox** → `https://www.youtube.com/robots.txt`
-
-If the add-on is absent in the private tab, show this inline fix:
-
-```text
-Firefox ⋮ → Extensions → cookies.txt → Run in private browsing → On
-```
-
-An optional **Why robots.txt?** expansion should explain in plain language that YouTube changes account cookies while normal YouTube tabs remain open, and yt-dlp recommends this export sequence.
-
-#### Step 5 — Export only YouTube cookies
-
-Copy with typographic emphasis:
-
-```text
-While robots.txt is open, open cookies.txt and choose Current Site → Download.
-Do not choose ALL. Then close every private Firefox tab and do not reopen that session.
-```
-
-If Firefox displays `m.youtube.com` during login, that is acceptable while signing in, but the final export page must be `www.youtube.com/robots.txt` so the tutorial and validation are deterministic.
-
-#### Step 6 — Import into Resonance
-
-Copy:
-
-```text
-Import the downloaded .txt file. Resonance validates it, keeps an app-private
-copy, and tests it without downloading audio.
-```
-
-Actions:
-
-- Primary: **Import cookies.txt**
-- Secondary: **Choose another file** after a failed validation
-
-After a successful import and test:
-
-- Replace the tutorial with a compact ready card.
-- Show **Test access**, **Replace cookies**, **Show guide**, and **Clear cookies**.
-- Show a persistent reminder: `Delete the original cookies.txt from Downloads. Treat it like a password.`
-- Do not delete the source automatically; the file picker may expose only a copied cache path or lack delete permission for the original document.
-
-### Account safety disclosure
-
-Before the first Windows connection or Android import, show a compact warning card:
-
-```text
-This uses a signed-in YouTube session. Automated requests can cause YouTube to
-temporarily restrict or permanently disable an account. Use only when YouTube
-requires verification, avoid large batches, and consider a separate account.
-```
-
-Require an acknowledgement for the first setup only. Persist a non-secret boolean so the warning is not shown on every test. Clearing access does not need to reset the acknowledgement.
-
-## Technical architecture
-
-### 1. Shared status and failure models
-
-Create models under `lib/core/youtube/` or `lib/models/`:
+Create `lib/core/youtube/youtube_music_home_models.dart` with immutable models:
 
 ```dart
-enum YoutubeAccessMethod { none, windowsBrowser, androidCookieFile }
+enum YoutubeMusicHomeItemKind { song, video, album, playlist, artist, channel, unknown }
 
-enum YoutubeAccessState {
-  notConfigured,
-  configuredUntested,
-  testing,
+class YoutubeMusicHomeItem {
+  String title;
+  String subtitle;
+  YoutubeMusicHomeItemKind kind;
+  String? videoId;
+  String? browseId;
+  String? playlistId;
+  String? thumbnailUrl;
+  int? durationSeconds;
+  bool get isPlayable;
+  YoutubeTrack? toYoutubeTrack();
+}
+
+class YoutubeMusicHomeShelf {
+  String title;
+  List<YoutubeMusicHomeItem> items;
+  List<YoutubeMusicHomeItem> get playableItems;
+}
+
+class YoutubeMusicHomeResult {
+  int schemaVersion;
+  List<YoutubeMusicHomeShelf> shelves;
+  DateTime fetchedAt;
+  int accessRevision;
+  int authUserIndex;
+}
+```
+
+Parsing requirements:
+
+- Reject a top-level payload whose `schemaVersion` is not `1`.
+- Limit shelf count, item count, and string lengths again in Dart even though helpers already limit them.
+- Accept missing optional fields without crashing the complete feed.
+- Require `videoId` to match `^[A-Za-z0-9_-]{11}$` before creating `https://www.youtube.com/watch?v=<id>`.
+- Select the largest valid HTTPS thumbnail from the platform-normalized list, or accept a single normalized `thumbnailUrl`.
+- Build artist text from the ordered `artists[].name` list. Fall back to `author[].name`, album name, then `YouTube Music`; never display `null` or a map's `toString()`.
+- Drop empty titles, duplicate video IDs within a shelf, and duplicate video IDs in immediately adjacent shelves. Do not globally flatten the feed.
+
+### Platform JSON schema
+
+Both platform implementations must emit the same bounded schema:
+
+```json
+{
+  "schemaVersion": 1,
+  "shelves": [
+    {
+      "title": "Quick picks",
+      "items": [
+        {
+          "kind": "song",
+          "title": "Track title",
+          "subtitle": "Artist",
+          "videoId": "abcdefghijk",
+          "browseId": null,
+          "playlistId": null,
+          "thumbnailUrl": "https://...",
+          "durationSeconds": 213
+        }
+      ]
+    }
+  ]
+}
+```
+
+Forbidden keys include `cookie`, `authorization`, `headers`, `sapisid`, `path`, `browserProfile`, raw response JSON, and account email. Add automated recursive tests that fail if forbidden keys appear at any depth.
+
+### Backend interface
+
+Create `lib/services/youtube/youtube_music_home_backend.dart`:
+
+```dart
+abstract interface class YoutubeMusicHomeBackend {
+  Future<Map<String, Object?>> fetchHome({
+    required int shelfLimit,
+    required int itemLimit,
+    required int authUserIndex,
+  });
+}
+```
+
+Provide injected fake/memory implementations for unit and widget tests. Production selection belongs in `YoutubeMusicHomeService`, not the widget.
+
+## Authentication and status rules
+
+Add a non-secret `youtube_access.auth_user_index` preference owned by `YoutubeAccessService`:
+
+- Default: `0`.
+- Valid values: `0..9`; reject or clamp anything outside the range at the service boundary.
+- `setAuthUserIndex` increments `YoutubeAccessStatus.revision`, clears the last successful Music Home state, and notifies listeners.
+- Do not clear the selected browser or imported Android cookie file when only the account slot changes.
+
+Add `YoutubeAccessService.recordAuthenticatedSuccess()`:
+
+- Transition `configuredUntested`, `testing`, or an old transient-unavailable state to `ready` only after a valid authenticated platform response.
+- Persist `last_successful_test_at` for both platforms, not Windows only.
+- On Android initialization, compare the persisted success timestamp with native `updatedAt`. Restore `ready` only if the success occurred after the current cookie import; otherwise restore `configuredUntested`.
+- Do not increment credential revision for a health timestamp change.
+
+Home eligibility state machine:
+
+| Access state | Home request? | UI |
+| --- | --- | --- |
+| `notConfigured` | No | Connect card plus local suggestions |
+| `configuredUntested` | Yes, once | Home loading; success records ready |
+| `testing` | No second request | Keep current loading/current data |
+| `ready` | Yes | Cached or live Home shelves |
+| `verificationRequired` | No | Fix access card plus local suggestions |
+| `rejected` | No | Reconnect/re-export card plus local suggestions |
+| `unavailable` | No automatic retry | Retry and Details; do not silently use anonymous Home |
+
+Map only explicit 401/403 authentication responses, missing `LOGIN_INFO`, missing `__Secure-3PAPISID`, or Google's login-required response to `sessionRejected`. Map timeouts/DNS to network, HTTP 429 to rate-limited, and parser-shape changes to a new `YoutubeFailureKind.musicHomeChanged` (or a similarly specific non-access kind). Do not label every HTTP 403 from media streaming as an expired session.
+
+## Windows implementation
+
+### Why a helper executable is required
+
+Dart cannot safely receive browser cookies, and the existing standalone `yt-dlp.exe` cannot hand an in-memory cookie jar to another library. Exporting with `--cookies` writes every site cookie. The preferred Windows solution is therefore a dedicated one-shot helper executable which contains the same pinned yt-dlp cookie extraction code plus pinned `ytmusicapi`.
+
+Add a source/build area such as:
+
+```text
+tool/windows_ytmusic_home/
+  resonance_ytmusic_home.py
+  requirements.lock.txt
+  resonance_ytmusic_home.spec
+  README.md
+  tests/
+```
+
+Lock at minimum:
+
+```text
+yt-dlp==2026.8.20.234504.dev0
+ytmusicapi==1.12.2
+requests==<tested exact version>
+pyinstaller==<tested exact version>
+```
+
+Do not run `yt-dlp --update` as part of the helper build. The embedded yt-dlp version must stay identical to Android and the current Windows nightly until a separate dependency update is intentionally made.
+
+### Helper invocation
+
+Use a narrow CLI with non-secret arguments only:
+
+```text
+resonance-ytmusic-home.exe home
+  --browser firefox
+  --auth-user 0
+  --shelf-limit 6
+  --item-limit 12
+```
+
+Rules:
+
+- Validate browser against the same supported IDs as `WindowsBrowserDetector`.
+- Never use a shell.
+- Never accept cookie values, profile database paths, arbitrary URLs, output paths, or raw headers as arguments.
+- Return exactly one normalized JSON document on stdout on success.
+- Return a short machine code and sanitized summary on stderr on failure; never print a Python traceback in release mode.
+- Impose a 30-second Dart timeout, kill the process on timeout, bound stdout/stderr to 1 MiB/64 KiB, and reject trailing non-JSON stdout.
+- Add `--version` for packaging smoke tests. It should report helper schema, ytmusicapi version, and embedded yt-dlp version, without environment paths.
+
+### In-memory cookie flow
+
+Inside the helper:
+
+1. Use the pinned yt-dlp Python cookie APIs to extract the selected browser's cookie jar in memory. Prefer a public/stable `YoutubeDL` option path over directly importing underscore-prefixed parser functions.
+2. Ask the cookie jar for the Cookie header applicable to `https://music.youtube.com/youtubei/v1/browse`. This naturally excludes unrelated domains from the request.
+3. Require a signed-in YouTube session and specifically `__Secure-3PAPISID` for the Music Home capability.
+4. Build the `ytmusicapi` browser-auth dictionary in memory with `Accept`, `Content-Type`, `X-Goog-AuthUser`, origin, Cookie, and a valid SAPISIDHASH Authorization value. Do not create `browser.json`.
+5. Instantiate `YTMusic(auth=<dict>, language="en")` and call `get_home(limit=shelfLimit)`.
+6. Normalize and bound the result before JSON serialization.
+7. Release references and exit. Do not write caches, cookies, auth JSON, diagnostics, or response dumps to disk.
+
+The helper will necessarily decrypt/read the browser cookie database in its own memory, just as yt-dlp does now. Its output boundary is the security control.
+
+### Dart Windows runner
+
+Create `lib/services/youtube/windows_youtube_music_home_backend.dart`:
+
+- Resolve the helper at `<resolvedExecutableDir>/bin/resonance-ytmusic-home.exe`.
+- Read the browser ID and account slot from `YoutubeAccessService`; reject before launching if no browser is connected.
+- Launch with `Process.start(..., runInShell: false)` and the same UTF-8 environment helpers used for yt-dlp.
+- Collect stdout/stderr concurrently to prevent pipe deadlocks.
+- Classify helper error codes into `YoutubeFailure` without exposing the raw browser profile or cookie database path.
+- Call `YoutubeAccessService.observeFailure` only for explicit access failures.
+
+Do not route this through `WindowsYtdlpRunner.run`, because it is a different executable and output contract. Continue routing every actual `yt-dlp.exe` invocation through `WindowsYtdlpRunner`; add a repository check proving no new direct yt-dlp launch was introduced.
+
+### Packaging
+
+- Add the helper executable to `assets/bin/` and to the install list in `windows/CMakeLists.txt`.
+- Keep the helper source and lock file tracked even if the generated executable remains ignored like the existing runtime tools.
+- Add the ytmusicapi MIT license and all required bundled-dependency notices to a tracked `third_party_licenses/` or equivalent release-notices location.
+- Verify the release ZIP contains the helper beside yt-dlp, Deno, and FFmpeg.
+- Record the helper SHA-256 during release packaging.
+
+## Android implementation
+
+### Dependency
+
+In `android/app/build.gradle.kts`, add exactly:
+
+```kotlin
+install("ytmusicapi==1.12.2")
+```
+
+Keep the current yt-dlp nightly pin exactly unchanged. Confirm Chaquopy resolves pure-Python `requests` dependencies for arm64 and measure the APK size delta.
+
+### Python bridge
+
+Create `android/app/src/main/python/ytmusic_home_bridge.py` instead of crowding the already-large download bridge.
+
+Implement:
+
+```python
+def get_home(cookie_file: str, auth_user: int, shelf_limit: int, item_limit: int) -> str
+```
+
+Flow:
+
+1. Reject a missing cookie path without making a network request.
+2. Load the private Netscape working copy with `http.cookiejar.MozillaCookieJar` or yt-dlp's tested cookie-jar implementation.
+3. Derive only the header applicable to `https://music.youtube.com/youtubei/v1/browse`.
+4. Require `__Secure-3PAPISID`; do not loosen or duplicate the broader import validator.
+5. Construct the same in-memory ytmusicapi browser-auth dictionary as Windows.
+6. Call `YTMusic(...).get_home(limit=shelf_limit)` on the IO dispatcher.
+7. Normalize to schema version 1 and return a JSON string with no cookie/header/path fields.
+8. Sanitize exceptions before they reach Kotlin. No `repr(cookie)`, request dumps, or unbounded server bodies.
+
+Extract shared normalization concepts into similarly named functions on both platforms and drive both with the same checked-in redacted fixture. Do not try to share Python source between the APK and PyInstaller build through fragile relative paths unless the build proves reproducible.
+
+### Kotlin and method channel
+
+Extend the existing `resonance/android_youtube` content channel in `MainActivity.kt` with `getMusicHome`:
+
+- Read and clamp `authUser`, `shelfLimit`, and `itemLimit`.
+- Execute on `Dispatchers.IO`.
+- Wrap the Python call in `withYoutubeCookieCopy`, preserving unique private copy creation and `finally` deletion.
+- Return only the normalized JSON string.
+- Use stable error codes such as `MUSIC_HOME_NOT_CONFIGURED`, `MUSIC_HOME_SESSION_REJECTED`, `MUSIC_HOME_NETWORK`, `MUSIC_HOME_RATE_LIMITED`, and `MUSIC_HOME_PARSE_CHANGED`.
+- Never put `working.absolutePath` in `result.error` details.
+
+Create `lib/services/youtube/android_youtube_music_home_backend.dart` to invoke the method and decode only the top-level map. Keep the existing `resonance/youtube_access` channel dedicated to import/status/launch/test operations.
+
+## YouTube Music Home service
+
+Create `lib/services/youtube/youtube_music_home_service.dart` as a `ChangeNotifier` or an injected service with explicit immutable state:
+
+```dart
+enum YoutubeMusicHomeLoadState {
+  disconnected,
+  loading,
   ready,
-  verificationRequired,
-  rejected,
-  unavailable,
+  needsAttention,
+  networkError,
+  parserChanged,
 }
-
-class YoutubeAccessStatus {
-  final YoutubeAccessMethod method;
-  final YoutubeAccessState state;
-  final String? browserId;
-  final DateTime? configuredAt;
-  final DateTime? lastTestedAt;
-  final String? shortMessage;
-  final int revision;
-}
-```
-
-Use immutable values and `copyWith`. `revision` increments only when the effective credential source changes: successful browser connect/change/disconnect, Android import/replace/clear. A status-only test does not increment it.
-
-Create a structured exception:
-
-```dart
-enum YoutubeFailureKind {
-  verificationRequired,
-  sessionRejected,
-  browserProfileMissing,
-  browserCookiesLocked,
-  browserDecryptionFailed,
-  invalidCookieFile,
-  rateLimited,
-  network,
-  unavailable,
-  unsupported,
-  unknown,
-}
-
-class YoutubeFailure implements Exception {
-  final YoutubeFailureKind kind;
-  final String userMessage;
-  final String technicalSummary; // sanitized and bounded
-  final String? sourceUrl;
-}
-```
-
-The classifier must:
-
-- Recognize case-insensitive forms of `Sign in to confirm you're not a bot`, `Use --cookies-from-browser or --cookies`, and `LOGIN_REQUIRED` as `verificationRequired` when no access is configured.
-- Classify the same response as `sessionRejected` when authenticated access was actually used.
-- Recognize browser-database not found, copy/permission, and decryption messages separately.
-- Recognize explicit request-limit wording separately.
-- Preserve unavailable/private/deleted/geo-restricted video errors as content failures.
-- Treat a bare `403 Forbidden` as unknown/network unless an explicit authentication phrase is also present.
-- Remove ANSI codes, collapse whitespace, cap diagnostics to approximately 4 KiB, and redact user-profile/cookie file paths.
-- Never include cookie file contents, header values, or process arguments containing a profile path in a user-visible detail string.
-
-### 2. `YoutubeAccessService`
-
-Create an injectable `ChangeNotifier` service, for example:
-
-```text
-lib/services/youtube/youtube_access_service.dart
-lib/services/youtube/youtube_access_backend.dart
-lib/services/youtube/windows_youtube_access_backend.dart
-lib/services/youtube/android_youtube_access_backend.dart
 ```
 
 Responsibilities:
 
-- Initialize the platform backend and publish `YoutubeAccessStatus`.
-- Expose `isConfigured`, `isReady`, `revision`, and the settings subtitle.
-- Coordinate acknowledge/connect/test/import/replace/clear operations.
-- Record access-relevant failures observed outside Settings and update the state.
-- Provide Windows auth arguments internally to the Windows runner; widgets must not build them.
-- Notify `PlayerHandler` and search services when the effective credential source changes.
+- Observe `YoutubeAccessService` and invalidate whenever credential revision or account slot changes.
+- Refuse to call a backend when access is ineligible.
+- Coalesce identical in-flight requests.
+- Use a generation value so clearing the search field, typing a query, disconnecting, or changing credentials cannot apply stale results.
+- Cache a successful result in memory for 15 minutes.
+- On explicit refresh, bypass the cache but retain the old shelves until the refresh succeeds; show a small refresh indicator instead of blanking the whole page.
+- On success, call `recordAuthenticatedSuccess()` and retain only shelves containing at least one playable item for the current UI.
+- On auth rejection, discard the personalized cache and pass the structured failure to `YoutubeAccessService.observeFailure`.
+- On network or parser failures, keep a still-valid cached result visible with an inline warning when possible.
+- Dispose access listeners and cancel/ignore outstanding work correctly.
+
+Wire one app-wide instance in `main.dart` beside `YoutubeAccessService`, or make it screen-scoped with an injected app-wide cache. Prefer app-wide provider composition because credential invalidation and account selection should not be recreated for every Search route.
+
+## UI implementation and analysis
+
+### Empty-query discovery layout
+
+The current empty-query body can display only one local suggestion list. Replace that branch with a bounded `CustomScrollView`/sliver layout:
+
+1. **YouTube Music Home header**
+   - Title: `Your YouTube Music Home`
+   - Subtitle: `Personalized from your connected YouTube session`
+   - Refresh icon when eligible.
+2. **Home status or shelves**
+   - Not connected: one compact Connect YouTube card.
+   - Needs attention: one Fix access card with the sanitized short message and optional Details.
+   - Loading without cache: shelf skeletons, not a full-screen spinner.
+   - Ready: vertically stacked titled shelves; each shelf is a horizontally scrolling row of compact artwork cards.
+   - Refreshing: keep cards interactive and show progress in the header.
+3. **Local suggestions section**
+   - Rename visible heading to `Based on this playlist`.
+   - Keep the current playlist profile, ranking, retry, and refresh behavior below the authenticated area.
 
-Persist only non-secret data in SharedPreferences:
+Responsive behavior:
 
-```text
-youtube_access.warning_acknowledged
-youtube_access.windows_browser_id
-youtube_access.windows_configured_at
-youtube_access.last_successful_test_at
-```
+- Android: artwork cards about 148–168 logical pixels wide, horizontal shelf scrolling, at least 48-pixel action targets.
+- Windows: cards about 180–220 pixels wide and mouse-wheel/shift-wheel-friendly horizontal scrolling; do not let shelves force the existing 330-pixel download queue pane off-screen.
+- Use `PageStorageKey` per shelf so scroll offsets survive minor rebuilds.
+- Use existing theme colors, cards, motion helpers, and thumbnail fallbacks. Do not imitate YouTube Music branding or copy its exact UI.
+- Preserve keyboard focus and search preview behavior. Typing any non-empty query immediately hides discovery content and cancels/invalidates both home and local-suggestion generations.
 
-Do not persist Android cookie contents, account information, a cookie path, or HTTP headers in Dart preferences. Query the Android native store for Android status.
+### Home item actions
 
-Initialize the service in `main.dart` before creating UI providers. Pass it into `PlayerHandler` through constructor injection, with a test-friendly optional fake. Add it to `MultiProvider` beside `PlayerHandler`, `DownloadQueueController`, and `SyncSessionService`.
+For every playable card:
 
-Avoid calling platform methods from a widget constructor. Initialization must be idempotent and return a stable status even if a platform method fails.
+- Tap artwork/title: invoke the same main Play action as a normal search result.
+- Overflow or compact buttons: Play, Stream, Download.
+- Construct `YoutubeTrack` once from the normalized model; do not perform a second title search.
+- Continue using `TrackSourceRepository`, `MetadataCacheService`, `DownloadQueueController`, and `PlayerHandler` exactly as search results do.
+- Do not report a home item as playable if it has no valid `videoId`.
 
-### 3. Central Windows yt-dlp runner
+Extract shared result actions out of private screen methods if needed, for example into a small `YoutubeTrackActions` collaborator. Avoid copying `_play`, `_stream`, and `_download` into home widgets.
 
-Create `lib/services/youtube/windows_ytdlp_runner.dart`. Do not put new live code in the currently empty legacy `lib/core/youtube/ytdlp_service.dart` without either deleting/redirecting that legacy file or documenting why it became authoritative.
+### Settings
 
-The runner owns:
+In `YoutubeAccessScreen`, add an Advanced `YouTube Music account slot` control only after access is configured:
 
-- `yt-dlp.exe` and `deno.exe` path resolution relative to `Platform.resolvedExecutable`.
-- Required common arguments:
-  - `--js-runtimes deno:<path>`
-  - `--force-ipv4`
-  - `windowsYtDlpUtf8Arguments`
-- `windowsYtDlpUtf8Environment` and parent-environment inclusion.
-- Appending `--cookies-from-browser <browserId>` only when access is configured or a pending browser is being tested.
-- Process startup with `runInShell: false`.
-- Two APIs:
-  - `start(...)` for streaming progress/cancellable searches.
-  - `run(...)` for bounded stdout/stderr collection and optional timeout.
-- A structured result containing exit code, stdout, sanitized stderr tail, and whether authenticated arguments were used.
-- Throwing `YoutubeFailure` on nonzero exit, timeout, missing binary, or invalid output.
+- Default text: `Account 1 (slot 0)`.
+- Choices: slots `0..9`, described as relevant only when multiple Google accounts are signed into the same browser/session.
+- Explain that changing the slot changes which personalized Music Home is requested; it does not sign in or copy credentials.
+- Provide a `Refresh Music Home`/test affordance only if it can reuse the same service call and structured errors. Do not add a second raw diagnostic path.
 
-Do not put global `--no-warnings` in the runner; some callers can request it, but the runner needs stderr for classification. Do not print the full argument list when it contains a browser profile. Do not use a shell string.
+Do not display an account email, cookie name/value, SAPISID hash, or browser database path.
 
-Use a bounded tail buffer (32–64 KiB) for diagnostics rather than allowing a long playlist process to retain unlimited stderr. Preserve existing line-by-line download progress and the `_backgroundSearchProcesses` cancellation behavior.
+## Windows Play-button regression
 
-Migrate every verified Windows call site to this runner. In particular:
+This is a required parallel fix within the implementation, but it must be diagnosed as the reported action-specific bug:
 
-- Search must check the exit code before returning/caching results.
-- Search must not cache an empty result caused by an authentication failure.
-- Download must preserve a bounded stderr tail and stop immediately on authentication/browser-cookie errors rather than repeating the same request three times.
-- The current three-attempt retry remains only for transient network failures.
-- Playlist imports and cover lookup keep their existing timeouts and user semantics.
+- Working: with Windows browser cookies connected, the result can be added using **Stream**, and subsequent playlist streaming works.
+- Broken: pressing the result card's filled **Play** button does not successfully begin standalone playback.
+- Therefore, do not change cookie extraction globally or add a second resolver. Both paths must converge on `PlayerHandler._resolveStream` and `_WindowsStreamProxy`.
 
-### 4. Windows connection test
+### Investigation sequence
 
-The backend test should use a known, stable public test video unless the recovery dialog provides the URL which just failed. Prefer the failed source URL because it proves the exact challenged extraction.
+1. Reproduce with one identical `YoutubeTrack` URL and connected browser session:
+   - Play from result card.
+   - Stream into playlist, then play from the library.
+2. Capture sanitized stage markers, not secrets, for:
+   - `YoutubeSearchScreen._play`
+   - `PlayerHandler.playStandaloneStream`
+   - `loadTrack` generation and standalone flag
+   - `_resolveStream` cache hit/miss and access revision
+   - `WindowsYtdlpRunner` exit/result classification
+   - `_WindowsStreamProxy.register`
+   - first loopback request status/range
+   - `media_kit` open/playing/error state
+3. Compare yt-dlp arguments. The direct Play path must include the exact same selected `--cookies-from-browser` arguments as playlist playback.
+4. Verify the standalone load is not being cancelled by navigation, a competing queue load, `standaloneModeNotifier`, `_loadGeneration`, or the playback health check.
+5. Verify `playStandaloneStream` does not report success before `media_kit` has actually opened the proxy URL and begun buffering/playing.
+6. Verify the proxy preserves all yt-dlp-selected headers and the initial Range request in both paths.
 
-Fallback test URL:
+### Fix constraints
 
-```text
-https://www.youtube.com/watch?v=BaW_jenozKc
-```
+- Keep `PlayerHandler` as the playback authority.
+- Keep all Windows yt-dlp calls in `WindowsYtdlpRunner`.
+- Keep `_WindowsStreamProxy`; do not expose Google cookies to media_kit or Dart HTTP headers.
+- Refactor standalone and playlist activation to share one load-result contract. If `loadTrack` continues catching internally, return an explicit success/failure result or rethrow to the caller rather than relying on timing-sensitive notifier checks.
+- Navigate to `StandalonePlayerScreen` only after the handler confirms that the intended generation owns the loaded source and the backend is no longer idle.
+- On failure, keep Search visible and show the structured `YoutubeFailure` dialog with Fix access only for actual access failures.
+- Do not make the Play button add the track to the playlist as a workaround; Play is intentionally temporary standalone playback.
 
-Run an authenticated simulation with no media download, one video only, and a 30-second timeout. Require a valid extracted video ID or info object, not merely exit code zero. Never print cookies or dump them to a file.
+### Regression tests
 
-Commit a pending browser selection only after a successful test. If the test fails for ordinary network reasons, retain it in screen state but do not mark the app ready.
+- A handler-level test with an injected/fake stream resolver proves standalone and playlist loads request the same source URL and authenticated revision.
+- A load-generation test proves a successful standalone request cannot be mistaken for a cancelled/stale load.
+- A failure-propagation test proves a resolver failure reaches `_play` and no standalone route is pushed.
+- A widget test taps the filled Play button and verifies route push only after the fake handler reports a successful load.
+- A Windows manual test verifies audible playback, seeking, pause/resume, and returning from standalone mode with cookies connected.
 
-### 5. Android cookie validator
+## Android Play, Stream, and Download regression
 
-Create one pure Dart validator for immediate UI feedback and an equivalent native validation gate before storage. Native code must not trust that the Dart validator was called.
+This is also required work, independent of the YouTube Music Home request itself. Use the reported video ID `8mhMnaht-cM` as a live physical-device regression target, while keeping automated tests fully offline.
 
-Validation rules:
+Observed with cookies connected:
 
-1. Reject null, empty, or larger-than-1-MiB data.
-2. Strip a UTF-8 BOM and accept CRLF or LF line endings.
-3. Require the first non-empty line to be exactly `# HTTP Cookie File` or `# Netscape HTTP Cookie File`.
-4. Parse non-comment rows as seven tab-separated Netscape fields: domain, include-subdomains flag, path, secure flag, expiry, name, value.
-5. Treat `#HttpOnly_...` rows as cookie rows by removing the prefix before parsing; do not discard them as comments.
-6. Require valid TRUE/FALSE flags, a non-empty name, and a numeric expiry or `0`.
-7. Require at least one cookie whose normalized domain is `youtube.com` or ends in `.youtube.com`.
-8. Do not require hard-coded cookie names; YouTube can change them.
-9. Do not rewrite the file to only a guessed list of cookie names. The user's **Current Site** export is the scope control.
-10. Return counts/domains only internally for validation; never show names or values in UI or logs.
+- Direct **Play** reaches just_audio/ExoPlayer and reports `Source error 0`.
+- A URL added through **Stream** still does not play from the playlist.
+- **Download** ends with `Requested format is not available` after signature and n-challenge solving fail and yt-dlp reports that only images are available.
+- The same diagnostic includes the Python 3.10 deprecation warning.
 
-Validation messages must be specific:
+The current `_extract_info` implementation tries:
 
-- `This file is empty.`
-- `Choose the Netscape cookies.txt file downloaded by the Firefox add-on.`
-- `This file does not contain YouTube cookies. Export Current Site while youtube.com/robots.txt is open.`
-- `This cookie file is too large. Do not export ALL sites.`
+1. Maintained default clients with cookies.
+2. `android_vr` without cookies.
+3. `web_embedded` with cookies.
 
-### 6. Android native storage and access channel
+However, it retains only the final attempt's exception/diagnostic. The supplied error therefore does not prove whether `android_vr` ran, what it returned, or why it failed. Fix observability before changing client order.
 
-Add focused Kotlin classes instead of expanding every concern directly inside the already-large `MainActivity.kt`, for example:
+### Stage A — make extractor attempts auditable and safe
 
-```text
-android/app/src/main/kotlin/com/example/resonance/YoutubeCookieStore.kt
-android/app/src/main/kotlin/com/example/resonance/YoutubeAccessBridge.kt
-android/app/src/main/kotlin/com/example/resonance/FirefoxLauncher.kt
-```
+Replace anonymous `(opts, cookieFile)` tuples with a small internal attempt descriptor containing:
 
-Use a dedicated channel:
+- Stable label: `authenticated-defaults`, `cookie-free-android-vr`, or `authenticated-web-embedded`.
+- Whether cookies are intentionally attached; expose only `cookies=yes/no`, never a path/value.
+- Extractor client name.
+- Operation type: metadata, stream, or download.
 
-```text
-resonance/youtube_access
-```
+For each attempt, capture a bounded sanitized summary containing only:
 
-Proposed contract:
+- Attempt label.
+- Success/failure.
+- Number of returned formats.
+- Number of playable audio/combined formats.
+- Selected format ID, extension, protocol, audio codec, and video codec on success.
+- High-level failure phrases on error.
 
-| Method | Arguments | Result |
-| --- | --- | --- |
-| `getStatus` | none | `{configured, updatedAt, sizeBytes}`; never contents |
-| `importCookies` | `{bytes: Uint8List}` | validated status map |
-| `clearCookies` | none | updated status map |
-| `testCookies` | `{url?: String}` | `{ok, testedAt}` or structured platform error |
-| `isFirefoxInstalled` | none | boolean |
-| `openFirefoxUrl` | `{url: String}` | `{launched, package?}` |
-| `openYoutubeAppSettings` | none | boolean |
+Never include media URLs, Cookie/Authorization headers, cookie paths, response bodies, or full option dictionaries. When all attempts fail, return a structured aggregate in actual attempt order rather than only the final `web_embedded` error. Extend the Details UI to display these three labeled summaries compactly.
 
-Storage requirements:
+Add a validator callback to `_extract_info` so an extractor result counts as success only when it satisfies the operation:
 
-- Fixed target: `<noBackupFilesDir>/resonance_youtube/cookies.txt`.
-- The Dart side never supplies a destination path.
-- Create the directory only as needed.
-- Use `android.util.AtomicFile` or equivalent temp/finish/fail semantics so a crash cannot leave a half-written credential file.
-- Before each Python operation, create a uniquely named working copy under `<noBackupFilesDir>/resonance_youtube/work/`, pass that copy to yt-dlp, and delete it in `finally`. yt-dlp writes cookie files on close; per-invocation copies prevent a long download from locking or corrupting the canonical file while search/playback runs.
-- Serialize only the short canonical-file copy/import/clear operation. Do not serialize the full yt-dlp lifetime. Remove stale working copies during access-service startup in case the process previously crashed.
-- Keep ordinary Android app-UID filesystem protection; no storage permission is needed.
-- Derive updated time from the file or store non-secret metadata separately.
-- `clearCookies` performs an ordinary file delete and clears status metadata. Do not claim secure flash erasure.
-- Return no cookie text, names, domains, or values over the channel after import.
+- Metadata/search: required ID/title fields exist.
+- Stream: `_stream_payload` finds a valid HTTPS/HLS media URL and required headers.
+- Download: yt-dlp selects a real playable format and begins the download; image-only metadata is not success.
 
-Add narrow `<queries>` entries in `AndroidManifest.xml` for known Firefox packages if installation detection is used. Do not request `QUERY_ALL_PACKAGES`.
+This prevents an earlier attempt from returning unusable info and short-circuiting the fallback chain.
 
-The Firefox launcher must:
+### Stage B — prove or repair the existing fallback
 
-- Validate that URLs are `https` and belong to the fixed allow-list used by the tutorial.
-- Prefer standard Firefox, then Beta/Nightly when installed.
-- Use an explicit package intent for YouTube and add-on links so the YouTube app cannot intercept the launch.
-- Catch `ActivityNotFoundException` and return a clean fallback result.
+On a physical arm64 device, run three isolated diagnostic extractions for `8mhMnaht-cM` with the exact existing nightly:
 
-### 7. Android Python propagation
+1. Authenticated defaults only.
+2. Cookie-free `android_vr` only.
+3. Authenticated `web_embedded` only.
 
-Update every public Python entry point to accept an optional native-supplied cookie path:
+For each, run metadata/list-formats, stream resolution, and a bounded first-byte download probe. Do not infer download viability from metadata alone.
 
-```text
-search(query, limit, cookie_file=None)
-get_metadata(url, cookie_file=None)
-get_playlist_metadata(url, cookie_file=None)
-get_first_thumbnail(query, cookie_file=None)
-get_stream_data(url, cookie_file=None)
-download(url, output_dir, event_sink, cookie_file=None)
-test_access(url, cookie_file)
-```
+If `android_vr` returns a combined playable format such as format 18:
 
-Kotlin asks `YoutubeCookieStore` for a per-invocation working copy of the fixed canonical file, passes that copy to the Python call, and deletes it in `finally`. Dart does not repeat any cookie path on existing YouTube operations.
+- Ensure the stream selector accepts combined audio/video formats as its final fallback.
+- Ensure Download uses a selector that can fall back from audio-only to a directly downloadable combined format without requiring FFmpeg merging.
+- Ensure `_extract_info` reaches the second attempt for both stream and download.
+- Preserve the cookie-free nature of that attempt; yt-dlp intentionally skips `android_vr` when cookies are attached.
+- Add an exact simulated regression where authenticated attempts return image-only/signature failures and `android_vr` returns a combined MP4.
 
-Change `_make_ydl` / `_extract_info` so a present, readable cookie file becomes yt-dlp's `cookiefile` option. Preserve these invariants:
+If `android_vr` returns no playable format or a PO-token/server restriction for this video, proceed to Stage C. Do not add more hard-coded player clients blindly.
 
-- `_BASE_OPTS` remains unchanged unless directly required for cookies.
-- The default-client attempt still runs first.
-- The exact existing `android_vr,web_embedded` fallback remains second.
-- No OAuth, visitor data, `mweb`, PO token, or forced additional client is added.
-- If all stream format attempts fail, rethrow the most informative underlying exception rather than the current generic `Could not resolve stream URL` message.
+### Stage C — add an Android EJS runtime when fallback is insufficient
 
-`YoutubeDL` may save updates back to its cookie file on close. Those updates remain confined to the disposable working copy; do not merge them blindly into the canonical export. This preserves concurrent search/playback during a long download and keeps the private Firefox export as the stable credential source. No module-level lock should serialize full authenticated operations.
+Full EJS support requires both components:
 
-`test_access` must perform extraction only, require a valid video ID, and never download media.
+1. The exact `yt-dlp-ejs` version required by the pinned yt-dlp nightly.
+2. A supported JavaScript runtime executable.
 
-### 8. Structured stream result
+Implementation spike and decision gate:
 
-Create a shared in-memory model:
+- Read the pinned nightly's own `pyproject.toml`/package metadata during implementation and pin its exact required `yt-dlp-ejs` version. The current upstream line is `0.8.0`, but verify the `2026.8.20.234504.dev0` artifact rather than assuming master matches it.
+- Prefer a reproducibly built QuickJS-NG arm64 executable because it is much smaller than Deno/Node and can run fully offline. Use a current optimized QuickJS-NG release; avoid versions the yt-dlp guide warns can take minutes.
+- Build the executable as a PIE binary with the Android NDK. Package it in a location Android permits the app to execute (normally the app's native library directory, potentially with a library-style filename). Prove execution with `--version` on API 24 and the current target API before integrating yt-dlp.
+- Configure the Python API with `js_runtimes: {"quickjs": {"path": runtimePath}}`; obtain the path in Kotlin/native code and pass only that non-secret app-owned path to Python.
+- Bundle `yt-dlp-ejs` in Chaquopy. Do not depend on `--remote-components ejs:github` or `ejs:npm` for production: runtime downloads are network-dependent, update code outside an APK release, and npm mode requires Deno/Bun.
+- Add all QuickJS-NG and `yt-dlp-ejs` licenses/notices required by their exact bundled versions.
 
-```dart
-class ResolvedYoutubeStream {
-  final Uri uri;
-  final Map<String, String> headers;
-  final int accessRevision;
-}
-```
+If Android platform policy or Chaquopy packaging prevents a reliable standalone runtime executable, stop and document the blocker before attempting a WebView/JNI challenge-provider rewrite. Do not ship a writable copied executable or weaken Android execution security as a workaround.
 
-#### Android
+After EJS integration, authenticated defaults should remain the first attempt and use the bundled runtime/scripts. Keep `android_vr` as the second resilience path and `web_embedded` last unless live evidence supports a new maintained order.
 
-Replace `getStreamUrl`'s raw string with JSON/map data from Python:
+### Stage D — upgrade embedded Python to 3.11
 
-```json
-{
-  "url": "https://...",
-  "headers": {
-    "User-Agent": "...",
-    "Referer": "..."
-  }
-}
-```
+- Confirm the installed Chaquopy plugin version supports Python 3.11 for arm64 and configure it explicitly.
+- Confirm the build host uses the matching Python 3.11 build interpreter.
+- Rebuild/test yt-dlp, yt-dlp-ejs, ytmusicapi, requests, FFmpegKit integration, and all current Python bridges.
+- Measure APK size and startup impact.
+- Keep this change separable from extractor-order fixes so a Python packaging regression can be reverted without losing diagnostics.
 
-Select headers from the same chosen format as the returned URL, falling back to top-level `http_headers`. While the `YoutubeDL` instance is still open, call `ydl.cookiejar.get_cookie_header(streamUrl)` and include it only if the jar says cookies are scoped to that exact media URL. Do not add all cookie-file rows. Never log or persist the returned headers.
+Python 3.11 removes the deprecation warning and future-proofs the embedded runtime; it does not replace EJS and must not be presented as the signature-solving fix by itself.
 
-Construct Android `AudioSource.uri(resolved.uri, headers: resolved.headers)`. Add a compatibility parser only if required during migration; remove the old raw-string contract once Kotlin, Python, and Dart land together.
+### Stage E — stream and ExoPlayer verification
 
-#### Windows
+`Source error 0` is a playback-backend symptom, not a useful root cause. Improve the Android playback boundary so the app can distinguish:
 
-Keep the loopback proxy so media_kit receives a simple local URL and range behavior remains stable. Continue forwarding the selected format's `http_headers`.
+- No stream URL returned by yt-dlp.
+- CDN/manifest HTTP 401, 403, 404, or 429.
+- Missing required User-Agent/Referer/Cookie header.
+- Unsupported container/codec/manifest.
+- Expired URL or network timeout.
 
-Do not turn yt-dlp's top-level `cookies` info field into a global `Cookie` header. yt-dlp intentionally scopes cookies to target URLs. Validate real challenged-IP playback; if a selected media URL needs a cookie, add only a URL-scoped cookie through a safe helper, never the whole browser jar.
+Required behavior:
 
-#### Cache invalidation
+- Continue returning only the selected format's URL and URL-scoped headers from Python/Kotlin; do not expose the imported cookie jar.
+- Log/display a sanitized PlaybackException error code/subcode and HTTP status when available, never the URL query or headers.
+- On the first source failure for a YouTube stream, invalidate that track's resolved-stream cache and perform at most one fresh yt-dlp resolution. Do not create an infinite retry loop.
+- Verify URL-scoped Cookie, User-Agent, Referer, Origin, and Range behavior reach `AudioSource.uri` exactly as selected by yt-dlp.
+- If a first-byte probe is added, make it bounded and reuse the exact selected headers. Avoid probing every successful stream if ExoPlayer already provides enough diagnostic data.
+- Map final extraction failure to the existing YouTube failure dialog instead of leaving the user with raw `Source error 0`.
 
-- Cache `ResolvedYoutubeStream` against both webpage URL and access revision, or clear the URL cache whenever the revision changes.
-- Do not remove a Windows proxy entry currently serving playback merely because access changed; that could turn the current track into a 404. Clear future resolution cache entries and let old proxy registrations expire naturally.
-- Bound Windows proxy registrations and stream-cache entries to prevent unbounded credential/header retention in memory.
-- Clear the Windows search cache when browser access changes so an empty/guest result is not reused.
+### Android regression tests
 
-### 9. Failure presentation and recovery
+- All three extraction attempts execute in order when earlier attempts are image-only/unplayable.
+- `android_vr` never receives a cookie file.
+- Authenticated defaults and `web_embedded` do receive the private working copy.
+- Aggregate diagnostics include all attempt labels and contain no secret/path/media URL.
+- Stream selection accepts a valid combined MP4 when no audio-only format exists.
+- Download selection accepts a directly downloadable combined format without requesting an unavailable merge.
+- EJS smoke test reports the exact script package and QuickJS runtime as available.
+- A mocked signature/n-challenge fixture succeeds once EJS is enabled.
+- just_audio source failure triggers exactly one cache invalidation/re-resolution, then a structured final error.
+- The exact live ID `8mhMnaht-cM` passes Play, playlist Stream playback, and Download on a physical device with cookies configured.
 
-Create one reusable presenter/widget, for example:
+## File-by-file execution map
 
-```text
-lib/widgets/youtube/youtube_failure_dialog.dart
-```
+### New shared Dart files
 
-For `verificationRequired` or `sessionRejected`, show:
+- `lib/core/youtube/youtube_music_home_models.dart`
+  - Bounded schema parsing, item kinds, playable validation, `YoutubeTrack` conversion.
+- `lib/services/youtube/youtube_music_home_backend.dart`
+  - Backend interface and test fake.
+- `lib/services/youtube/youtube_music_home_service.dart`
+  - Cookie gating, cache, in-flight coalescing, access observation, structured state.
+- `lib/services/youtube/windows_youtube_music_home_backend.dart`
+  - Helper process launch, bounded output, timeout, failure mapping.
+- `lib/services/youtube/android_youtube_music_home_backend.dart`
+  - Method-channel call and payload decoding.
+- `lib/widgets/youtube/youtube_music_home_section.dart`
+  - Header, shelves, cards, skeletons, Connect/Fix/error states.
 
-```text
-Title: YouTube verification required
-Body: YouTube blocked this request until a signed-in session is provided.
-Actions: Not now | Open YouTube access
-```
+### Existing Dart files
 
-If access was configured but rejected, change the body to:
+- `lib/core/youtube/youtube_access_models.dart`
+  - Add a Music Home parser-change failure kind only if needed; avoid overloading `unsupported`.
+- `lib/services/youtube/youtube_access_service.dart`
+  - Account slot preference/setter, authenticated-success recording, Android tested-timestamp restoration, revision invalidation.
+- `lib/main.dart`
+  - Construct/provide/dispose the Home service and clear related caches on revision changes.
+- `lib/screens/youtube/youtube_search_screen.dart`
+  - Discovery sliver layout, home service consumption, shared track actions, Play-button fix integration.
+- `lib/screens/settings/youtube_access_screen.dart`
+  - Advanced account-slot UI and Home-specific recovery copy.
+- `lib/core/audio/audio_service.dart`
+  - Evidence-based Windows standalone Play fix, Android source-failure retry/classification, and test seams; preserve platform stream architectures.
+- `lib/widgets/youtube/youtube_failure_dialog.dart`
+  - Add concise parser-changed/home-unavailable copy without showing raw response data.
 
-```text
-Your saved YouTube session was rejected or expired. Reconnect the browser session
-or replace cookies.txt, then retry.
-```
+### Android files
 
-The recovery action pushes `YoutubeAccessScreen`, optionally passing the source URL which failed so **Test access** can validate that exact video. Do not automatically restart a download after credentials change; the user explicitly taps Retry to avoid surprising network or disk activity.
+- `android/app/build.gradle.kts`
+  - Exact `ytmusicapi==1.12.2` pin, exact matching `yt-dlp-ejs` pin if Stage C is required, and Python 3.11 configuration; leave yt-dlp pin untouched.
+- `android/app/src/main/python/ytmusic_home_bridge.py`
+  - Authenticated request and normalized schema.
+- `android/app/src/main/python/ytdlp_bridge.py`
+  - Labeled aggregate attempts, operation validators, EJS runtime configuration, playable combined-format fallback, and safe diagnostics.
+- `android/app/src/main/kotlin/com/example/resonance/MainActivity.kt`
+  - `getMusicHome` method-channel handler using `withYoutubeCookieCopy`; pass only the app-owned JS-runtime path into Python.
+- `android/app/src/main/jniLibs/arm64-v8a/` or the verified equivalent
+  - Reproducibly built QuickJS-NG runtime only if the Stage C execution spike passes.
+- `android/app/src/test/...`
+  - Channel argument bounds/error mapping where practical.
 
-For non-auth failures, show a short message and optional **Details** expansion/copy action. Details are sanitized and bounded. Never put full raw stderr in the main snackbar/dialog body.
+### Windows helper/build files
 
-Apply the presenter/classifier to:
+- `tool/windows_ytmusic_home/resonance_ytmusic_home.py`
+- `tool/windows_ytmusic_home/requirements.lock.txt`
+- `tool/windows_ytmusic_home/resonance_ytmusic_home.spec`
+- `tool/windows_ytmusic_home/README.md`
+- `tool/windows_ytmusic_home/tests/`
+- `windows/CMakeLists.txt`
+  - Install the generated helper into `bin`.
+- `third_party_licenses/`
+  - ytmusicapi and helper bundle notices.
 
-- Search and suggested-search failures.
-- Play-now and playlist-stream resolution failures.
-- Immediate and queued downloads.
-- Both legacy platform YouTube dialogs if they remain active.
-- External playlist import.
-- Playlist transfer YouTube lookup/download paths.
-- Fill Missing Covers.
+### Tests
 
-### 10. Download queue and history
+- `test/youtube_music_home_models_test.dart`
+- `test/youtube_music_home_service_test.dart`
+- `test/youtube_music_home_section_test.dart`
+- `test/windows_youtube_music_home_backend_test.dart`
+- Extend `test/youtube_access_service_test.dart`.
+- Extend `test/youtube_search_screen_test.dart` for gating, generation cancellation, refresh, and Play routing.
+- Extend or add PlayerHandler/standalone activation tests.
+- `test/python/test_android_ytmusic_home_bridge.py`.
+- Extend `test/python/test_android_ytdlp_bridge.py` with aggregate-attempt, combined-format, secret-redaction, and EJS availability cases.
+- Windows helper pytest suite using redacted cookie jars and recorded/hand-built response fixtures; no live credentials in source control.
 
-Extend `DownloadQueueEntry` with a structured failure kind or `YoutubeFailure` summary rather than only a raw string.
+## Detailed implementation sequence
 
-For an access failure, the queue row shows:
+Follow this order so each step has a testable contract and the lesser model does not start with UI guesswork.
 
-```text
-Verification required
-[Fix access] [Retry]
-```
+### Phase 1 — Shared model and security contract
 
-- **Fix access** navigates to `YoutubeAccessScreen` with the failed source URL.
-- **Retry** remains explicit and should be disabled while access setup/testing is in progress.
-- Later queued entries continue according to current FIFO semantics; one failed entry must not stop the worker.
-- Preserve the existing one-active-download constraint and Android EventChannel serialization.
+1. Add the Dart models/parser and exhaustive bounds tests.
+2. Create one redacted mixed-shelf fixture containing song, video, album, playlist, artist, missing fields, duplicates, invalid thumbnail schemes, and malformed IDs.
+3. Define the normalized schema and forbidden-key recursive assertion.
+4. Implement the backend interface and fake.
 
-Pass a compact user message to `DownloadHistoryRepository.recordFailure`. Do not store multi-line stderr or credential paths in history.
+Exit criteria: fixture parses deterministically; only valid song/video IDs convert to `YoutubeTrack`; oversized/malformed payloads fail safely.
 
-## File-by-file change map
+### Phase 2 — Android backend first
 
-| File / area | Planned change |
-| --- | --- |
-| `pubspec.yaml` | Add current compatible `url_launcher` dependency; run `flutter pub get`. |
-| `lib/main.dart` | Initialize/provide `YoutubeAccessService`; inject it into `PlayerHandler`. |
-| `lib/core/youtube/` or `lib/models/` | Add access status, failure, classifier, validator, and resolved-stream models. |
-| `lib/services/youtube/` | Add access coordinator, platform backends, Windows browser detector, and centralized Windows yt-dlp runner. |
-| `lib/screens/settings/settings_screen.dart` | Add separate YouTube Access section/tile; migrate cover lookup to the Windows runner and structured failures. |
-| `lib/screens/settings/youtube_access_screen.dart` | Add responsive Windows connection UI and Android guided import UI. |
-| `lib/core/audio/audio_service.dart` | Inject access service, use central runner, accept structured Android stream data/headers, and invalidate caches by revision. |
-| `lib/widgets/youtube/windows_youtube.dart` | Migrate search/lookup/download/metadata to runner; preserve progress/cancel behavior; expose structured failures. |
-| `lib/widgets/youtube/android_youtube.dart` | Normalize PlatformExceptions/events into `YoutubeFailure`; parse structured stream result where appropriate. |
-| `lib/screens/youtube/youtube_search_screen.dart` | Replace raw snackbars with failure presenter and recovery navigation. |
-| `lib/services/external_playlist_service.dart` | Use central runner/structured Android failures and preserve current timeouts. |
-| `lib/services/youtube_transfer_service.dart` and import UI | Propagate structured failures without changing playlist/source semantics. |
-| `lib/services/download_history_repository.dart` | Persist only the compact user-safe failure summary/code, never raw multi-line process output. |
-| `lib/models/download_queue_entry.dart` | Add failure kind/summary. |
-| `lib/services/download/download_queue_controller.dart` | Store structured failures and keep retry explicit. |
-| `lib/widgets/youtube/download_queue_panel.dart` | Add compact Fix access action and bounded text. |
-| `android/app/src/main/kotlin/.../MainActivity.kt` | Wrap every existing Python operation in creation/final cleanup of a private cookie working copy; register access bridge. |
-| New Kotlin access/store/launcher files | Atomic storage, native revalidation, status, testing, Firefox launching, app settings. |
-| `android/app/src/main/python/ytdlp_bridge.py` | Optional cookie path everywhere, structured stream data, test method, and informative errors; no full-operation global lock. |
-| `android/app/src/main/AndroidManifest.xml` | Narrow Firefox package visibility declarations only if queried. |
-| Tests | Add classifier, validator, service, runner, browser detection, UI, queue, stream, Python, and native parser coverage. |
-| `README.md`, release notes, `docs/CODEX_CONTEXT.md` | Document setup/security, record implementation decisions and verification after code is complete. |
+1. Pin ytmusicapi.
+2. Implement Python cookie-header construction, exact Music Home cookie check, auth dictionary, `get_home`, normalization, limits, and sanitized errors.
+3. Add offline Python tests with mocked `YTMusic` and cookie jars.
+4. Add Kotlin channel method with working-copy cleanup.
+5. Add Dart Android backend.
 
-## Implementation sequence
+Exit criteria: an Android unit/integration fixture returns schema v1; no secret crosses the channel; working files are deleted on success, timeout, and exception.
 
-Execute in this order. Each checkpoint should compile/test before proceeding so a lesser model can isolate failures.
+### Phase 3 — Windows helper
 
-### Phase 0 — Baseline and protection
+1. Build the source helper with in-memory browser extraction.
+2. Add mocked-browser and mocked-ytmusicapi tests before packaging.
+3. Pin the build environment and generate the one-file helper.
+4. Add the Dart runner with bounded concurrent output and failure mapping.
+5. Add CMake packaging and license notices.
 
-1. Record `git status --short` and preserve the existing `.gitignore` and v2.9.2 patch-note edits.
-2. Run baseline `flutter analyze` and `flutter test` before product edits.
-3. Run the existing Python bridge suite:
+Exit criteria: helper succeeds against a manually connected supported browser, creates no files, emits only schema v1, and release packaging contains the executable.
 
-   ```powershell
-   python -m unittest test/python/test_android_ytdlp_bridge.py
-   ```
+### Phase 4 — Access state and orchestration
 
-4. Do not build or update yt-dlp during this phase.
+1. Add account slot and tested-timestamp behavior to `YoutubeAccessService`.
+2. Implement `YoutubeMusicHomeService` gating/cache/generations.
+3. Test every access-state row in the state table.
+4. Test revision/account changes during an in-flight request.
 
-Checkpoint: the pre-feature tree passes the same tests it passed before implementation, or any pre-existing failure is documented before code changes.
+Exit criteria: no backend call is possible without configured access; stale personalized results cannot appear after disconnect/replace.
 
-### Phase 1 — Pure models, validation, and classification
+### Phase 5 — UI
 
-1. Add `YoutubeAccessStatus`, `YoutubeFailure`, `YoutubeFailureClassifier`, `YoutubeCookieValidator`, and `ResolvedYoutubeStream`.
-2. Add pure unit tests with real representative yt-dlp error strings, including the user's screenshot text.
-3. Ensure no test fixture contains real cookies.
+1. Refactor empty-query discovery into scrollable sections.
+2. Add Home status/header/shelves/cards.
+3. Move current Suggested Music under `Based on this playlist` without changing its algorithm.
+4. Reuse shared Play/Stream/Download actions.
+5. Add account-slot UI in settings.
+6. Verify Android/Windows responsive layouts and queue pane coexistence.
 
-Checkpoint: pure Dart tests pass without platform channels or filesystem access.
+Exit criteria: connected users see personalized shelves; disconnected users see no anonymous home data; ordinary search remains unchanged.
 
-### Phase 2 — Access service and startup wiring
+### Phase 6 — platform playback regressions
 
-1. Add backend interfaces and `YoutubeAccessService`.
-2. Add fake/in-memory backend for tests.
-3. Initialize/provide the singleton in `main.dart` and inject it into `PlayerHandler` without changing transport authority.
-4. Add revision listening, but do not alter stream resolution yet.
+1. Reproduce the Windows Play-only failure and add stage-level diagnostics/tests.
+2. Identify the first Windows divergence from playlist playback.
+3. Fix the shared Windows handler/load-result contract, not authentication globally.
+4. Add labeled Android extractor-attempt aggregation and reproduce `8mhMnaht-cM` attempt-by-attempt.
+5. Repair the `android_vr` format/fallback contract if it has playable media; otherwise complete the bundled QuickJS-NG plus matching yt-dlp-ejs Stage C.
+6. Upgrade/validate Android Python 3.11 as a separable runtime step.
+7. Add the bounded one-retry Android playback recovery and structured source-error mapping.
+8. Prove Windows direct Play and playlist playback use the same authenticated resolver/proxy behavior, and prove Android Play/Stream/Download all work with cookies connected.
 
-Checkpoint: app starts on Windows and Android with `notConfigured`; all existing tests compile.
+Exit criteria: Play begins audible standalone playback on Windows with cookies connected; Android Play, playlist Stream playback, and Download succeed for the live regression ID with cookies connected; neither platform exposes credentials in diagnostics.
 
-### Phase 3 — Centralize Windows yt-dlp
+### Phase 7 — Verification and documentation
 
-1. Implement the runner and browser detector.
-2. Migrate one low-risk call first (`MediaDownloader.lookup`) and test output/error handling.
-3. Migrate search while preserving background cancellation and caching.
-4. Migrate downloads while preserving line progress, playlist output paths, retry gating, history, and import callbacks.
-5. Migrate dialog metadata, PlayerHandler extraction, cover lookup, and external playlist metadata.
-6. Run the `rg` audit for direct launches.
+1. Run formatting, static analysis, Flutter tests, Python tests, Android unit tests, and both release builds.
+2. Perform the complete manual matrix below.
+3. Inspect release contents and binary versions.
+4. Update `docs/ARCHITECTURE.md`, `README.md`, dependency/license notices, and `docs/CODEX_CONTEXT.md` only after implementation is verified.
 
-Checkpoint: all Windows YouTube operations work anonymously exactly as before when no browser is connected, and synthetic auth stderr becomes a `YoutubeFailure`.
+## Automated verification commands
 
-### Phase 4 — Windows setup UI
-
-1. Add default-browser detection and pending selection.
-2. Add URL launch, waiting state, test, commit, reconnect, choose, and disconnect flows.
-3. Add browser-specific safe guidance.
-4. Add service/widget tests with fake detector, launcher, and runner.
-
-Checkpoint: connecting never writes a cookie file and SharedPreferences contains only browser/status metadata.
-
-### Phase 5 — Android store, native bridge, and tutorial
-
-1. Implement native revalidation and atomic no-backup storage.
-2. Register the dedicated access channel.
-3. Implement Firefox/package launching and app-settings fallback.
-4. Add tutorial UI and `file_picker` import.
-5. Add ready/replace/clear states.
-
-Checkpoint: valid fake Netscape data is stored only under `noBackupFilesDir`; invalid/oversize/non-YouTube data never replaces an existing valid file.
-
-### Phase 6 — Android yt-dlp integration
-
-1. Add optional cookie parameters in Python without changing the existing fallback clients.
-2. Pass a unique native working-copy path from Kotlin to every operation and delete it in `finally`.
-3. Add `test_access` and preserve the underlying stream failure.
-4. Extend Python fakes/tests for cookie options and concurrency assumptions.
-
-Checkpoint: each Android operation's test observes `cookiefile` when configured and observes no cookie option after clear. Concurrent operations use different working paths, all working copies are cleaned up, and existing fallback-client assertions remain unchanged.
-
-### Phase 7 — Stream headers and cache revision
-
-1. Return structured Android URL/header data.
-2. Apply headers to `AudioSource.uri`.
-3. Move Windows extraction through the runner without weakening the loopback proxy.
-4. Invalidate future cache entries when access revision changes; keep current playback alive.
-5. Bound proxy registrations/header lifetime.
-
-Checkpoint: stream, seek, pause/resume, next/previous, and replay work on both platforms before and after credential replacement.
-
-### Phase 8 — App-wide error recovery
-
-1. Add reusable failure dialog.
-2. Replace raw auth snackbars in Search/platform dialogs.
-3. Add queue failure kind and Fix access action.
-4. Update import/transfer/cover/history surfaces.
-5. Audit all `error.toString()` rendering in YouTube paths.
-
-Checkpoint: the full screenshot error can no longer appear as the primary snackbar body anywhere in the app.
-
-### Phase 9 — Verification, docs, and release preparation
-
-1. Run formatting only on touched files.
-2. Run all automated checks below.
-3. Perform the manual matrix on a challenged network/IP, not only a network where guest extraction succeeds.
-4. Update `README.md` with a short YouTube Access section and security warning.
-5. Update the eventual release patch notes; do not reuse or overwrite v2.9.2 notes.
-6. Replace the relevant state in `docs/CODEX_CONTEXT.md` with implemented decisions, unresolved issues, symbols, and the single best next step.
-
-Checkpoint: definition of done is satisfied on both release builds.
-
-## Automated test plan
-
-### Dart unit tests
-
-Add coverage for:
-
-- Both accepted cookie headers, UTF-8 BOM, CRLF/LF, blank lines, and `#HttpOnly_` rows.
-- Invalid header, six/eight-field rows, invalid flags/expiry, empty file, oversize file, no YouTube domain, and a correct Current Site-style export.
-- Explicit bot/login strings with and without configured access.
-- Browser profile missing, locked database, decryption failure, rate limit, deleted/private video, generic 403, timeout, and unknown failures.
-- Diagnostic sanitization, ANSI removal, size cap, and Windows user-path redaction.
-- Access-state transitions and revision changes.
-- Windows argument generation with no auth, configured browser auth, and pending test auth.
-- Browser ProgID/executable mapping fixtures.
-- Resolved-stream cache keys and invalidation.
-- Queue failure kind and explicit retry behavior.
-
-### Widget tests
-
-Use injected fake platform/access backends so tests do not depend on the host OS.
-
-Verify:
-
-- Settings shows the new independent section and each subtitle state.
-- Windows connect states: detected browser, unknown-browser picker, testing, success, locked DB, rejected session, disconnect confirmation.
-- Android tutorial contains the exact Firefox path and **Current Site → Download** wording.
-- The add-on action targets exactly `https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/`.
-- The YouTube-open action appears after the redirect-prevention step in reading order.
-- Valid import collapses the guide; Show guide expands it again.
-- Invalid import leaves the previous valid credential intact.
-- At 320/360-pixel width and 2.0 text scale, actions wrap rather than overflow.
-- Keyboard focus/activation works for Windows actions.
-- Auth failure dialog never renders the full raw yt-dlp message.
-- Queue access failure exposes Fix access and Retry.
-
-### Python tests
-
-Extend `test/python/test_android_ytdlp_bridge.py` to verify:
-
-- `cookiefile` is absent when no path is supplied.
-- `cookiefile` is present on search, metadata, playlist, thumbnail, stream, download, and test operations when supplied.
-- Defaults still run before `android_vr,web_embedded` fallback.
-- No new player client is introduced.
-- Stream result contains selected URL and headers.
-- URL-scoped cookie header is included only when the fake jar returns one.
-- The original verification exception survives both format attempts.
-- `test_access` does not download.
-- Unicode download metadata remains intact.
-
-Update `FakeYoutubeDL` with a fake cookie jar and any close/save behavior needed by the new path without importing real yt-dlp during unit tests.
-
-### Kotlin/native tests
-
-Keep the cookie parser/storage input validator in a pure Kotlin component and add JVM unit coverage for header/domain/size/HttpOnly cases. If Android filesystem context makes the store hard to unit test without adding a large framework, test parser/decision logic on the JVM and validate the actual `AtomicFile` path manually in a debug APK.
-
-Do not add broad native-test dependencies solely for this feature unless they are required to protect storage correctness.
-
-### Static and build checks
-
-Run:
+Adapt exact Python executable paths to the configured local toolchain, but run at minimum:
 
 ```powershell
 dart format --output=none --set-exit-if-changed lib test
 flutter analyze
 flutter test
-python -m unittest test/python/test_android_ytdlp_bridge.py
-flutter build windows --release
+python -m pytest test/python tool/windows_ytmusic_home/tests
+Set-Location android
+./gradlew.bat app:testDebugUnitTest
+Set-Location ..
 flutter build apk --release
+flutter build windows --release
 ```
 
-If Kotlin JVM tests are added, also run the relevant Gradle unit-test task. Record APK/Windows artifact paths and hashes only during the release task.
+Repository safety checks:
+
+```powershell
+rg -n "Process\.(start|run).*yt-dlp|ytDlpPath" lib
+rg -n -i "cookie|authorization|sapisid" lib/services/youtube/*music_home* android/app/src/main/python/ytmusic_home_bridge.py tool/windows_ytmusic_home
+```
+
+The first check must show no direct `yt-dlp.exe` launch outside `WindowsYtdlpRunner`. The second is a review list: expected in-memory auth code is allowed in platform Python, but secret values must not be serialized/logged or appear in Dart payloads.
 
 ## Manual QA matrix
 
 ### Windows
 
-Test at least Edge, Chrome, and Firefox:
+- No browser connected: no Home backend process launches; Connect card works; local suggestions remain.
+- Edge, Chrome, Firefox, and one Chromium variant: connect, fetch Home, refresh, Play, Stream, Download.
+- Browser open vs fully closed; locked Chromium cookie DB produces the existing close-browser recovery message.
+- Multiple Google accounts: slot 0 and another known slot show the intended different feed or a clear empty/wrong-slot recovery message.
+- Disconnect while Home is loading: result is discarded and cached shelves disappear.
+- Replace browser while Home is cached: revision invalidates cache.
+- Network offline, timeout, 429, 401/403, parser fixture mismatch.
+- Confirm no new files appear in temp, app data, release `bin`, or working directory after a Home request.
+- Inspect stdout/stderr/Flutter logs for cookie names/values, auth hashes, profile paths, emails, and raw JSON.
+- Main Play button: audible standalone playback, pause/resume, seek, return; then repeat via Stream into playlist.
 
-- Default browser is detected correctly.
-- Default browser signed in before setup.
-- Browser not signed in; user signs in and returns.
-- Multiple profiles; most recently active signed-in profile is used.
-- Unsupported/unknown default triggers picker.
-- Chromium database locked while browser is open; guidance is correct and retry works after close.
-- Connect, app restart, test, choose another browser, and disconnect.
-- SharedPreferences contains no cookie data.
-- No `cookies.txt` is created anywhere by Resonance.
+### Android
 
-### Android tutorial and storage
+- No imported file: no Python Home call; Connect card opens YouTube Access tutorial.
+- Valid current-site private Firefox export: Home loads and refreshes.
+- Valid yt-dlp cookie file missing exact `__Secure-3PAPISID`: regular YouTube access remains configured; Home shows re-export guidance only.
+- Expired/rejected file, Replace cookies, Clear cookies, disconnect during fetch.
+- Confirm unique working copy deletion after success/failure/process interruption.
+- Slot change, airplane mode, slow network, 429, server/parser change.
+- Play/Stream/Download a direct home song, including one with missing duration/artwork.
+- Relaunch app: valid post-import tested timestamp restores ready correctly; a replaced cookie file returns to untested until a successful call.
+- With cookies connected, run `8mhMnaht-cM` through direct Play, Stream into playlist then playback, and Download; retain all three labeled extractor-attempt summaries if any fail.
+- Confirm the app no longer ends at raw `Source error 0`; the first failure performs at most one fresh resolution and the final UI is structured/sanitized.
+- If EJS is required, verify the bundled runtime and solver scripts work in airplane mode after the media URL has already been resolved/cached only where meaningful; no challenge component may be downloaded at runtime.
+- Verify Python reports 3.11 and no longer emits the 3.10 deprecation warning.
 
-- Firefox absent: Install action works.
-- Firefox present: add-on and YouTube links open explicitly in Firefox.
-- With normal app links enabled, the tutorial warning appears before YouTube; after setting Never, YouTube stays in Firefox.
-- YouTube-app settings fallback opens on devices which have the app.
-- Add-on is allowed in private browsing.
-- Login → same private tab → robots.txt → Current Site → Download works.
-- Choosing ALL creates an oversize/broad export warning if it exceeds limits; the tutorial still explicitly says not to use it.
-- Import valid file, restart app, test, replace, clear, and test after clear.
-- Import malformed/non-YouTube/empty/oversize data while a valid file exists; valid file remains untouched.
-- Delete original export from Downloads; Resonance's private copy continues to work.
-- Reinstall/clear app data; private credentials are gone.
-- Verify with `run-as` on a debug build that the file is under `noBackupFilesDir` and absent from public/external storage. Never print its contents.
+### Cross-platform UI
 
-### YouTube operations on both platforms
+- Empty playlist and populated playlist.
+- Search typed while Home and local suggestions are loading; neither stale result may overwrite search results.
+- Clear search to return to discovery and reuse valid memory cache.
+- Narrow Android portrait, Android landscape, 900px Windows, wide Windows with queue mode on.
+- Keyboard navigation, focus order, screen-reader labels, reduced motion, dark/light themes.
 
-Run every operation first with no access and then with configured access:
+## Acceptance criteria
 
-- Search and type-ahead preview.
-- Suggested music lookup.
-- Play now from Search.
-- Add stream to playlist and play it later.
-- Seek within a stream and resume after pause.
-- Immediate audio download.
-- Queued audio download and explicit retry.
-- Multi-item YouTube playlist metadata/import.
-- Playlist transfer lookup/download path.
-- Fill Missing Covers.
-- Auth replacement while a stream is currently playing; current playback remains alive and the next resolution uses the new revision.
+The feature is complete only when all are true:
 
-Use a network/IP which reproduces `Sign in to confirm you're not a bot`. A normal guest-friendly network is not sufficient to sign off this feature.
+- Resonance never calls YouTube Music Home without configured cookies/browser access.
+- Windows uses the selected live browser session without creating a cookie export or exposing cookie data to Dart.
+- Android uses only a unique private working copy and deletes it in `finally`.
+- Both platforms return the same bounded schema and show titled personalized shelves.
+- At least direct song/video recommendations can Play, Stream, and Download through existing Resonance architecture.
+- Disconnect/replace/account-slot changes immediately invalidate personalized data.
+- Anonymous or generic Home content is never used as a silent fallback.
+- Home-specific breakage does not disable otherwise-working yt-dlp behavior unless authentication is explicitly rejected.
+- The Windows result-card Play button begins standalone playback with cookies connected, matching the working playlist stream path.
+- Android direct Play, playlist Stream playback, and Download succeed with cookies connected for `8mhMnaht-cM`, with every extractor fallback visible in sanitized Details if they do not.
+- Android either proves the cookie-free `android_vr` fallback is sufficient or ships a tested offline EJS solver/runtime stack; image-only extraction is never accepted as a playable result.
+- Android no longer surfaces an unexplained raw `Source error 0`, and it performs no more than one automatic fresh-resolution retry.
+- Android uses Python 3.11 without changing `yt-dlp==2026.8.20.234504.dev0`.
+- All automated suites and both release builds pass.
+- The Windows release contains the helper and required license notices; the Android APK contains the pinned ytmusicapi dependency.
 
-### Security observation
+## Non-goals
 
-During manual tests:
+- Google OAuth, Google username/password entry, embedded Google login, or a Google Cloud API project.
+- A Resonance browser extension.
+- Reading Android Firefox's private profile directly.
+- Exporting Windows browser cookies to disk, even temporarily.
+- Sending cookie/auth data through Dart, method channels, preferences, logs, diagnostics, Companion, Sync, or analytics.
+- Replacing yt-dlp search/stream/download with ytmusicapi.
+- An unauthenticated YouTube Music home fallback.
+- Mutating YouTube Music history, likes, subscriptions, playlists, or library.
+- Full in-app browsing of album, playlist, artist, channel, podcast, or episode home cards in the first pass.
+- Automatic dependency updates at runtime.
+- Changing the pinned nightly yt-dlp build.
+- Treating Python 3.11 alone as a JavaScript challenge solver.
+- Relying on runtime GitHub/npm challenge-component downloads as the permanent Android solution.
 
-- Search logcat/console output for known fake cookie values; none may appear.
-- Inspect download history and SharedPreferences; no cookie value/path may appear.
-- Confirm diagnostic Details redact profile/private paths.
-- Confirm Resonance Sync and PC Companion payloads never include access state details beyond a non-secret ready/not-ready indicator—and preferably include nothing at all.
-- Confirm no automatic download restarts after setup.
+## Risks and rollback boundaries
 
-## Failure and edge-case policy
+- **Internal endpoint drift:** `FEmusic_home` or renderers may change. Contain this inside pinned ytmusicapi/platform normalization and expose a parser-changed error. Updating the dependency should not require rewriting Flutter UI.
+- **Account mismatch:** cookie files do not preserve the browser request's visible `X-Goog-AuthUser` header. Default slot 0 plus an Advanced selector is the least invasive remedy; do not guess by making many authenticated probe requests.
+- **Windows browser decryption changes:** reuse the same pinned yt-dlp cookie implementation already trusted by Resonance. A helper failure must map to existing browser recovery states.
+- **Binary/APK growth:** ytmusicapi is small on Android, but a second Windows PyInstaller executable duplicates Python/yt-dlp code. Measure release size before shipping. Do not trade the security boundary for a temporary all-site cookie file merely to save size.
+- **Account risk/rate limiting:** fetch only on opening discovery, cache for 15 minutes, cap continuations, and refresh only on user action. Retain the current warning recommending careful use of authenticated YouTube sessions.
+- **Play regression scope:** if investigation shows the failure is proxy/media-kit lifecycle rather than cookies, fix that shared lifecycle without changing Home authentication. Keep this as an independently revertible commit or patch segment.
+- **Android executable policy:** Android may reject or prevent executing a bundled QuickJS command-line binary depending on packaging/API behavior. Prove the native-library-directory approach on the minimum and target API before integrating it. If it fails, stop at the documented decision gate rather than copying an executable into writable storage.
+- **EJS version lock:** yt-dlp rejects unsupported solver-package versions. Derive and pin the exact `yt-dlp-ejs` requirement from the retained nightly artifact and update both only in an intentional future dependency release.
+- **Android account/network variance:** the exact video can vary by account, region, IP, and rollout. Keep deterministic simulated tests for attempt order/format selection and also require the physical-device live test; neither alone is sufficient.
 
-| Situation | Expected behavior |
-| --- | --- |
-| No access configured, guest works | Preserve current anonymous behavior; never force setup. |
-| No access configured, explicit bot challenge | Show verification dialog and Settings action. |
-| Access configured, explicit bot challenge persists | Mark session rejected; ask to reconnect/replace. |
-| Android cookie file disappeared | Downgrade to not configured and do not pass a stale path. |
-| Android import valid but live test times out | Keep it as configured-unverified; offer Test again, Replace, Clear. |
-| Windows browser cannot be detected | Browser picker; no registry writes. |
-| Browser DB is locked | Specific close-browser guidance; do not retry three times automatically. |
-| Generic 403 during CDN playback | Treat as stream/network failure; do not automatically claim cookies are missing. |
-| Video is deleted/private/geo-blocked | Preserve content-specific message; do not route to access unless yt-dlp explicitly requests login. |
-| Cookie change during playback | Current stream continues; future resolutions use new revision. |
-| One playlist item succeeds before a later failure | Preserve/import successful files according to existing platform semantics; report remaining failure concisely. |
-| Firefox/AMO link cannot open | Keep URL visible/copyable and show a short launch failure. |
-| User selects Copy instead of Download | v1 guide redirects them to Download; no large clipboard paste field. |
-| Account is rate-limited | Explain request limit and suggest waiting; reconnecting cookies is not presented as the guaranteed fix. |
+Rollback should be possible at three clean layers:
 
-## Rejected approaches and rationale
-
-- **Raw cookie text field:** makes a password-equivalent credential visible, easy to paste partially, and easy to include in logs/screenshots. Validated file import is safer and simpler.
-- **Export ALL cookies:** leaks unrelated site sessions. The tutorial and validator are designed around Current Site.
-- **Android default browser for YouTube links:** allows the YouTube app to intercept them, recreating the exact UX failure the user reported. Use explicit Firefox intents.
-- **Export from an ordinary open YouTube tab:** cookies can rotate while the tab remains open. Follow the private-tab + robots.txt sequence.
-- **Windows `--cookies-from-browser` plus `--cookies`:** writes all extracted browser cookies to a file, contrary to the local-minimum storage design.
-- **Always convert 403 into “sign in”:** masks expired CDN URLs, missing headers, rate limits, and network problems.
-- **Build the Resonance extension first:** duplicates an available Android exporter and creates high-trust distribution/permission work before the app has a complete import path.
-- **Silently add PO-token/client workarounds:** changes a separate extractor behavior and could break the newly working nightly build. Keep this feature limited to authentication.
-
-## Definition of done
-
-The feature is complete only when all of the following are true:
-
-- Windows can connect, test, persist only the browser choice, use it across every yt-dlp operation, and disconnect without creating a cookie file.
-- Android provides the exact redirect-safe Firefox tutorial, exact add-on link, private-session/robots guidance, and Current Site → Download instruction.
-- Android validates and atomically stores credentials only in app-private no-backup storage, and all Python operations receive the path only while configured.
-- Search, stream, download, cover lookup, transfer, and playlist import work on the user's challenged network/IP after setup.
-- Android streaming passes the selected format's required headers and remains seekable.
-- Credential replacement/clear invalidates future cached resolutions without interrupting the current Windows stream.
-- No YouTube surface displays the giant raw yt-dlp error as its primary message.
-- Queue/history store only compact structured failures and offer explicit access recovery/retry.
-- No cookie value is present in logs, preferences, history, public storage, backup, Sync, Companion, or UI.
-- Existing Android fallback clients and pinned nightly package are unchanged.
-- `flutter analyze`, the full Flutter suite, Python tests, relevant Kotlin tests, Windows release build, and Android release APK build pass.
-- Manual QA is completed on both a normal network and a network/IP which reproduces YouTube's verification challenge.
-
-## Best next step for the implementing session
-
-Start with **Phase 0**, then implement the pure status/failure/validator models and tests from **Phase 1**. Do not begin with the Settings screen: central process/error behavior must exist first so the UI is not wired to another one-off yt-dlp path.
+1. Hide/remove the discovery UI and service while leaving platform code dormant.
+2. Remove one platform backend/helper without affecting existing yt-dlp operations.
+3. Revert the standalone Play fix independently if it regresses ordinary playlist playback.

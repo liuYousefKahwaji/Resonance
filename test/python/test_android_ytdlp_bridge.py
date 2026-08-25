@@ -66,6 +66,46 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
     def setUp(self):
         FakeYoutubeDL.calls = []
         FakeCookieJar.header = None
+        bridge._QUICKJS_PATH = None
+
+    def test_bundled_quickjs_is_enabled_for_every_yt_dlp_operation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "libresonance_qjs.so"
+            runtime.write_bytes(b"fake executable")
+            self.assertTrue(bridge.configure_runtime(directory))
+            FakeYoutubeDL.responder = lambda *_: {"url": "https://cdn.example/audio.m4a"}
+
+            bridge.get_stream_url("https://youtu.be/test")
+
+            self.assertEqual(
+                FakeYoutubeDL.calls[0]["js_runtimes"],
+                {"quickjs": {"path": str(runtime)}},
+            )
+
+    def test_home_item_preserves_non_playable_collections(self):
+        item = bridge._normalize_music_home_item(
+            {
+                "title": "A new release",
+                "resultType": "Album",
+                "artists": [{"name": "Artist"}],
+                "thumbnails": [{"url": "https://img.example/album"}],
+                "audioPlaylistId": "OLAK5uy_test",
+                "browseId": "MPREb_test",
+            }
+        )
+
+        self.assertEqual(item["kind"], "Album")
+        self.assertEqual(item["subtitle"], "Artist")
+        self.assertIsNone(item["track"])
+        self.assertEqual(item["playlistId"], "OLAK5uy_test")
+        self.assertEqual(item["browseId"], "MPREb_test")
+
+    def test_music_tracks_always_have_artwork_fallback(self):
+        item = bridge._normalize_music_item(
+            {"title": "Suggestion", "videoId": "jNQXAC9IVRw", "artists": [{"name": "Artist"}]}
+        )
+
+        self.assertEqual(item["thumbnail"], "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg")
 
     def test_stream_uses_yt_dlp_defaults_before_android_vr_fallback(self):
         def respond(ydl, _target, _download):

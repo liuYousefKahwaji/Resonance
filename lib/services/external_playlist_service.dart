@@ -229,7 +229,11 @@ class YoutubePlaylistProvider implements ExternalPlaylistProvider {
         host == 'youtube.com' || host == 'music.youtube.com' || host == 'm.youtube.com' || host == 'youtu.be';
     if (!isYoutube) return false;
     final playlistId = uri.queryParameters['list']?.trim() ?? '';
-    return playlistId.isNotEmpty;
+    if (playlistId.isNotEmpty) return true;
+    return host == 'music.youtube.com' &&
+        uri.pathSegments.length == 2 &&
+        uri.pathSegments.first == 'browse' &&
+        uri.pathSegments.last.startsWith('MPRE');
   }
 
   @override

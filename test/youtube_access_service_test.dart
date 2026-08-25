@@ -96,4 +96,44 @@ void main() {
     expect(backend.configured, isTrue);
     expect(backend.lastTestSourceUrl, YoutubeAccessService.fallbackTestTarget);
   });
+
+  test('Windows browser profile survives service reinitialization and is reused verbatim', () async {
+    SharedPreferences.setMockInitialValues({
+      'youtube_access.windows_browser_id': 'chrome:Profile 2',
+      'youtube_access.windows_configured_at': '2026-08-25T10:00:00.000Z',
+      'youtube_access.last_successful_test_at': '2026-08-25T10:01:00.000Z',
+    });
+    final service = YoutubeAccessService(
+      preferences: await SharedPreferences.getInstance(),
+      androidBackend: MemoryYoutubeAccessBackend(),
+      isWindows: true,
+      isAndroid: false,
+    );
+
+    await service.initialize();
+
+    expect(service.windowsBrowserId, 'chrome:Profile 2');
+    expect(service.windowsAuthArguments(), ['--cookies-from-browser', 'chrome:Profile 2']);
+    expect(YoutubeAccessService.browserDisplayName(service.windowsBrowserId), 'Chrome');
+  });
+
+  test('Windows browser connection verifies YouTube Music before committing the profile', () async {
+    SharedPreferences.setMockInitialValues({});
+    final preferences = await SharedPreferences.getInstance();
+    final service = YoutubeAccessService(
+      preferences: preferences,
+      androidBackend: MemoryYoutubeAccessBackend(),
+      isWindows: true,
+      isAndroid: false,
+    );
+    await service.initialize();
+    service.setWindowsTester((_, __) async {});
+    var testedSource = '';
+    service.setWindowsHomeTester((source) async => testedSource = source);
+
+    await service.connectWindowsBrowser('edge:Profile 1');
+
+    expect(testedSource, 'edge:Profile 1');
+    expect(preferences.getString('youtube_access.windows_browser_id'), 'edge:Profile 1');
+  });
 }

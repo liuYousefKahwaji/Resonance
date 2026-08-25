@@ -409,6 +409,7 @@ class StandalonePlayerScreen extends StatefulWidget {
 
 class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
   bool _lyricsVisible = false;
+  bool _queueDrawerOpen = false;
   bool _leavingSync = false;
 
   @override
@@ -468,69 +469,72 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
           onPopInvokedWithResult: (didPop, _) {
             if (didPop && widget.playlistTrack) handler.setStandalonePresentation(false);
           },
-          child: StandalonePlayerGestureSurface(
-            key: const Key('standalone-player-gesture-surface'),
-            onNext: handler.next,
-            onPrevious: handler.previous,
-            onQueue: () => _showUpcomingQueue(context, handler),
-            onExit: () => Navigator.maybePop(context),
-            queueOnly: widget.syncPeer,
-            child: StandaloneGradientSurface(
-              colors: gradientColors,
-              child: Theme(
-                data: playerTheme,
-                child: Scaffold(
+          child: StandaloneGradientSurface(
+            colors: gradientColors,
+            child: Theme(
+              data: playerTheme,
+              child: Scaffold(
+                backgroundColor: Colors.transparent,
+                appBar: AppBar(
                   backgroundColor: Colors.transparent,
-                  appBar: AppBar(
-                    backgroundColor: Colors.transparent,
-                    surfaceTintColor: Colors.transparent,
-                    elevation: 0,
-                    centerTitle: true,
-                    leading: IconButton(
-                      icon: Icon(widget.syncPeer ? Icons.logout_rounded : Icons.keyboard_arrow_down_rounded),
-                      tooltip: widget.syncPeer ? 'Leave Resonance Sync' : 'Back to playlist',
-                      onPressed: widget.syncPeer ? _leaveSync : () => Navigator.pop(context),
-                    ),
-                    title: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          widget.syncPeer ? 'PLAYING WITH' : 'PLAYING FROM',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 1.3,
-                          ),
-                        ),
-                        Text(
-                          widget.syncPeer
-                              ? SyncSessionService.instance.hostName ?? 'Resonance Sync'
-                              : artist == null || artist.isEmpty
-                              ? 'Resonance'
-                              : artist,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
-                        ),
-                      ],
-                    ),
-                    actions: [
-                      IconButton(
-                        key: const Key('standalone-lyrics-toggle'),
-                        tooltip: _lyricsVisible ? 'Hide lyrics' : 'Show lyrics',
-                        onPressed: () => setState(() => _lyricsVisible = !_lyricsVisible),
-                        icon: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 220),
-                          child: Icon(
-                            _lyricsVisible ? Icons.lyrics_rounded : Icons.lyrics_outlined,
-                            key: ValueKey(_lyricsVisible),
-                          ),
+                  surfaceTintColor: Colors.transparent,
+                  elevation: 0,
+                  centerTitle: true,
+                  leading: IconButton(
+                    icon: Icon(widget.syncPeer ? Icons.logout_rounded : Icons.keyboard_arrow_down_rounded),
+                    tooltip: widget.syncPeer ? 'Leave Resonance Sync' : 'Back to playlist',
+                    onPressed: widget.syncPeer ? _leaveSync : () => Navigator.pop(context),
+                  ),
+                  title: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        widget.syncPeer ? 'PLAYING WITH' : 'PLAYING FROM',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.3,
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      Text(
+                        widget.syncPeer
+                            ? SyncSessionService.instance.hostName ?? 'Resonance Sync'
+                            : artist == null || artist.isEmpty
+                            ? 'Resonance'
+                            : artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                      ),
                     ],
                   ),
-                  body: ValueListenableBuilder<PlaybackVisualState>(
+                  actions: [
+                    if (Platform.isWindows)
+                      IconButton(
+                        key: const Key('standalone-queue-toggle'),
+                        tooltip: _queueDrawerOpen ? 'Hide queue' : 'Show queue',
+                        onPressed: () => _toggleUpcomingQueue(context, handler),
+                        icon: Icon(_queueDrawerOpen ? Icons.queue_music_rounded : Icons.queue_music_outlined),
+                      ),
+                    IconButton(
+                      key: const Key('standalone-lyrics-toggle'),
+                      tooltip: _lyricsVisible ? 'Hide lyrics' : 'Show lyrics',
+                      onPressed: () => setState(() => _lyricsVisible = !_lyricsVisible),
+                      icon: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        child: Icon(
+                          _lyricsVisible ? Icons.lyrics_rounded : Icons.lyrics_outlined,
+                          key: ValueKey(_lyricsVisible),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                ),
+                body: _buildStandaloneBody(
+                  context,
+                  handler,
+                  ValueListenableBuilder<PlaybackVisualState>(
                     valueListenable: handler.playbackVisualNotifier,
                     builder: (context, playback, _) => Column(
                       children: [
@@ -575,10 +579,55 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
       },
     );
   }
+
+  void _toggleUpcomingQueue(BuildContext context, PlayerHandler handler) {
+    if (Platform.isWindows) {
+      setState(() => _queueDrawerOpen = !_queueDrawerOpen);
+      return;
+    }
+    if (Platform.isAndroid) {
+      _showAndroidUpcomingQueue(context, handler, allowSelection: !widget.syncPeer);
+    }
+  }
+
+  Widget _buildStandaloneBody(BuildContext context, PlayerHandler handler, Widget player) {
+    final playerPane = StandalonePlayerGestureSurface(
+      key: const Key('standalone-player-gesture-surface'),
+      onNext: handler.next,
+      onPrevious: handler.previous,
+      onQueue: () => _toggleUpcomingQueue(context, handler),
+      onExit: () => Navigator.maybePop(context),
+      queueOnly: widget.syncPeer,
+      child: player,
+    );
+    if (!Platform.isWindows || !_queueDrawerOpen) return playerPane;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final drawerWidth = (constraints.maxWidth * 0.30).clamp(280.0, 380.0);
+        return Row(
+          children: [
+            Expanded(child: playerPane),
+            SizedBox(
+              key: const Key('standalone-windows-queue'),
+              width: drawerWidth,
+              child: UpcomingQueuePanel(
+                mediaItemStream: handler.mediaItem,
+                initialMediaItem: handler.mediaItem.value,
+                revision: handler.playbackModeRevision,
+                loadSnapshot: handler.playbackQueueSnapshot,
+                resolveArtwork: handler.queueArtworkUri,
+                onPlay: widget.syncPeer ? null : handler.playPlaybackQueueEntry,
+                onClose: () => setState(() => _queueDrawerOpen = false),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
 }
 
-void _showUpcomingQueue(BuildContext context, PlayerHandler handler) {
-  if (!Platform.isAndroid) return;
+void _showAndroidUpcomingQueue(BuildContext context, PlayerHandler handler, {required bool allowSelection}) {
   showModalBottomSheet<void>(
     context: context,
     useSafeArea: true,
@@ -596,6 +645,7 @@ void _showUpcomingQueue(BuildContext context, PlayerHandler handler) {
           revision: handler.playbackModeRevision,
           loadSnapshot: handler.playbackQueueSnapshot,
           resolveArtwork: handler.queueArtworkUri,
+          onPlay: allowSelection ? handler.playPlaybackQueueEntry : null,
           onClose: () => Navigator.pop(sheetContext),
         ),
       );

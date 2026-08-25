@@ -74,6 +74,40 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
   }
 
   Widget _buildWindows(YoutubeAccessService service) {
+    if (service.status.method == YoutubeAccessMethod.windowsCookieFile) {
+      return _AccessCard(
+        title: 'Imported cookies.txt',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'yt-dlp will read this selected Netscape cookies.txt file. Treat it like a password and keep it in a private location.',
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: _busy ? null : () => _run(() => service.testCurrent(sourceUrl: widget.sourceUrl)),
+                  icon: const Icon(Icons.verified_rounded),
+                  label: const Text('Test access'),
+                ),
+                OutlinedButton(
+                  onPressed: _busy ? null : () => _importWindowsCookies(service),
+                  child: const Text('Replace cookies.txt'),
+                ),
+                OutlinedButton(
+                  onPressed: _busy ? null : () => _connect(service, null),
+                  child: const Text('Use browser instead'),
+                ),
+                TextButton(onPressed: _busy ? null : () => _confirmClear(service), child: const Text('Disconnect')),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
     if (service.isConfigured) {
       return _AccessCard(
         title: 'Browser session',
@@ -82,7 +116,7 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
           children: [
             Text(
               'yt-dlp reads ${YoutubeAccessService.browserDisplayName(service.windowsBrowserId)} cookies locally when Resonance uses YouTube. '
-              'Resonance does not save a Windows cookie file or your Google password.',
+              'Resonance remembers the connected browser profile and reads it live; it does not save a Windows cookie file or your Google password.',
             ),
             const SizedBox(height: 14),
             Wrap(
@@ -115,13 +149,20 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Open YouTube, sign in or complete its verification page, then let Resonance test the current browser session.',
+            'Open YouTube Music, sign in or complete its verification page, then let Resonance test and remember that browser profile.',
           ),
           const SizedBox(height: 14),
           FilledButton.icon(
             onPressed: _busy ? null : () => _connect(service, null),
             icon: const Icon(Icons.open_in_browser_rounded),
             label: const Text('Connect browser session'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const Key('youtube-windows-import-cookies'),
+            onPressed: _busy ? null : () => _importWindowsCookies(service),
+            icon: const Icon(Icons.file_open_rounded),
+            label: const Text('Import cookies.txt instead'),
           ),
         ],
       ),
@@ -266,11 +307,14 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
 
   Future<void> _connect(YoutubeAccessService service, String? browserId) async {
     if (!await _ensureWarning(service)) return;
-    var selected = browserId ?? await _detector.detectDefaultBrowser();
+    var selected = browserId == null
+        ? await _detector.detectDefaultBrowser()
+        : WindowsBrowserDetector.baseBrowserId(browserId);
     if (selected == null && mounted) selected = await _pickBrowser();
     if (selected == null || !mounted) return;
-    var launched = await _detector.launchBrowser(selected, 'https://www.youtube.com/');
-    launched = launched || await launchUrl(Uri.parse('https://www.youtube.com/'), mode: LaunchMode.externalApplication);
+    var launched = await _detector.launchBrowser(selected, 'https://music.youtube.com/');
+    launched =
+        launched || await launchUrl(Uri.parse('https://music.youtube.com/'), mode: LaunchMode.externalApplication);
     if (!launched && mounted) {
       setState(
         () => _screenMessage =
@@ -283,8 +327,8 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Finish in your browser'),
         content: Text(
-          'Sign in to YouTube or complete any verification page in ${YoutubeAccessService.browserDisplayName(selected)}. '
-          'Return when YouTube opens normally. If extraction says the cookie database is locked, close all browser windows first.',
+          'Sign in to YouTube Music or complete any verification page in ${YoutubeAccessService.browserDisplayName(selected)}. '
+          'Return when your personalized Music home opens normally. If extraction says the cookie database is locked, close all browser windows first.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
@@ -295,12 +339,29 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
         ],
       ),
     );
-    if (test == true) await _run(() => service.connectWindowsBrowser(selected!, sourceUrl: widget.sourceUrl));
+    if (test == true) {
+      final cookieSource = await _detector.resolveCookieSource(selected);
+      await _run(() => service.connectWindowsBrowser(cookieSource, sourceUrl: widget.sourceUrl));
+    }
   }
 
   Future<void> _chooseAndConnect(YoutubeAccessService service) async {
     final browser = await _pickBrowser();
     if (browser != null) await _connect(service, browser);
+  }
+
+  Future<void> _importWindowsCookies(YoutubeAccessService service) async {
+    if (!await _ensureWarning(service)) return;
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: 'Choose cookies.txt',
+      type: FileType.custom,
+      allowedExtensions: const ['txt'],
+      withData: true,
+    );
+    final file = picked?.files.single;
+    if (file == null || file.path == null) return;
+    final path = file.path!;
+    await _run(() => service.connectWindowsCookieFile(path, sourceUrl: widget.sourceUrl));
   }
 
   Future<String?> _pickBrowser() => showDialog<String>(

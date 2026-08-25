@@ -18,6 +18,7 @@ class ExternalPlaylistImportScreen extends StatefulWidget {
   final YoutubePlaylistImportService? importService;
   final String? initialUrl;
   final bool autoFetch;
+  final YoutubePlaylistImportMode? initialMode;
 
   const ExternalPlaylistImportScreen({
     super.key,
@@ -25,6 +26,7 @@ class ExternalPlaylistImportScreen extends StatefulWidget {
     this.importService,
     this.initialUrl,
     this.autoFetch = false,
+    this.initialMode,
   });
 
   @override
@@ -130,6 +132,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
           _matches = List.unmodifiable(matches);
           _stage = _ExternalImportStage.choosing;
         });
+        if (widget.initialMode case final mode?) await _startImport(mode);
         return;
       }
 

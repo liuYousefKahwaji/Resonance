@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-enum YoutubeAccessMethod { none, windowsBrowser, androidCookieFile }
+enum YoutubeAccessMethod { none, windowsBrowser, windowsCookieFile, androidCookieFile }
 
 enum YoutubeAccessState {
   notConfigured,

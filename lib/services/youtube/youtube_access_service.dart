@@ -9,6 +9,8 @@ import 'package:resonance/services/youtube/youtube_access_backend.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 typedef WindowsAccessTester = Future<void> Function(String browserId, String sourceUrl);
+typedef WindowsCookieTester = Future<void> Function(String cookiePath, String sourceUrl);
+typedef WindowsHomeTester = Future<void> Function(String browserSource);
 
 class YoutubeAccessService extends ChangeNotifier {
   YoutubeAccessService({
@@ -29,6 +31,7 @@ class YoutubeAccessService extends ChangeNotifier {
   static const _browserKey = 'youtube_access.windows_browser_id';
   static const _configuredKey = 'youtube_access.windows_configured_at';
   static const _testedKey = 'youtube_access.last_successful_test_at';
+  static const _windowsCookiePathKey = 'youtube_access.windows_cookie_path';
 
   final YoutubeAccessBackend _androidBackend;
   SharedPreferences? _preferences;
@@ -36,8 +39,11 @@ class YoutubeAccessService extends ChangeNotifier {
   final bool _isAndroid;
   Future<void>? _initializing;
   WindowsAccessTester? _windowsTester;
+  WindowsCookieTester? _windowsCookieTester;
+  WindowsHomeTester? _windowsHomeTester;
   YoutubeAccessStatus _status = const YoutubeAccessStatus();
   bool _warningAcknowledged = false;
+  String? _windowsCookiePath;
 
   YoutubeAccessStatus get status => _status;
   bool get isConfigured => _status.isConfigured;
@@ -45,9 +51,12 @@ class YoutubeAccessService extends ChangeNotifier {
   int get revision => _status.revision;
   bool get warningAcknowledged => _warningAcknowledged;
   String? get windowsBrowserId => _status.method == YoutubeAccessMethod.windowsBrowser ? _status.browserId : null;
+  String? get windowsCookiePath => _status.method == YoutubeAccessMethod.windowsCookieFile ? _windowsCookiePath : null;
   YoutubeAccessBackend get androidBackend => _androidBackend;
 
   void setWindowsTester(WindowsAccessTester tester) => _windowsTester = tester;
+  void setWindowsCookieTester(WindowsCookieTester tester) => _windowsCookieTester = tester;
+  void setWindowsHomeTester(WindowsHomeTester tester) => _windowsHomeTester = tester;
 
   Future<void> initialize() => _initializing ??= _initialize();
 
@@ -67,6 +76,16 @@ class YoutubeAccessService extends ChangeNotifier {
             browserId: browser,
             configuredAt: configuredAt,
             lastTestedAt: testedAt,
+          );
+        }
+        final cookiePath = _preferences!.getString(_windowsCookiePathKey);
+        if (cookiePath != null && cookiePath.isNotEmpty && await File(cookiePath).exists()) {
+          _windowsCookiePath = cookiePath;
+          _status = YoutubeAccessStatus(
+            method: YoutubeAccessMethod.windowsCookieFile,
+            state: YoutubeAccessState.configuredUntested,
+            configuredAt: _readDate(_configuredKey),
+            lastTestedAt: _readDate(_testedKey),
           );
         }
       } else if (_isAndroid) {
@@ -90,7 +109,9 @@ class YoutubeAccessService extends ChangeNotifier {
 
   List<String> windowsAuthArguments({String? overrideBrowserId}) {
     final browser = overrideBrowserId ?? windowsBrowserId;
-    return browser == null ? const [] : ['--cookies-from-browser', browser];
+    if (browser != null) return ['--cookies-from-browser', browser];
+    final cookiePath = windowsCookiePath;
+    return cookiePath == null ? const [] : ['--cookies', cookiePath];
   }
 
   Future<void> acknowledgeWarning() async {
@@ -106,9 +127,12 @@ class YoutubeAccessService extends ChangeNotifier {
     _setTesting(YoutubeAccessMethod.windowsBrowser, browserId: browserId);
     try {
       await tester(browserId, sourceUrl ?? fallbackTestTarget);
+      await _windowsHomeTester?.call(browserId);
       final now = DateTime.now();
       final nextRevision = _status.revision + 1;
       await _preferences!.setString(_browserKey, browserId);
+      await _preferences!.remove(_windowsCookiePathKey);
+      _windowsCookiePath = null;
       await _preferences!.setString(_configuredKey, now.toIso8601String());
       await _preferences!.setString(_testedKey, now.toIso8601String());
       _status = YoutubeAccessStatus(
@@ -166,6 +190,43 @@ class YoutubeAccessService extends ChangeNotifier {
     await testCurrent(sourceUrl: sourceUrl);
   }
 
+  Future<void> connectWindowsCookieFile(String cookiePath, {String? sourceUrl}) async {
+    final tester = _windowsCookieTester;
+    if (tester == null) throw StateError('Windows cookies.txt tester is unavailable.');
+    final file = File(cookiePath);
+    if (!await file.exists()) throw const FormatException('The selected cookies.txt file no longer exists.');
+    final validation = YoutubeCookieValidator.validateBytes(await file.readAsBytes());
+    if (!validation.isValid) {
+      throw YoutubeFailure(kind: YoutubeFailureKind.invalidCookieFile, userMessage: validation.errorMessage!);
+    }
+    final previous = _status;
+    final previousPath = _windowsCookiePath;
+    _setTesting(YoutubeAccessMethod.windowsCookieFile);
+    try {
+      await tester(cookiePath, sourceUrl ?? fallbackTestTarget);
+      final now = DateTime.now();
+      _windowsCookiePath = cookiePath;
+      await _preferences!.setString(_windowsCookiePathKey, cookiePath);
+      await _preferences!.remove(_browserKey);
+      await _preferences!.setString(_configuredKey, now.toIso8601String());
+      await _preferences!.setString(_testedKey, now.toIso8601String());
+      _status = YoutubeAccessStatus(
+        method: YoutubeAccessMethod.windowsCookieFile,
+        state: YoutubeAccessState.ready,
+        configuredAt: now,
+        lastTestedAt: now,
+        revision: _status.revision + 1,
+      );
+      notifyListeners();
+    } catch (error) {
+      _windowsCookiePath = previousPath;
+      final failure = YoutubeFailureClassifier.classify(error, authenticated: true, sourceUrl: sourceUrl);
+      _status = previous.copyWith(state: YoutubeAccessState.unavailable, shortMessage: failure.userMessage);
+      notifyListeners();
+      throw failure;
+    }
+  }
+
   Future<void> testCurrent({String? sourceUrl}) async {
     if (!_status.isConfigured) {
       throw const YoutubeFailure(
@@ -180,13 +241,18 @@ class YoutubeAccessService extends ChangeNotifier {
         final tester = _windowsTester;
         if (tester == null) throw StateError('Windows YouTube access tester is unavailable.');
         await tester(previous.browserId!, sourceUrl ?? fallbackTestTarget);
+        await _windowsHomeTester?.call(previous.browserId!);
+      } else if (previous.method == YoutubeAccessMethod.windowsCookieFile) {
+        final tester = _windowsCookieTester;
+        if (tester == null || windowsCookiePath == null) {
+          throw StateError('Windows cookies.txt tester is unavailable.');
+        }
+        await tester(windowsCookiePath!, sourceUrl ?? fallbackTestTarget);
       } else {
         await _androidBackend.testCookies(sourceUrl: sourceUrl ?? fallbackTestTarget);
       }
       final now = DateTime.now();
-      if (previous.method == YoutubeAccessMethod.windowsBrowser) {
-        await _preferences?.setString(_testedKey, now.toIso8601String());
-      }
+      await _preferences?.setString(_testedKey, now.toIso8601String());
       _status = previous.copyWith(state: YoutubeAccessState.ready, lastTestedAt: now, clearShortMessage: true);
       notifyListeners();
     } catch (error) {
@@ -202,14 +268,27 @@ class YoutubeAccessService extends ChangeNotifier {
     }
   }
 
+  /// Records a successful authenticated API operation without exposing any
+  /// cookie material to Dart. Used by YouTube Music Home after its platform
+  /// backend has accepted the current session.
+  Future<void> recordAuthenticatedSuccess() async {
+    if (!_status.isConfigured) return;
+    final now = DateTime.now();
+    await _preferences?.setString(_testedKey, now.toIso8601String());
+    _status = _status.copyWith(state: YoutubeAccessState.ready, lastTestedAt: now, clearShortMessage: true);
+    notifyListeners();
+  }
+
   Future<void> clear() async {
     final nextRevision = _status.revision + 1;
     if (_status.method == YoutubeAccessMethod.androidCookieFile || _isAndroid) {
       await _androidBackend.clearCookies();
     }
     await _preferences?.remove(_browserKey);
+    await _preferences?.remove(_windowsCookiePathKey);
     await _preferences?.remove(_configuredKey);
     await _preferences?.remove(_testedKey);
+    _windowsCookiePath = null;
     _status = YoutubeAccessStatus(revision: nextRevision);
     notifyListeners();
   }
@@ -257,7 +336,7 @@ class YoutubeAccessService extends ChangeNotifier {
       'chromium': 'Chromium',
       'whale': 'Whale',
     };
-    return names[id] ?? 'selected';
+    return names[id?.split(':').first] ?? 'selected';
   }
 
   void _setTesting(YoutubeAccessMethod method, {String? browserId}) {

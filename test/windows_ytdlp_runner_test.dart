@@ -26,4 +26,21 @@ void main() {
     );
     expect(WindowsBrowserDetector.browserIdForProgId('Unknown.Browser'), isNull);
   });
+
+  test('browser profile resolution helpers retain only safe concrete profiles', () {
+    expect(WindowsBrowserDetector.lastUsedChromiumProfile('{"profile":{"last_used":"Profile 3"}}'), 'Profile 3');
+    expect(WindowsBrowserDetector.lastUsedChromiumProfile('{"profile":{"last_used":"../Guest"}}'), isNull);
+    expect(
+      WindowsBrowserDetector.defaultFirefoxProfile('''
+[Profile0]
+Name=default-release
+IsRelative=1
+Path=Profiles/abc.default-release
+Default=1
+'''),
+      'abc.default-release',
+    );
+    expect(WindowsBrowserDetector.baseBrowserId('chrome:Profile 3'), 'chrome');
+    expect(WindowsBrowserDetector.browserProfile('chrome:Profile 3'), 'Profile 3');
+  });
 }

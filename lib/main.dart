@@ -47,6 +47,7 @@ import 'package:resonance/services/download/download_queue_controller.dart';
 import 'package:resonance/services/sync/sync_session_service.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/services/youtube/youtube_music_home_service.dart';
 import 'package:resonance/screens/sync/sync_screens.dart';
 import 'package:resonance/widgets/music_recognition/music_recognition_dialog.dart';
 import 'package:resonance/widgets/youtube/windows_youtube.dart';
@@ -95,6 +96,8 @@ Future<void> main() async {
   await youtubeAccessService.initialize();
   WindowsYtdlpRunner.instance.configure(youtubeAccessService);
   youtubeAccessService.setWindowsTester(WindowsYtdlpRunner.instance.testAccess);
+  youtubeAccessService.setWindowsCookieTester(WindowsYtdlpRunner.instance.testCookies);
+  youtubeAccessService.setWindowsHomeTester(const YoutubeMusicHomeService().testWindowsAccess);
   var youtubeSearchRevision = youtubeAccessService.revision;
   youtubeAccessService.addListener(() {
     if (youtubeAccessService.revision == youtubeSearchRevision) return;

@@ -120,6 +120,7 @@ class MainActivity : AudioServiceFragmentActivity() {
 
         val py     = Python.getInstance()
         val bridge = py.getModule("ytdlp_bridge")
+        bridge.callAttr("configure_runtime", applicationInfo.nativeLibraryDir)
         val youtubeCookieStore = YoutubeCookieStore(applicationContext)
         YoutubeAccessBridge(this, youtubeCookieStore, bridge).register(flutterEngine)
 
@@ -281,6 +282,23 @@ class MainActivity : AudioServiceFragmentActivity() {
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     result.error("STREAM_ERROR", e.message, null)
+                                }
+                            }
+                        }
+                    }
+
+                    // ── getMusicHome ──────────────────────────────────────
+                    "getMusicHome" -> {
+                        val limit = (call.argument<Int>("limit") ?: 60).coerceIn(1, 80)
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr("get_music_home", limit, cookiePath).toString()
+                                }
+                                withContext(Dispatchers.Main) { result.success(json) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("MUSIC_HOME_ERROR", e.message, null)
                                 }
                             }
                         }

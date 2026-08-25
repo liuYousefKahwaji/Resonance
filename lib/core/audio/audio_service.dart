@@ -43,6 +43,51 @@ class PlaybackVisualState {
   int get hashCode => Object.hash(trackId, playing, loading);
 }
 
+/// A session-only entry used by standalone YouTube playback. It never enters
+/// the user's persisted playlist; it simply lets next/previous follow the
+/// visible Suggestions or YouTube Music Home order.
+@immutable
+class StandaloneStreamQueueItem {
+  final String url;
+  final String title;
+  final String artist;
+  final String? thumbnailUrl;
+
+  const StandaloneStreamQueueItem({required this.url, required this.title, required this.artist, this.thumbnailUrl});
+}
+
+@visibleForTesting
+PlaybackQueueSnapshot standaloneStreamQueueSnapshot({
+  required List<StandaloneStreamQueueItem> items,
+  required int currentIndex,
+  required QueueLoopBehavior loopBehavior,
+}) {
+  if (items.isEmpty || currentIndex < 0 || currentIndex >= items.length) {
+    return PlaybackQueueSnapshot(current: null, upcoming: const [], loopBehavior: loopBehavior, shuffled: false);
+  }
+  PlaybackQueueEntry asEntry(StandaloneStreamQueueItem item) => PlaybackQueueEntry(
+    id: item.url,
+    title: item.title,
+    artist: item.artist,
+    artworkUri: item.thumbnailUrl?.trim().isEmpty != false ? null : Uri.tryParse(item.thumbnailUrl!),
+  );
+
+  final upcomingItems = switch (loopBehavior) {
+    QueueLoopBehavior.one => const <StandaloneStreamQueueItem>[],
+    QueueLoopBehavior.off => items.sublist(currentIndex + 1),
+    QueueLoopBehavior.all => <StandaloneStreamQueueItem>[
+      ...items.sublist(currentIndex + 1),
+      ...items.sublist(0, currentIndex),
+    ],
+  };
+  return PlaybackQueueSnapshot(
+    current: asEntry(items[currentIndex]),
+    upcoming: List.unmodifiable(upcomingItems.map(asEntry)),
+    loopBehavior: loopBehavior,
+    shuffled: false,
+  );
+}
+
 @visibleForTesting
 double fallbackVisualizerAmplitude(String trackId, Duration position) {
   final seed = trackId.codeUnits.fold<int>(17, (value, unit) => (value * 31 + unit) & 0x7fffffff);
@@ -68,6 +113,9 @@ bool playbackPositionAdvanced(Duration initial, Duration current) =>
     current - initial >= const Duration(milliseconds: 250);
 
 @visibleForTesting
+bool supportsPlaybackHealthMonitoring({required bool isWindows, required bool isStream}) => !isStream || isWindows;
+
+@visibleForTesting
 int nextPlayablePlaylistIndex({
   required List<String> playlist,
   required int currentIndex,
@@ -82,6 +130,12 @@ int nextPlayablePlaylistIndex({
     if (!hasFailed(playlist[index])) return index;
   }
   return -1;
+}
+
+@visibleForTesting
+int loopingStandaloneQueueIndex({required int currentIndex, required int offset, required int length}) {
+  if (length <= 0 || currentIndex < 0 || currentIndex >= length) return -1;
+  return (currentIndex + offset) % length;
 }
 
 enum TrackTransitionDirection { none, next, previous }
@@ -191,6 +245,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   int? _standalonePlaylistNumber;
   int? _standalonePlaylistIndex;
+  List<StandaloneStreamQueueItem> _standaloneStreamQueue = const [];
+  int? _standaloneStreamQueueIndex;
 
   int _loadGeneration = 0;
   int? _activeTrackLoadGeneration;
@@ -285,6 +341,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (!enabled) {
       _standalonePlaylistNumber = null;
       _standalonePlaylistIndex = null;
+      _standaloneStreamQueue = const [];
+      _standaloneStreamQueueIndex = null;
     }
     final current = mediaItem.value;
     if (current == null) return;
@@ -636,12 +694,20 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   void _armPlaybackHealthCheck(int generation, {Duration grace = const Duration(seconds: 5), Object? reason}) {
     _playbackHealthTimer?.cancel();
-    if (_currentTrackIsStream || !_playbackRequested || _playbackUnavailable) return;
+    final monitoredStream = _currentTrackIsStream;
+    if (!supportsPlaybackHealthMonitoring(isWindows: Platform.isWindows, isStream: monitoredStream) ||
+        !_playbackRequested ||
+        _playbackUnavailable) {
+      return;
+    }
     final initialPosition = _currentPosition;
     final windowsPlayer = Platform.isWindows ? _windowsPlayer : null;
     final justAudioPlayer = Platform.isWindows ? null : _player;
     _playbackHealthTimer = Timer(grace, () {
-      if (_loadGeneration != generation || !_playbackRequested || _playbackUnavailable || _currentTrackIsStream) {
+      if (_loadGeneration != generation ||
+          !_playbackRequested ||
+          _playbackUnavailable ||
+          _currentTrackIsStream != monitoredStream) {
         return;
       }
       if (Platform.isWindows) {
@@ -655,15 +721,22 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         _retryLoadGeneration = null;
         return;
       }
-      unawaited(_handlePlaybackFailure(generation, reason ?? 'playback made no progress'));
+      unawaited(
+        _handlePlaybackFailure(
+          generation,
+          reason ?? 'playback made no progress',
+          allowWindowsStreamRecovery: monitoredStream,
+        ),
+      );
     });
   }
 
-  Future<void> _handlePlaybackFailure(int generation, Object reason) async {
+  Future<void> _handlePlaybackFailure(int generation, Object reason, {bool allowWindowsStreamRecovery = false}) async {
+    final recoveringWindowsStream = _currentTrackIsStream && Platform.isWindows && allowWindowsStreamRecovery;
     if (_loadGeneration != generation ||
         _handledFailureGeneration == generation ||
         !_playbackRequested ||
-        _currentTrackIsStream) {
+        (_currentTrackIsStream && !recoveringWindowsStream)) {
       return;
     }
     final current = mediaItem.value;
@@ -673,6 +746,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     debugPrint('[PlayerHandler] Playback failed for "${current.id}" (generation $generation): $reason');
 
     if (_retryLoadGeneration != generation) {
+      if (recoveringWindowsStream) _streamUrlCache.remove(current.id);
       _retryLoadGeneration = _loadGeneration + 1;
       await loadTrack(
         current.id,
@@ -1746,11 +1820,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       try {
         if (!_isWindowsPlaying) await _windowsPlayer!.play();
       } catch (error) {
-        await _handlePlaybackFailure(_loadGeneration, error);
+        await _handlePlaybackFailure(_loadGeneration, error, allowWindowsStreamRecovery: _currentTrackIsStream);
         return;
       }
       _updatePlaybackState();
-      _armPlaybackHealthCheck(_loadGeneration);
+      _armPlaybackHealthCheck(
+        _loadGeneration,
+        grace: _currentTrackIsStream ? const Duration(seconds: 10) : const Duration(seconds: 5),
+      );
       return;
     }
     if (!_player.playing) {
@@ -1900,6 +1977,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     standaloneModeNotifier.value = false;
     _standalonePlaylistNumber = null;
     _standalonePlaylistIndex = null;
+    _standaloneStreamQueue = const [];
+    _standaloneStreamQueueIndex = null;
     trackTransitionNotifier.value = TrackTransitionState(revision: trackTransitionNotifier.value.revision + 1);
 
     try {
@@ -2039,6 +2118,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     standaloneModeNotifier.value = standalone;
     _standalonePlaylistNumber = standalone ? standalonePlaylistNumber : null;
     _standalonePlaylistIndex = standalone ? standalonePlaylistIndex : null;
+    if (!standalone || standalonePlaylistNumber != null) {
+      _standaloneStreamQueue = const [];
+      _standaloneStreamQueueIndex = null;
+    }
     trackTransitionNotifier.value = TrackTransitionState(
       revision: trackTransitionNotifier.value.revision + 1,
       direction: transitionDirection,
@@ -2140,7 +2223,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           }),
         );
       }
-      _armPlaybackHealthCheck(myGen);
+      _armPlaybackHealthCheck(
+        myGen,
+        grace: isStream && Platform.isWindows ? const Duration(seconds: 10) : const Duration(seconds: 5),
+      );
 
       // Do not stop the background visualizer decoder until the new source is
       // already ready (and Windows is already playing). Process cancellation
@@ -2249,7 +2335,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     required String title,
     required String artist,
     String? thumbnailUrl,
+    List<StandaloneStreamQueueItem>? queueItems,
+    int? queueIndex,
   }) async {
+    final requestedQueue = queueItems ?? const <StandaloneStreamQueueItem>[];
+    final resolvedIndex = queueIndex != null && queueIndex >= 0 && queueIndex < requestedQueue.length
+        ? queueIndex
+        : requestedQueue.indexWhere((item) => item.url == url);
+    _standaloneStreamQueue = requestedQueue.isEmpty ? const [] : List.unmodifiable(requestedQueue);
+    _standaloneStreamQueueIndex = resolvedIndex >= 0 ? resolvedIndex : null;
     final artworkUri = thumbnailUrl == null || thumbnailUrl.isEmpty ? null : Uri.tryParse(thumbnailUrl);
     await MetadataCacheService.set(url, title, artist, artworkUrl: thumbnailUrl);
     await loadTrack(url, title, artist, standalone: true, artworkUri: artworkUri);
@@ -2463,6 +2557,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> _advanceAfterCompletion() async {
+    if (isStandaloneMode && _standalonePlaylistNumber == null && _standaloneStreamQueue.isNotEmpty) {
+      await _moveStandaloneStreamQueue(1, TrackTransitionDirection.next);
+      return;
+    }
     final target = await _automaticNextTarget();
     if (target == null) {
       if (currentLoopMode == LoopMode.all) await next();
@@ -2484,7 +2582,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
     final standalonePlaylistNumber = _standalonePlaylistNumber;
-    if (isStandaloneMode && standalonePlaylistNumber == null) return;
+    if (isStandaloneMode && standalonePlaylistNumber == null) {
+      await _moveStandaloneStreamQueue(1, TrackTransitionDirection.next);
+      return;
+    }
     final playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber);
     if (playlist.isEmpty) return;
     final index = _currentPlaylistIndex(playlist, currentItem.id);
@@ -2510,7 +2611,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
     final standalonePlaylistNumber = _standalonePlaylistNumber;
-    if (isStandaloneMode && standalonePlaylistNumber == null) return;
+    if (isStandaloneMode && standalonePlaylistNumber == null) {
+      if (restartCurrent && _currentPosition > const Duration(seconds: 3)) {
+        await seek(Duration.zero);
+        return;
+      }
+      await _moveStandaloneStreamQueue(-1, TrackTransitionDirection.previous);
+      return;
+    }
     final playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber);
     if (playlist.isEmpty) return;
     final index = _currentPlaylistIndex(playlist, currentItem.id);
@@ -2541,6 +2649,38 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       return rememberedIndex;
     }
     return playlist.indexWhere((path) => _sameTrackId(path, currentTrack));
+  }
+
+  Future<void> _moveStandaloneStreamQueue(int offset, TrackTransitionDirection direction) async {
+    final items = _standaloneStreamQueue;
+    if (items.isEmpty) return;
+    final currentUrl = mediaItem.value?.id;
+    var index = _standaloneStreamQueueIndex;
+    if (index == null || index < 0 || index >= items.length || items[index].url != currentUrl) {
+      index = items.indexWhere((item) => item.url == currentUrl);
+    }
+    if (index < 0) return;
+    final targetIndex = loopingStandaloneQueueIndex(currentIndex: index, offset: offset, length: items.length);
+    await _loadStandaloneStreamQueueItem(targetIndex, direction);
+  }
+
+  Future<void> _loadStandaloneStreamQueueItem(int targetIndex, TrackTransitionDirection direction) async {
+    final items = _standaloneStreamQueue;
+    if (targetIndex < 0 || targetIndex >= items.length) return;
+    final target = items[targetIndex];
+    _standaloneStreamQueueIndex = targetIndex;
+    final artworkUri = target.thumbnailUrl == null || target.thumbnailUrl!.isEmpty
+        ? null
+        : Uri.tryParse(target.thumbnailUrl!);
+    await MetadataCacheService.set(target.url, target.title, target.artist, artworkUrl: target.thumbnailUrl);
+    await loadTrack(
+      target.url,
+      target.title,
+      target.artist,
+      standalone: true,
+      artworkUri: artworkUri,
+      transitionDirection: direction,
+    );
   }
 
   Future<bool> isPlaying() async => Platform.isWindows ? _isWindowsPlaying : _player.playing;
@@ -2713,6 +2853,22 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     }
 
     final playlistNumber = _standalonePlaylistNumber;
+    if (isStandaloneMode && playlistNumber == null && _standaloneStreamQueue.isNotEmpty) {
+      var currentIndex = _standaloneStreamQueueIndex;
+      if (currentIndex == null ||
+          currentIndex < 0 ||
+          currentIndex >= _standaloneStreamQueue.length ||
+          _standaloneStreamQueue[currentIndex].url != current.id) {
+        currentIndex = _standaloneStreamQueue.indexWhere((item) => item.url == current.id);
+      }
+      return standaloneStreamQueueSnapshot(
+        items: _standaloneStreamQueue,
+        currentIndex: currentIndex,
+        // Search and Home session queues intentionally wrap regardless of the
+        // persisted playlist repeat setting.
+        loopBehavior: QueueLoopBehavior.all,
+      );
+    }
     final paths = isStandaloneMode && playlistNumber == null
         ? const <String>[]
         : await _effectivePlaybackOrder(playlistNumber: playlistNumber);
@@ -2747,8 +2903,16 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   /// local playlist before the queue can open.
   Future<Uri?> queueArtworkUri(String trackId) => _albumArtUri(trackId);
 
-  Future<void> playPlaybackQueueEntry(PlaybackQueueEntry entry) =>
-      loadTrack(entry.id, entry.title, entry.artist, transitionDirection: TrackTransitionDirection.next);
+  Future<void> playPlaybackQueueEntry(PlaybackQueueEntry entry) async {
+    if (isStandaloneMode && _standalonePlaylistNumber == null && _standaloneStreamQueue.isNotEmpty) {
+      final index = _standaloneStreamQueue.indexWhere((item) => item.url == entry.id);
+      if (index >= 0) {
+        await _loadStandaloneStreamQueueItem(index, TrackTransitionDirection.next);
+        return;
+      }
+    }
+    await loadTrack(entry.id, entry.title, entry.artist, transitionDirection: TrackTransitionDirection.next);
+  }
 
   bool getShuffleMode() => isShuffle;
   LoopMode getLoopMode() => currentLoopMode;

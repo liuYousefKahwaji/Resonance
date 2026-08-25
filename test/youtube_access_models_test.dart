@@ -25,6 +25,13 @@ Use --cookies-from-browser or --cookies for the authentication.''';
         ).kind,
         YoutubeFailureKind.sessionRejected,
       );
+      expect(
+        YoutubeFailureClassifier.classify(
+          'The selected browser profile is not signed in to YouTube Music',
+          authenticated: true,
+        ).kind,
+        YoutubeFailureKind.sessionRejected,
+      );
     });
 
     test('does not treat a bare 403 as missing cookies', () {

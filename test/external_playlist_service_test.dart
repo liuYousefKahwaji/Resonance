@@ -10,18 +10,8 @@ void main() {
       jsonEncode({
         'title': 'YouTube Mix',
         'entries': [
-          {
-            'id': 'aaaaaaaaaaa',
-            'title': 'First Video',
-            'uploader': 'Channel A',
-            'duration': 61,
-          },
-          {
-            'id': 'aaaaaaaaaaa',
-            'title': 'First Video',
-            'uploader': 'Channel A',
-            'duration': 61,
-          },
+          {'id': 'aaaaaaaaaaa', 'title': 'First Video', 'uploader': 'Channel A', 'duration': 61},
+          {'id': 'aaaaaaaaaaa', 'title': 'First Video', 'uploader': 'Channel A', 'duration': 61},
           {
             'webpage_url': 'https://www.youtube.com/watch?v=bbbbbbbbbbb',
             'title': 'Last Video',
@@ -46,7 +36,9 @@ void main() {
     expect(provider.supports(Uri.parse('https://www.youtube.com/playlist?list=PLtest')), isTrue);
     expect(provider.supports(Uri.parse('https://music.youtube.com/watch?v=aaaaaaaaaaa&list=PLtest')), isTrue);
     expect(provider.supports(Uri.parse('https://youtu.be/aaaaaaaaaaa?list=PLtest')), isTrue);
+    expect(provider.supports(Uri.parse('https://music.youtube.com/browse/MPREb_album')), isTrue);
     expect(provider.supports(Uri.parse('https://www.youtube.com/watch?v=aaaaaaaaaaa')), isFalse);
+    expect(provider.supports(Uri.parse('https://music.youtube.com/browse/UCartist')), isFalse);
   });
 
   test('Spotify embed metadata preserves playlist order, artists, duplicates, and duration', () {

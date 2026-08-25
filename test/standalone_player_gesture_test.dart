@@ -47,11 +47,12 @@ void main() {
 
   testWidgets('mouse drag invokes the same swipe callbacks on Windows', (tester) async {
     var nextCount = 0;
+    var queueCount = 0;
     await tester.pumpWidget(
       _GestureHarness(
         onNext: () => nextCount++,
         onPrevious: ({required restartCurrent}) {},
-        onQueue: () {},
+        onQueue: () => queueCount++,
         onExit: () {},
       ),
     );
@@ -60,9 +61,13 @@ void main() {
     final mouse = await tester.startGesture(center, kind: PointerDeviceKind.mouse);
     await mouse.moveBy(const Offset(-160, 0));
     await mouse.up();
+    final upwardMouse = await tester.startGesture(center, kind: PointerDeviceKind.mouse);
+    await upwardMouse.moveBy(const Offset(0, -160));
+    await upwardMouse.up();
     await tester.pump();
 
     expect(nextCount, 1);
+    expect(queueCount, 1);
   });
 
   testWidgets('peer mode accepts only the upward queue gesture', (tester) async {

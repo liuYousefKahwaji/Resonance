@@ -113,6 +113,12 @@ install(FILES
   "${CMAKE_SOURCE_DIR}/../assets/bin/deno.exe"
   DESTINATION "${CMAKE_INSTALL_PREFIX}/bin" COMPONENT Runtime)
 
+if(EXISTS "${CMAKE_SOURCE_DIR}/../assets/bin/resonance-ytmusic-home.exe")
+  install(FILES
+    "${CMAKE_SOURCE_DIR}/../assets/bin/resonance-ytmusic-home.exe"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/bin" COMPONENT Runtime)
+endif()
+
 # Install the AOT library on non-Debug builds only.
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
