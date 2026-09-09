@@ -32,7 +32,7 @@ import 'package:resonance/app/now_playing_navigation.dart';
 import 'package:resonance/screens/youtube/youtube_search_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:metadata_god/metadata_god.dart';
-import 'package:media_kit/media_kit.dart';
+import 'package:media_kit/media_kit.dart' as mk;
 import 'package:just_audio/just_audio.dart' as ja;
 import 'package:path/path.dart' as p;
 import 'package:resonance/services/metadata_cache_service.dart';
@@ -47,7 +47,10 @@ import 'package:resonance/services/download/download_queue_controller.dart';
 import 'package:resonance/services/sync/sync_session_service.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/services/youtube/youtube_history_preferences.dart';
+import 'package:resonance/services/youtube/youtube_history_service.dart';
 import 'package:resonance/services/youtube/youtube_music_home_service.dart';
+import 'package:resonance/services/youtube/youtube_playback_history_coordinator.dart';
 import 'package:resonance/screens/sync/sync_screens.dart';
 import 'package:resonance/widgets/music_recognition/music_recognition_dialog.dart';
 import 'package:resonance/widgets/youtube/windows_youtube.dart';
@@ -80,7 +83,7 @@ void _shutdownLog(String event) {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (Platform.isWindows) {
-    MediaKit.ensureInitialized();
+    mk.MediaKit.ensureInitialized();
   }
   await MetadataGod.initialize();
 
@@ -104,16 +107,42 @@ Future<void> main() async {
     youtubeSearchRevision = youtubeAccessService.revision;
     MediaDownloader.clearSearchCache();
   });
-
-  final handler = await AudioService.init(
-    builder: () => PlayerHandler(youtubeAccessService: youtubeAccessService),
-    config: const AudioServiceConfig(
-      androidNotificationChannelId: 'com.resonance.audio',
-      androidNotificationChannelName: 'Resonance Playback',
-      androidNotificationIcon: 'mipmap/ic_launcher',
-      androidStopForegroundOnPause: false,
-    ),
+  final youtubeHistoryPreferences = await YoutubeHistoryPreferences.load();
+  final youtubeHistoryService = YoutubeHistoryService(
+    preferences: youtubeHistoryPreferences,
+    access: youtubeAccessService,
   );
+  final youtubeHistoryCoordinator = YoutubePlaybackHistoryCoordinator(
+    reporter: youtubeHistoryService,
+    isEnabled: () => youtubeHistoryPreferences.enabled,
+  );
+
+  // Windows uses PlayerHandler directly. The app already owns its Windows
+  // media keys/taskbar controls, and the optional audio_service_win plugin
+  // previously added a second WinRT MediaPlayer/SMTC pipeline. That pipeline
+  // could crash the process when Windows had no valid output endpoint. Keep
+  // audio_service initialization on Android, where it provides the required
+  // notification and background-service integration.
+  final PlayerHandler handler;
+  if (Platform.isWindows) {
+    handler = PlayerHandler(
+      youtubeAccessService: youtubeAccessService,
+      youtubeHistoryCoordinator: youtubeHistoryCoordinator,
+    );
+  } else {
+    handler = await AudioService.init<PlayerHandler>(
+      builder: () => PlayerHandler(
+        youtubeAccessService: youtubeAccessService,
+        youtubeHistoryCoordinator: youtubeHistoryCoordinator,
+      ),
+      config: const AudioServiceConfig(
+        androidNotificationChannelId: 'com.resonance.audio',
+        androidNotificationChannelName: 'Resonance Playback',
+        androidNotificationIcon: 'mipmap/ic_launcher',
+        androidStopForegroundOnPause: false,
+      ),
+    );
+  }
   final themeProvider = ThemeProvider();
   SyncSessionService.instance.initialize(handler);
   if (Platform.isAndroid) {
@@ -169,6 +198,7 @@ Future<void> main() async {
       providers: [
         Provider<PlayerHandler>.value(value: handler),
         ChangeNotifierProvider<YoutubeAccessService>.value(value: youtubeAccessService),
+        ChangeNotifierProvider<YoutubeHistoryPreferences>.value(value: youtubeHistoryPreferences),
         ChangeNotifierProvider<DownloadQueueController>.value(value: DownloadQueueController.instance),
         ChangeNotifierProvider<SyncSessionService>.value(value: SyncSessionService.instance),
         ChangeNotifierProvider<ThemeProvider>.value(value: themeProvider),
@@ -280,6 +310,8 @@ class _MainAppState extends State<MainApp> {
   // animates or is removed; the library is never painted for a stray frame.
   bool _showIntro = true;
   ja.AudioPlayer? _introPlayer;
+  mk.Player? _windowsIntroPlayer;
+  Timer? _introTimer;
   final ScrollController _playlistScrollController = ScrollController();
   int _trackPulse = 0;
   int _artworkRevision = 0;
@@ -300,7 +332,9 @@ class _MainAppState extends State<MainApp> {
   void initState() {
     super.initState();
     widget.handler.youtubeFailureNotifier.addListener(_showPlaybackYoutubeFailure);
+    widget.handler.outputDeviceErrorNotifier.addListener(_showOutputDeviceError);
     _initIntro();
+    DownloadQueueController.instance.addListener(_refreshCompletedDownloads);
     _loadPlaylistFromDisk();
     if (Platform.isAndroid) unawaited(AndroidEntrypointService.initialize(_handleAndroidAction));
     if (_isDesktop) {
@@ -325,19 +359,61 @@ class _MainAppState extends State<MainApp> {
       setState(() => _showIntro = false);
       return;
     }
-    _introPlayer = ja.AudioPlayer();
     try {
-      await _introPlayer!.setAsset('assets/audio/intro.mp3');
-      unawaited(_introPlayer!.play());
-    } catch (_) {}
-    Future.delayed(const Duration(milliseconds: 3100), () {
+      if (Platform.isWindows) {
+        // Keep the intro on the same libmpv/media_kit backend as normal
+        // Windows playback. just_audio_windows uses WinRT MediaPlayer and
+        // leaves an additional native audio session alive for the whole app.
+        _windowsIntroPlayer = mk.Player();
+        await _windowsIntroPlayer!.open(mk.Media('asset:///assets/audio/intro.mp3'), play: true);
+      } else {
+        _introPlayer = ja.AudioPlayer();
+        await _introPlayer!.setAsset('assets/audio/intro.mp3');
+        unawaited(_introPlayer!.play());
+      }
+    } catch (_) {
+      await _disposeIntroAudio();
+    }
+    _introTimer = Timer(const Duration(milliseconds: 3100), () {
       if (mounted) setState(() => _showIntro = false);
+      unawaited(_disposeIntroAudio());
+    });
+  }
+
+  void _showOutputDeviceError() {
+    final message = widget.handler.outputDeviceErrorNotifier.value;
+    if (message == null || message.isEmpty) return;
+    widget.handler.outputDeviceErrorNotifier.value = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(SnackBar(content: Text(message)));
     });
   }
 
   Future<void> _dismissIntro() async {
-    await _introPlayer?.stop();
+    _introTimer?.cancel();
+    await _disposeIntroAudio();
     if (mounted && _showIntro) setState(() => _showIntro = false);
+  }
+
+  Future<void> _disposeIntroAudio() async {
+    final intro = _introPlayer;
+    final windowsIntro = _windowsIntroPlayer;
+    _introPlayer = null;
+    _windowsIntroPlayer = null;
+    try {
+      await intro?.stop();
+    } catch (_) {}
+    try {
+      await intro?.dispose();
+    } catch (_) {}
+    try {
+      await windowsIntro?.stop();
+    } catch (_) {}
+    try {
+      await windowsIntro?.dispose();
+    } catch (_) {}
   }
 
   Future<void> _initDesktop() async {
@@ -358,13 +434,28 @@ class _MainAppState extends State<MainApp> {
   @override
   void dispose() {
     widget.handler.youtubeFailureNotifier.removeListener(_showPlaybackYoutubeFailure);
-    unawaited(_introPlayer?.dispose());
+    widget.handler.outputDeviceErrorNotifier.removeListener(_showOutputDeviceError);
+    _introTimer?.cancel();
+    unawaited(_disposeIntroAudio());
+    DownloadQueueController.instance.removeListener(_refreshCompletedDownloads);
     _playlistScrollController.dispose();
     _desktopHandler?.dispose();
     if (_isDesktop && Platform.isWindows) {
       unawaited(MediaKeysService.unregister());
     }
     super.dispose();
+  }
+
+  int _playlistSearchRequest = 0;
+  String _completedDownloadIds = '';
+  void _refreshCompletedDownloads() {
+    final completed = DownloadQueueController.instance.entries
+        .where((entry) => entry.replaceStream && entry.localPath != null)
+        .map((entry) => entry.id)
+        .join(',');
+    if (completed == _completedDownloadIds) return;
+    _completedDownloadIds = completed;
+    if (mounted) unawaited(_loadPlaylistFromDisk());
   }
 
   Future<void> _loadPlaylistFromDisk() async {
@@ -658,12 +749,13 @@ class _MainAppState extends State<MainApp> {
     }
     final index = service.findTrackIndex(playlist, trackPath);
     if (index < 0 || !mounted) return;
-    await _scrollToTrackIndex(index);
-    if (!mounted) return;
+    // Clear a tracklist filter before calculating the original row's offset.
     setState(() {
       _pulsingTrackIndex = index;
       _trackPulse++;
     });
+    await _scrollToTrackIndex(index);
+    if (mounted) setState(() => _trackPulse++);
   }
 
   GlobalKey _trackItemKey(int playlistNumber, int index) => _trackItemKeys.putIfAbsent((
@@ -1028,7 +1120,7 @@ class _MainAppState extends State<MainApp> {
         throw StateError('Resonance navigation is not ready.');
       }
       if (_showIntro) {
-        await _introPlayer?.stop();
+        await _dismissIntro();
         if (mounted) setState(() => _showIntro = false);
       }
       navigatorContext = _navigatorKey.currentState?.overlay?.context;
@@ -1337,6 +1429,7 @@ class _MainAppState extends State<MainApp> {
           )
         : TrackList(
             tracks: playlist,
+            searchRequest: _playlistSearchRequest,
             playlistNumber: activePlaylistNumber,
             controller: _playlistScrollController,
             pulsingTrackIndex: _pulsingTrackIndex,
@@ -1499,11 +1592,35 @@ class _MainAppState extends State<MainApp> {
                 icon: const Icon(Icons.graphic_eq_rounded),
                 tooltip: 'Shazam / Identify a song',
               ),
-              IconButton(
-                onPressed: () => _openSearch(context),
-                icon: const Icon(Icons.search_rounded),
-                tooltip: 'Search YouTube',
-              ),
+              if (Platform.isAndroid)
+                PopupMenuButton<bool>(
+                  tooltip: 'Search',
+                  icon: const Icon(Icons.search_rounded),
+                  onSelected: (inPlaylist) {
+                    if (inPlaylist) {
+                      setState(() => _playlistSearchRequest++);
+                    } else {
+                      _openSearch(context);
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: true,
+                      enabled: playlist.isNotEmpty,
+                      child: const _ToolbarMenuLabel(icon: Icons.queue_music_rounded, label: 'Search this playlist'),
+                    ),
+                    const PopupMenuItem(
+                      value: false,
+                      child: _ToolbarMenuLabel(icon: Icons.travel_explore_rounded, label: 'Search YouTube'),
+                    ),
+                  ],
+                )
+              else
+                IconButton(
+                  onPressed: () => _openSearch(context),
+                  icon: const Icon(Icons.search_rounded),
+                  tooltip: 'Search YouTube',
+                ),
               if (!compact && !Platform.isAndroid) ..._wideLibraryActions(context),
               if (compact || Platform.isAndroid) _buildCompactActionsMenu(context),
             ],

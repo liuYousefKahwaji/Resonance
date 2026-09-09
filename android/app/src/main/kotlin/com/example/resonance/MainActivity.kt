@@ -304,6 +304,31 @@ class MainActivity : AudioServiceFragmentActivity() {
                         }
                     }
 
+                    // ── addMusicHistory ──────────────────────────────────
+                    // History sync uses the same short-lived private cookie
+                    // copy as every other authenticated YouTube operation.
+                    "addMusicHistory" -> {
+                        val videoId = call.argument<String>("videoId") ?: ""
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr("add_music_history", videoId, cookiePath).toString()
+                                }
+                                val payload = JSONObject(json)
+                                val response = mapOf(
+                                    "ok" to payload.optBoolean("ok", false),
+                                    "videoId" to payload.optString("videoId"),
+                                    "statusCode" to payload.optInt("statusCode", 0),
+                                )
+                                withContext(Dispatchers.Main) { result.success(response) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("MUSIC_HISTORY_ERROR", e.message, null)
+                                }
+                            }
+                        }
+                    }
+
                     else -> result.notImplemented()
                 }
             }

@@ -8,7 +8,7 @@ import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/core/youtube/youtube_music_home_models.dart';
 import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
-import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
+import 'package:resonance/services/youtube/windows_ytmusic_helper.dart';
 
 /// Retrieves the authenticated YouTube Music home feed through the native
 /// cookie boundary on Android or the packaged helper on Windows.
@@ -62,39 +62,11 @@ class YoutubeMusicHomeService {
   }
 
   Future<String> _fetchWindows(int limit, {String? overrideBrowserSource}) async {
-    final runner = WindowsYtdlpRunner.instance;
-    final helper = runner.ytMusicHomePath;
-    if (!await File(helper).exists()) {
-      throw const YoutubeFailure(
-        kind: YoutubeFailureKind.unsupported,
-        userMessage: 'The YouTube Music home component is missing from this installation.',
-        technicalSummary: 'Missing bin/resonance-ytmusic-home.exe.',
-      );
-    }
-    final access = YoutubeAccessService.active;
-    final browser = overrideBrowserSource ?? access?.windowsBrowserId;
-    final cookiePath = access?.windowsCookiePath;
-    if (browser == null && cookiePath == null) {
-      throw const YoutubeFailure(
-        kind: YoutubeFailureKind.verificationRequired,
-        userMessage: 'Connect a browser session before opening YouTube Music home.',
-      );
-    }
-    final process = await Process.start(helper, [
-      if (browser != null) ...['--browser', browser] else ...['--cookies-file', cookiePath!],
-      '--limit',
-      '$limit',
-    ], runInShell: false);
-    final stdout = await process.stdout.transform(utf8.decoder).join();
-    final stderr = await process.stderr.transform(utf8.decoder).join();
-    final exitCode = await process.exitCode;
-    if (exitCode != 0 || stdout.trim().isEmpty) {
-      throw YoutubeFailureClassifier.classify(
-        stderr.isEmpty ? 'YouTube Music helper exited with code $exitCode' : stderr,
-        authenticated: true,
-      );
-    }
-    return stdout;
+    return const WindowsYtMusicHelper().invoke(
+      action: 'home',
+      limit: limit,
+      overrideBrowserSource: overrideBrowserSource,
+    );
   }
 
   @visibleForTesting

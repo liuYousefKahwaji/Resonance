@@ -14,6 +14,9 @@
 //     if the widget was already disposed.
 
 import 'dart:async';
+import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/services/download/download_queue_controller.dart';
+import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -41,6 +44,7 @@ class TrackTile extends StatefulWidget {
   final int artworkRevision;
   final bool selected;
   final bool selectionMode;
+  final bool allowReorder;
   final VoidCallback? onSelectionToggle;
   @visibleForTesting
   final Future<CachedTrackMetadata?> Function(String path)? metadataLoader;
@@ -56,6 +60,7 @@ class TrackTile extends StatefulWidget {
     this.artworkRevision = 0,
     this.selected = false,
     this.selectionMode = false,
+    this.allowReorder = true,
     this.onSelectionToggle,
     this.metadataLoader,
   });
@@ -470,6 +475,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
           onEditMetadata: _showMetadataEditor,
           selected: widget.selected,
           selectionMode: widget.selectionMode,
+          allowReorder: widget.allowReorder,
           onSelectionToggle: widget.onSelectionToggle,
         ),
       ),
@@ -524,6 +530,7 @@ class _TrackTileContent extends StatelessWidget {
   final void Function(BuildContext, String, String) onEditMetadata;
   final bool selected;
   final bool selectionMode;
+  final bool allowReorder;
   final VoidCallback? onSelectionToggle;
 
   const _TrackTileContent({
@@ -540,6 +547,7 @@ class _TrackTileContent extends StatelessWidget {
     required this.onEditMetadata,
     required this.selected,
     required this.selectionMode,
+    required this.allowReorder,
     required this.onSelectionToggle,
   });
 
@@ -672,6 +680,8 @@ class _TrackTileContent extends StatelessWidget {
                                 onChanged: onSelectionToggle == null ? null : (_) => onSelectionToggle!(),
                                 visualDensity: VisualDensity.compact,
                               )
+                            : !allowReorder
+                            ? const Icon(Icons.music_note_rounded, size: 18)
                             : ReorderableDragStartListener(
                                 index: index,
                                 child: ValueListenableBuilder<int>(
@@ -763,6 +773,52 @@ class _TrackTileContent extends StatelessWidget {
                                   unawaited(_openStandalone(context, handler, resolvedTitle, resolvedArtist)),
                               child: const Text('Open standalone player'),
                             ),
+                            if (isStream)
+                              ListenableBuilder(
+                                listenable: DownloadQueueController.instance,
+                                builder: (_, __) {
+                                  final queue = DownloadQueueController.instance;
+                                  final pending = queue.pendingEntryFor(trackPath, playlistNumber);
+                                  return MenuItemButton(
+                                    leadingIcon: const Icon(Icons.download_rounded, size: 19),
+                                    onPressed: pending != null
+                                        ? null
+                                        : () async {
+                                            final messenger = ScaffoldMessenger.of(context);
+                                            messenger.showSnackBar(const SnackBar(content: Text('Download queued')));
+                                            try {
+                                              await queue.enqueue(
+                                                YoutubeTrack(
+                                                  url: trackPath,
+                                                  title: resolvedTitle,
+                                                  artist: resolvedArtist,
+                                                  thumbnailUrl: artworkUrl,
+                                                ),
+                                                playlistNumber,
+                                                replaceStream: true,
+                                              );
+                                              messenger.showSnackBar(
+                                                SnackBar(content: Text('$resolvedTitle downloaded')),
+                                              );
+                                            } catch (error) {
+                                              if (context.mounted) {
+                                                await showYoutubeFailure(
+                                                  context,
+                                                  error,
+                                                  sourceUrl: trackPath,
+                                                  actionLabel: 'Download failed',
+                                                );
+                                              }
+                                            }
+                                          },
+                                    child: Text(
+                                      pending == null
+                                          ? 'Download'
+                                          : '${pending.statusText} ${pending.progress.round()}%',
+                                    ),
+                                  );
+                                },
+                              ),
                             if (!isStream)
                               MenuItemButton(
                                 leadingIcon: const Icon(Icons.edit_rounded, size: 19),

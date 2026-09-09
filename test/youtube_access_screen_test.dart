@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:resonance/screens/settings/youtube_access_screen.dart';
 import 'package:resonance/services/youtube/youtube_access_backend.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/services/youtube/youtube_history_preferences.dart';
 import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -102,5 +103,27 @@ void main() {
     expect(find.text('YouTube verification required'), findsOneWidget);
     expect(find.textContaining('YouTube blocked this request'), findsOneWidget);
     expect(find.textContaining('--cookies-from-browser'), findsNothing);
+  });
+
+  testWidgets('history sync is explicit, off by default, and waits for tested access', (tester) async {
+    final backend = _RecordingBackend();
+    final service = await serviceFor(backend);
+    final history = await YoutubeHistoryPreferences.load();
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: service),
+          ChangeNotifierProvider.value(value: history),
+        ],
+        child: const MaterialApp(home: YoutubeAccessScreen(android: true, windows: false)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Sync plays to YouTube Music history'), findsOneWidget);
+    expect(history.enabled, isFalse);
+    final toggle = tester.widget<SwitchListTile>(find.byType(SwitchListTile));
+    expect(toggle.onChanged, isNull);
+    expect(find.textContaining('view count', findRichText: true), findsNothing);
   });
 }

@@ -9,6 +9,12 @@
 //     from the in-memory map instantly, so re-init is effectively free.
 
 import 'dart:io';
+import 'dart:async';
+import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
+import 'package:path/path.dart' as p;
+import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/app/resonance_motion.dart';
+import 'package:resonance/app/theme.dart';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -27,6 +33,7 @@ class TrackList extends StatefulWidget {
   final ScrollController controller;
   final int? pulsingTrackIndex;
   final int pulse;
+  final int searchRequest;
   final int artworkRevision;
   final GlobalKey Function(int playlistNumber, int index) itemKeyForIndex;
   final Set<int> selectedIndices;
@@ -44,6 +51,7 @@ class TrackList extends StatefulWidget {
     required this.pulse,
     required this.artworkRevision,
     required this.itemKeyForIndex,
+    this.searchRequest = 0,
     this.selectedIndices = const <int>{},
     this.onSelectionToggle,
   });
@@ -54,6 +62,131 @@ class TrackList extends StatefulWidget {
 
 class _TrackListState extends State<TrackList> {
   bool _isScrolling = false;
+  final _search = TextEditingController();
+  final _focus = FocusNode();
+  final Map<String, CachedTrackMetadata> _metadata = {};
+  bool _searchOpen = false;
+  int _generation = 0;
+  bool _indexing = false;
+
+  @override
+  void dispose() {
+    _generation++;
+    _search.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant TrackList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.searchRequest != widget.searchRequest) {
+      _searchOpen = true;
+      _focus.requestFocus();
+    }
+    if (oldWidget.pulse != widget.pulse) {
+      _search.clear();
+      _focus.unfocus();
+    }
+    if (oldWidget.tracks != widget.tracks || oldWidget.artworkRevision != widget.artworkRevision) {
+      if (oldWidget.artworkRevision != widget.artworkRevision) _metadata.clear();
+      if (_search.text.isNotEmpty) unawaited(_indexMetadata());
+    }
+  }
+
+  Future<void> _indexMetadata() async {
+    final generation = ++_generation;
+    _indexing = true;
+    for (final path in List<String>.of(widget.tracks)) {
+      if (!mounted || generation != _generation) return;
+      if (_metadata.containsKey(path)) continue;
+      CachedTrackMetadata? metadata;
+      try {
+        metadata = await MetadataCacheService.get(path);
+        if (metadata == null && !path.startsWith('http')) {
+          final tags = await AudioMetadata.extract(File(path));
+          metadata = CachedTrackMetadata(
+            title: tags?.trackName?.trim().isNotEmpty == true ? tags!.trackName! : p.basenameWithoutExtension(path),
+            artist: tags?.firstArtists ?? 'Unknown Artist',
+          );
+          await MetadataCacheService.set(path, metadata.title, metadata.artist);
+        }
+      } catch (_) {}
+      if (!mounted || generation != _generation) return;
+      _metadata[path] = metadata ?? CachedTrackMetadata(title: p.basenameWithoutExtension(path), artist: '');
+    }
+    if (mounted && generation == _generation) setState(() => _indexing = false);
+  }
+
+  Widget _searchBar(int count) {
+    final expanded = !Platform.isAndroid || _searchOpen;
+    return AnimatedSize(
+      duration: resonanceDuration(context, const Duration(milliseconds: 220)),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.topCenter,
+      child: !expanded
+          ? const SizedBox.shrink()
+          : Padding(
+              padding: EdgeInsets.fromLTRB(12, Platform.isWindows ? 14 : 4, 12, 8),
+              child: SizedBox(
+                height: Platform.isWindows ? 48 : 44,
+                child: TextField(
+                  controller: _search,
+                  focusNode: _focus,
+                  onChanged: (_) {
+                    setState(() {});
+                    unawaited(_indexMetadata());
+                  },
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (_) => _focus.unfocus(),
+                  textAlignVertical: TextAlignVertical.center,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: 'Search this playlist',
+                    prefixIcon: const Icon(Icons.search_rounded, size: 18),
+                    prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 36),
+                    suffixIconConstraints: const BoxConstraints(minHeight: 36),
+                    filled: true,
+                    fillColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(useWindowsNativeControls(context) ? 4 : 12),
+                      borderSide: BorderSide.none,
+                    ),
+                    suffixIcon: Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_search.text.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 6),
+                              child: Text(_indexing ? '…' : '$count', style: Theme.of(context).textTheme.labelSmall),
+                            ),
+                          if (_search.text.isNotEmpty || Platform.isAndroid)
+                            IconButton(
+                              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+                              padding: EdgeInsets.zero,
+                              tooltip: Platform.isAndroid ? 'Close playlist search' : 'Clear search',
+                              icon: const Icon(Icons.close_rounded, size: 18),
+                              onPressed: () => setState(() {
+                                _search.clear();
+                                if (Platform.isAndroid) {
+                                  _searchOpen = false;
+                                  _focus.unfocus();
+                                }
+                              }),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+    );
+  }
 
   bool _handleScroll(ScrollNotification notification) {
     final scrolling = notification is ScrollStartNotification || notification is ScrollUpdateNotification;
@@ -72,6 +205,21 @@ class _TrackListState extends State<TrackList> {
       return const _EmptyState();
     }
 
+    final query = _search.text.trim();
+    final indices = <int>[for (var i = 0; i < widget.tracks.length; i++) i];
+    if (query.isNotEmpty) {
+      int rank(int i) {
+        final path = widget.tracks[i];
+        final metadata = _metadata[path];
+        return trackSearchRank(query, metadata?.title ?? p.basenameWithoutExtension(path), metadata?.artist ?? '');
+      }
+
+      indices.removeWhere((i) => rank(i) < 0);
+      indices.sort((a, b) {
+        final comparison = rank(a).compareTo(rank(b));
+        return comparison == 0 ? a.compareTo(b) : comparison;
+      });
+    }
     final list = ReorderableListView.builder(
       scrollController: widget.controller,
       buildDefaultDragHandles: false,
@@ -80,14 +228,16 @@ class _TrackListState extends State<TrackList> {
       // image work on lower-end phones. Desktop keeps the larger cache.
       cacheExtent: Platform.isAndroid ? 160 : 400,
       itemExtent: TrackList.itemExtent,
-      itemCount: widget.tracks.length,
-      itemBuilder: (context, index) {
+      itemCount: indices.length,
+      itemBuilder: (context, visibleIndex) {
+        final index = indices[visibleIndex];
         final trackPath = widget.tracks[index];
         return TrackTile(
           key: widget.itemKeyForIndex(widget.playlistNumber, index),
           trackPath: trackPath,
           playlistNumber: widget.playlistNumber,
           index: index,
+          allowReorder: query.isEmpty,
           onDelete: () => widget.onTrackDeleted(index, trackPath),
           onDeleteEverywhere: () => widget.onTrackDeletedEverywhere(trackPath),
           pulse: widget.pulsingTrackIndex == index ? widget.pulse : 0,
@@ -97,7 +247,7 @@ class _TrackListState extends State<TrackList> {
           onSelectionToggle: widget.onSelectionToggle == null ? null : () => widget.onSelectionToggle!(index),
         );
       },
-      onReorder: widget.onReorder,
+      onReorder: query.isEmpty ? widget.onReorder : (_, __) {},
       proxyDecorator: (child, index, animation) {
         return AnimatedBuilder(
           animation: animation,
@@ -116,14 +266,28 @@ class _TrackListState extends State<TrackList> {
         );
       },
     );
-    return NotificationListener<ScrollNotification>(
-      onNotification: _handleScroll,
-      child: ValueListenableBuilder<bool>(
-        valueListenable: ScrollEffectsPreferences.instance.motionBlurEnabled,
-        child: list,
-        builder: (context, motionBlurEnabled, child) =>
-            TrackListMotionBlurSurface(enabled: motionBlurEnabled && _isScrolling, child: child!),
-      ),
+    return Column(
+      children: [
+        _searchBar(indices.length),
+        Expanded(
+          child: indices.isEmpty
+              ? Center(
+                  child: Text(
+                    _indexing ? 'Searching tracks…' : 'No matching tracks',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                )
+              : NotificationListener<ScrollNotification>(
+                  onNotification: _handleScroll,
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: ScrollEffectsPreferences.instance.motionBlurEnabled,
+                    child: list,
+                    builder: (context, motionBlurEnabled, child) =>
+                        TrackListMotionBlurSurface(enabled: motionBlurEnabled && _isScrolling, child: child!),
+                  ),
+                ),
+        ),
+      ],
     );
   }
 }
@@ -188,4 +352,18 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Lower scores rank first; title matches take priority over artist matches.
+int trackSearchRank(String query, String title, String artist) {
+  String normalize(String text) => text.toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
+  final needle = normalize(query);
+  final name = normalize(title);
+  final author = normalize(artist);
+  if (needle.isEmpty || name == needle) return 0;
+  if (name.startsWith(needle)) return 1;
+  if (name.contains(needle)) return 2;
+  if (author.contains(needle)) return 3;
+  if (needle.split(' ').every((word) => '$name $author'.contains(word))) return 4;
+  return -1;
 }

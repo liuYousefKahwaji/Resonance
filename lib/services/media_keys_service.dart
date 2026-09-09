@@ -13,10 +13,10 @@ import 'package:flutter/services.dart';
 /// 2. audio_service_win's SMTC integration has its own bug where the
 ///    Next/Previous buttons only arm after a play/pause transition.
 ///
-/// This bridge talks directly to Win32's RegisterHotKey with
-/// VK_MEDIA_NEXT_TRACK / VK_MEDIA_PREV_TRACK, bypassing both plugins
-/// entirely for just these two keys. Play/Pause is left to
-/// audio_service_win/SMTC since that already works correctly.
+/// This bridge talks directly to Win32's RegisterHotKey with the media
+/// transport virtual keys, bypassing both third-party audio plugins. This
+/// keeps hardware media controls available without creating a second native
+/// audio pipeline.
 class MediaKeysService {
   static const MethodChannel _methodChannel = MethodChannel('resonance/media_keys');
   static const EventChannel _eventChannel = EventChannel('resonance/media_keys/events');
@@ -24,12 +24,13 @@ class MediaKeysService {
   static StreamSubscription<dynamic>? _subscription;
   static bool _registered = false;
 
-  /// Registers the hardware Media Next/Previous keys and starts
-  /// listening for press events. Safe to call multiple times - it's a
-  /// no-op if already registered.
+  /// Registers the hardware Play/Pause, Next, and Previous keys and starts
+  /// listening for press events. Safe to call multiple times - it's a no-op
+  /// if already registered.
   ///
   /// [onNext] and [onPrevious] are called whenever the corresponding
   /// hardware key is pressed.
+  /// [onPlayPause] is called for the hardware Play/Pause key when provided.
   ///
   /// Returns true if registration succeeded. On non-Windows platforms,
   /// or if the native call fails for any reason, this returns false

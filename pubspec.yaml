@@ -1,7 +1,7 @@
 name: resonance
 description: "A local music player with youtube support"
 publish_to: 'none'
-version: 3.1.0+4
+version: 3.2.0+5
 
 environment:
   sdk: ^3.9.2
@@ -13,7 +13,6 @@ dependencies:
   file: ^7.0.1
   path_provider: ^2.1.5
   just_audio: ^0.9.8
-  just_audio_windows: ^0.2.0
   audio_session: ^0.1.24
   audio_service: ^0.18.18
   provider: ^6.1.5+1
@@ -25,7 +24,6 @@ dependencies:
   tray_manager: ^0.5.3
   window_manager: ^0.5.1
   restart_app: ^1.8.3
-  audio_service_win: ^0.0.3
   desktop_drop: ^0.7.1
   permission_handler: ^12.0.1
   package_info_plus: ^8.3.1

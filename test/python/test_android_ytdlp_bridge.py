@@ -6,6 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -106,6 +107,51 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         )
 
         self.assertEqual(item["thumbnail"], "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg")
+
+    def test_music_history_rejects_invalid_id_before_cookie_or_network_access(self):
+        with self.assertRaisesRegex(RuntimeError, "video ID is invalid"):
+            bridge.add_music_history("invalid")
+
+    def test_music_history_uses_one_authenticated_client_and_requires_204(self):
+        class Response:
+            status_code = 204
+
+        class FakeMusic:
+            instances = []
+
+            def __init__(self, auth, language):
+                self.auth = auth
+                self.language = language
+                self.calls = []
+                self.instances.append(self)
+
+            def get_song(self, video_id):
+                self.calls.append(("get_song", video_id))
+                return {"videoId": video_id}
+
+            def add_history_item(self, song):
+                self.calls.append(("add_history_item", song))
+                return Response()
+
+        fake_ytmusic = types.ModuleType("ytmusicapi")
+        fake_ytmusic.YTMusic = FakeMusic
+        fake_helpers = types.ModuleType("ytmusicapi.helpers")
+        fake_helpers.get_authorization = lambda _value: "SAPISIDHASH test"
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_file = Path(directory) / "cookies.txt"
+            cookie_file.write_text(
+                "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t2147483647\t__Secure-3PAPISID\ttest-secret\n",
+                encoding="utf-8",
+            )
+            with patch.dict(sys.modules, {"ytmusicapi": fake_ytmusic, "ytmusicapi.helpers": fake_helpers}):
+                result = json.loads(bridge.add_music_history("jNQXAC9IVRw", str(cookie_file)))
+
+        self.assertEqual(result, {"ok": True, "videoId": "jNQXAC9IVRw", "statusCode": 204})
+        self.assertEqual(len(FakeMusic.instances), 1)
+        self.assertEqual(FakeMusic.instances[0].calls, [
+            ("get_song", "jNQXAC9IVRw"),
+            ("add_history_item", {"videoId": "jNQXAC9IVRw"}),
+        ])
 
     def test_stream_uses_yt_dlp_defaults_before_android_vr_fallback(self):
         def respond(ydl, _target, _download):

@@ -397,7 +397,7 @@ bool MediaKeysPlugin::UpdateTaskbarPlayState(bool playing) {
 }
 
 bool MediaKeysPlugin::RegisterMediaKeys(HWND hwnd) {
-  if (registered_) return true;
+  if (registered_ || play_pause_registered_ || next_registered_ || previous_registered_) return true;
 
   LogHwnd(L"Registering against HWND", hwnd);
 
@@ -409,28 +409,43 @@ bool MediaKeysPlugin::RegisterMediaKeys(HWND hwnd) {
   // MOD_NOREPEAT: don't fire repeatedly while the key is held down.
   // These calls talk directly to the Win32 API - no third-party plugin
   // in between - which is why this works where hotkey_manager crashed.
-  bool nextOk = RegisterHotKey(hwnd, kHotkeyIdNext, MOD_NOREPEAT, VK_MEDIA_NEXT_TRACK) != 0;
-  if (!nextOk) {
+  next_registered_ = RegisterHotKey(hwnd, kHotkeyIdNext, MOD_NOREPEAT, VK_MEDIA_NEXT_TRACK) != 0;
+  if (!next_registered_) {
     LogError(L"RegisterHotKey(Next)", GetLastError());
   } else {
     Log(L"[MediaKeysPlugin] RegisterHotKey(Next) OK\n");
   }
 
-  bool prevOk = RegisterHotKey(hwnd, kHotkeyIdPrevious, MOD_NOREPEAT, VK_MEDIA_PREV_TRACK) != 0;
-  if (!prevOk) {
+  previous_registered_ = RegisterHotKey(hwnd, kHotkeyIdPrevious, MOD_NOREPEAT, VK_MEDIA_PREV_TRACK) != 0;
+  if (!previous_registered_) {
     LogError(L"RegisterHotKey(Previous)", GetLastError());
   } else {
     Log(L"[MediaKeysPlugin] RegisterHotKey(Previous) OK\n");
   }
 
-  registered_ = nextOk && prevOk;
+  // Play/Pause was previously supplied by audio_service_win. Windows no
+  // longer bundles that plugin, so register it here alongside Next/Previous.
+  // Keep the keys independent: another application may already own one of
+  // them, but the remaining media buttons should still work in Resonance.
+  play_pause_registered_ = RegisterHotKey(hwnd, kHotkeyIdPlayPause, MOD_NOREPEAT, VK_MEDIA_PLAY_PAUSE) != 0;
+  if (!play_pause_registered_) {
+    LogError(L"RegisterHotKey(PlayPause)", GetLastError());
+  } else {
+    Log(L"[MediaKeysPlugin] RegisterHotKey(PlayPause) OK\n");
+  }
+
+  registered_ = next_registered_ || previous_registered_ || play_pause_registered_;
 
   if (registered_) {
     registered_hwnd_ = hwnd;
   } else {
-    // Clean up partial registration so we don't leak a hotkey id.
+    // Clean up any partial registration so we don't leak a hotkey id.
     UnregisterHotKey(hwnd, kHotkeyIdNext);
     UnregisterHotKey(hwnd, kHotkeyIdPrevious);
+    UnregisterHotKey(hwnd, kHotkeyIdPlayPause);
+    next_registered_ = false;
+    previous_registered_ = false;
+    play_pause_registered_ = false;
   }
 
   return registered_;
@@ -438,9 +453,13 @@ bool MediaKeysPlugin::RegisterMediaKeys(HWND hwnd) {
 
 void MediaKeysPlugin::UnregisterMediaKeys() {
   if (!registered_ || registered_hwnd_ == nullptr) return;
-  UnregisterHotKey(registered_hwnd_, kHotkeyIdNext);
-  UnregisterHotKey(registered_hwnd_, kHotkeyIdPrevious);
+  if (next_registered_) UnregisterHotKey(registered_hwnd_, kHotkeyIdNext);
+  if (previous_registered_) UnregisterHotKey(registered_hwnd_, kHotkeyIdPrevious);
+  if (play_pause_registered_) UnregisterHotKey(registered_hwnd_, kHotkeyIdPlayPause);
   registered_ = false;
+  next_registered_ = false;
+  previous_registered_ = false;
+  play_pause_registered_ = false;
   registered_hwnd_ = nullptr;
 }
 
@@ -500,6 +519,22 @@ std::optional<LRESULT> MediaKeysPlugin::HandleWindowProc(HWND hwnd, UINT message
     }
   }
 
+  // Some keyboard firmware and media remotes deliver Play/Pause as an
+  // application command instead of a RegisterHotKey message. If the global
+  // registration was unavailable (for example because another process owns
+  // the key), still honor the command while Resonance is the foreground app.
+  // Do not handle it when RegisterHotKey succeeded, otherwise one physical
+  // press could toggle playback twice.
+  if (message == WM_APPCOMMAND && !play_pause_registered_) {
+    const int command = GET_APPCOMMAND_LPARAM(lparam);
+    if (command == APPCOMMAND_MEDIA_PLAY_PAUSE) {
+      if (event_sink_) {
+        event_sink_->Success(flutter::EncodableValue(std::string("play_pause")));
+        return 0;
+      }
+    }
+  }
+
   if (message == WM_HOTKEY) {
     int id = static_cast<int>(wparam);
 
@@ -514,6 +549,9 @@ std::optional<LRESULT> MediaKeysPlugin::HandleWindowProc(HWND hwnd, UINT message
       } else if (id == kHotkeyIdPrevious) {
         Log(L"[MediaKeysPlugin] Sending 'previous' event to Dart\n");
         event_sink_->Success(flutter::EncodableValue(std::string("previous")));
+      } else if (id == kHotkeyIdPlayPause) {
+        Log(L"[MediaKeysPlugin] Sending 'play_pause' event to Dart\n");
+        event_sink_->Success(flutter::EncodableValue(std::string("play_pause")));
       }
     } else {
       Log(L"[MediaKeysPlugin] WARNING: event_sink_ is null, Dart isn't listening yet\n");

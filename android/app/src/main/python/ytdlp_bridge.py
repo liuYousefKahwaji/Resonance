@@ -17,6 +17,7 @@ import base64
 import json
 import os
 import http.cookiejar
+import re
 import yt_dlp
 
 
@@ -104,6 +105,39 @@ def _ytmusic_cookie_header(cookie_file):
     return "; ".join(pairs)
 
 
+def _build_authenticated_ytmusic(cookie_file):
+    """Create an authenticated YTMusic client from the private cookie copy."""
+    try:
+        from ytmusicapi import YTMusic
+        from ytmusicapi.helpers import get_authorization
+    except ImportError as error:
+        raise RuntimeError("YouTube Music support is missing from this build") from error
+    cookie = _ytmusic_cookie_header(cookie_file)
+    sapisid = None
+    for part in cookie.split("; "):
+        if part.startswith("__Secure-3PAPISID="):
+            sapisid = part.split("=", 1)[1]
+            break
+    if not sapisid:
+        raise RuntimeError("The YouTube session is missing its authenticated SAPISID cookie")
+    origin = "https://music.youtube.com"
+    auth = {
+        "cookie": cookie,
+        "origin": origin,
+        "x-origin": origin,
+        # ytmusicapi refreshes the timestamped SAPISID hash per request.
+        "authorization": get_authorization(sapisid + " " + origin),
+    }
+    return YTMusic(auth=auth, language="en")
+
+
+def _validated_music_video_id(video_id):
+    value = str(video_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+        raise RuntimeError("The YouTube video ID is invalid")
+    return value
+
+
 def _normalize_music_item(item):
     """Convert a ytmusicapi parsed item to the app's safe track schema."""
     if not isinstance(item, dict):
@@ -180,29 +214,7 @@ def _normalize_music_home_item(item):
 
 def get_music_home(limit: int = 12, cookie_file=None) -> str:
     """Return normalized authenticated shelves from YouTube Music home."""
-    try:
-        from ytmusicapi import YTMusic
-        from ytmusicapi.helpers import get_authorization
-    except ImportError as error:
-        raise RuntimeError("YouTube Music support is missing from this build") from error
-    cookie = _ytmusic_cookie_header(cookie_file)
-    sapisid = None
-    for part in cookie.split("; "):
-        if part.startswith("__Secure-3PAPISID="):
-            sapisid = part.split("=", 1)[1]
-            break
-    if not sapisid:
-        raise RuntimeError("The YouTube session is missing its authenticated SAPISID cookie")
-    origin = "https://music.youtube.com"
-    auth = {
-        "cookie": cookie,
-        "origin": origin,
-        "x-origin": origin,
-        # ytmusicapi identifies browser auth from this prefix and refreshes the
-        # timestamped value for each request internally.
-        "authorization": get_authorization(sapisid + " " + origin),
-    }
-    ytmusic = YTMusic(auth=auth)
+    ytmusic = _build_authenticated_ytmusic(cookie_file)
     home = ytmusic.get_home(limit=max(1, min(int(limit), 80)))
     shelves = []
     for shelf in home or []:
@@ -324,6 +336,18 @@ def get_music_home(limit: int = 12, cookie_file=None) -> str:
         ]
         shelves.insert(min(2, len(shelves)), {"title": "Speed dial", "tracks": speed_dial, "items": speed_items})
     return json.dumps({"shelves": shelves}, ensure_ascii=False)
+
+
+def add_music_history(video_id: str, cookie_file=None) -> str:
+    """Best-effort write of one genuine Resonance listen to YT Music history."""
+    video_id = _validated_music_video_id(video_id)
+    ytmusic = _build_authenticated_ytmusic(cookie_file)
+    song = ytmusic.get_song(video_id)
+    response = ytmusic.add_history_item(song)
+    status_code = getattr(response, "status_code", None)
+    if status_code != 204:
+        raise RuntimeError(f"YouTube Music history write failed with HTTP {status_code}")
+    return json.dumps({"ok": True, "videoId": video_id, "statusCode": status_code}, ensure_ascii=False)
 
 
 def _make_ydl(extra=None, cookie_file=None, logger=None):

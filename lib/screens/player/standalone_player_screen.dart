@@ -411,6 +411,7 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
   bool _lyricsVisible = false;
   bool _queueDrawerOpen = false;
   bool _leavingSync = false;
+  bool _popRequested = false;
 
   @override
   void initState() {
@@ -437,6 +438,12 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
     setState(() => _leavingSync = true);
     await SyncSessionService.instance.leave();
     if (mounted) Navigator.pop(context, true);
+  }
+
+  void _requestPop() {
+    if (!mounted || _popRequested) return;
+    _popRequested = true;
+    unawaited(Navigator.of(context).maybePop());
   }
 
   @override
@@ -467,6 +474,7 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
         return PopScope(
           canPop: !widget.syncPeer || _leavingSync,
           onPopInvokedWithResult: (didPop, _) {
+            if (!didPop) _popRequested = false;
             if (didPop && widget.playlistTrack) handler.setStandalonePresentation(false);
           },
           child: StandaloneGradientSurface(
@@ -483,7 +491,7 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                   leading: IconButton(
                     icon: Icon(widget.syncPeer ? Icons.logout_rounded : Icons.keyboard_arrow_down_rounded),
                     tooltip: widget.syncPeer ? 'Leave Resonance Sync' : 'Back to playlist',
-                    onPressed: widget.syncPeer ? _leaveSync : () => Navigator.pop(context),
+                    onPressed: widget.syncPeer ? _leaveSync : _requestPop,
                   ),
                   title: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -596,7 +604,7 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
       onNext: handler.next,
       onPrevious: handler.previous,
       onQueue: () => _toggleUpcomingQueue(context, handler),
-      onExit: () => Navigator.maybePop(context),
+      onExit: _requestPop,
       queueOnly: widget.syncPeer,
       child: player,
     );

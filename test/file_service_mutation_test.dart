@@ -41,4 +41,19 @@ void main() {
     expect(await service.readPlaylistTracks(2), const ['one', 'three']);
     expect(await service.readPlaylistTracks(1), isEmpty);
   });
+  test('stream download preserves order and concurrent edits without restoring removals', () async {
+    SharedPreferences.setMockInitialValues({});
+    final directory = await Directory.systemTemp.createTemp('resonance-download-replace-');
+    addTearDown(() => directory.delete(recursive: true));
+    final service = FileService(documentsPathOverride: directory.path);
+    await service.replacePlaylistTracks(2, ['before', 'https://stream', 'after']);
+    await Future.wait([
+      service.appendTrack(2, 'new'),
+      service.replaceStreamWithDownload(2, 'https://stream', 'local.mp3'),
+    ]);
+    expect(await service.readPlaylistTracks(2), ['before', 'local.mp3', 'after', 'new']);
+    await service.replaceStreamWithDownload(2, 'https://removed', 'removed.mp3');
+    expect(await service.readPlaylistTracks(2), ['before', 'local.mp3', 'after', 'new']);
+    expect(await service.readPlaylistTracks(1), isEmpty);
+  });
 }

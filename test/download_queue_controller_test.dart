@@ -48,4 +48,21 @@ void main() {
     expect(controller.entries.single.error, 'YouTube verification is required.');
     expect(controller.entries.single.error, isNot(contains('raw details')));
   });
+  test('stream replacement intent survives failure and retry', () async {
+    var attempts = 0;
+    final controller = DownloadQueueController.forTesting(
+      runner: (entry, _) async {
+        expect(entry.replaceStream, isTrue);
+        expect(entry.playlistNumber, 3);
+        if (attempts++ == 0) throw StateError('Temporary failure');
+        return 'local.mp3';
+      },
+    );
+    const track = YoutubeTrack(title: 'Song', artist: 'Artist', url: 'https://youtu.be/abcdefghijk');
+    await expectLater(controller.enqueue(track, 3, replaceStream: true), throwsStateError);
+    await controller.retry(controller.entries.single.id);
+    expect(controller.entries.single.status, DownloadQueueStatus.completed);
+    expect(controller.entries.single.replaceStream, isTrue);
+    controller.dispose();
+  });
 }

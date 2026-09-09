@@ -94,6 +94,53 @@ class WindowsYoutubeMusicHomeTests(unittest.TestCase):
         self.assertEqual(item["browseId"], "MPREb_test")
         self.assertIsNone(item["track"])
 
+    def test_history_rejects_malformed_video_id_before_remote_access(self):
+        class FakeMusic:
+            def get_song(self, _video_id):
+                self.fail("Malformed IDs must not reach YT Music")
+
+        with self.assertRaisesRegex(RuntimeError, "video ID is invalid"):
+            helper._add_history_item(FakeMusic(), "not-a-video-id")
+
+    def test_history_uses_one_authenticated_client_for_song_and_write(self):
+        class Response:
+            status_code = 204
+
+        class FakeMusic:
+            def __init__(self):
+                self.calls = []
+
+            def get_song(self, video_id):
+                self.calls.append(("get_song", video_id))
+                return {"videoId": video_id}
+
+            def add_history_item(self, song):
+                self.calls.append(("add_history_item", song))
+                return Response()
+
+        music = FakeMusic()
+        result = helper._add_history_item(music, "jNQXAC9IVRw")
+
+        self.assertEqual(result, {"ok": True, "videoId": "jNQXAC9IVRw", "statusCode": 204})
+        self.assertEqual(music.calls, [
+            ("get_song", "jNQXAC9IVRw"),
+            ("add_history_item", {"videoId": "jNQXAC9IVRw"}),
+        ])
+
+    def test_history_non_204_is_a_controlled_failure(self):
+        class Response:
+            status_code = 403
+
+        class FakeMusic:
+            def get_song(self, video_id):
+                return {"videoId": video_id}
+
+            def add_history_item(self, _song):
+                return Response()
+
+        with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+            helper._add_history_item(FakeMusic(), "jNQXAC9IVRw")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 import 'package:metadata_god/metadata_god.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/services/youtube/youtube_playback_history_coordinator.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
@@ -41,6 +42,42 @@ class PlaybackVisualState {
 
   @override
   int get hashCode => Object.hash(trackId, playing, loading);
+}
+
+/// A safe, platform-neutral description of an output route exposed by the
+/// Windows media_kit backend. Android routes audio through the OS and does
+/// not expose an equivalent per-player device API in just_audio.
+@immutable
+class PlaybackOutputDevice {
+  final String name;
+  final String description;
+
+  const PlaybackOutputDevice({required this.name, required this.description});
+
+  const PlaybackOutputDevice.systemDefault() : this(name: 'auto', description: '');
+
+  bool get isSystemDefault => name == 'auto';
+
+  String get label => isSystemDefault ? 'System default' : (description.trim().isEmpty ? name : description.trim());
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is PlaybackOutputDevice && name == other.name && description == other.description;
+
+  @override
+  int get hashCode => Object.hash(name, description);
+}
+
+class NoAudioOutputDeviceException implements Exception {
+  final String message;
+
+  const NoAudioOutputDeviceException([
+    this.message =
+        'No audio output device is available. Connect or enable speakers, headphones, or another output device, then try again.',
+  ]);
+
+  @override
+  String toString() => message;
 }
 
 /// A session-only entry used by standalone YouTube playback. It never enters
@@ -114,6 +151,10 @@ bool playbackPositionAdvanced(Duration initial, Duration current) =>
 
 @visibleForTesting
 bool supportsPlaybackHealthMonitoring({required bool isWindows, required bool isStream}) => !isStream || isWindows;
+
+@visibleForTesting
+bool hasUsableOutputDeviceNames(Iterable<String> names) =>
+    names.any((name) => name.trim().isNotEmpty && name != 'auto');
 
 @visibleForTesting
 int nextPlayablePlaylistIndex({
@@ -237,6 +278,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     const TrackTransitionState(),
   );
   final ValueNotifier<bool> uiVisibleNotifier = ValueNotifier<bool>(true);
+
+  /// Available Windows output routes. Android delegates route selection to
+  /// the system output switcher, so it exposes only the default route here.
+  final ValueNotifier<List<PlaybackOutputDevice>> availableOutputDevicesNotifier =
+      ValueNotifier<List<PlaybackOutputDevice>>(const [PlaybackOutputDevice.systemDefault()]);
+  final ValueNotifier<PlaybackOutputDevice> selectedOutputDeviceNotifier = ValueNotifier<PlaybackOutputDevice>(
+    const PlaybackOutputDevice.systemDefault(),
+  );
+  final ValueNotifier<String?> outputDeviceErrorNotifier = ValueNotifier<String?>(null);
   MediaItem? _pendingRestoredTrack;
   final Map<String, Uri?> _artUriCache = {};
   final AudioEnvelopeAnalyzer _envelopeAnalyzer = AudioEnvelopeAnalyzer();
@@ -279,6 +329,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   int? _retryLoadGeneration;
   int? _handledFailureGeneration;
   final Set<String> _failedTrackIds = <String>{};
+  String? _savedWindowsOutputDeviceName;
 
   final StreamController<Duration> _positionController = StreamController<Duration>.broadcast();
   final StreamController<Duration?> _durationController = StreamController<Duration?>.broadcast();
@@ -397,8 +448,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Duration _windowsDuration = Duration.zero;
   Duration _windowsBufferedPosition = Duration.zero;
   DateTime _lastPlaybackBroadcast = DateTime.fromMillisecondsSinceEpoch(0);
+  // Next/previous can be invoked by a button, media key, gesture, or an
+  // automatic completion callback at nearly the same time. Serialize those
+  // transitions so each operation observes the queue state left by the one
+  // before it instead of racing on the same current index.
+  Future<void> _navigationTail = Future<void>.value();
 
-  PlayerHandler({YoutubeAccessService? youtubeAccessService}) : _youtubeAccessService = youtubeAccessService {
+  PlayerHandler({
+    YoutubeAccessService? youtubeAccessService,
+    YoutubePlaybackHistoryCoordinator? youtubeHistoryCoordinator,
+  }) : _youtubeAccessService = youtubeAccessService,
+       _youtubeHistoryCoordinator = youtubeHistoryCoordinator {
     _youtubeAccessService?.addListener(_handleYoutubeAccessChanged);
     _playbackPreferenceStore = PlaybackPreferenceStore.load();
     _loudnessCacheFuture = LoudnessProfileCache.load();
@@ -422,6 +482,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   final YoutubeAccessService? _youtubeAccessService;
+  final YoutubePlaybackHistoryCoordinator? _youtubeHistoryCoordinator;
   int _youtubeAccessRevision = 0;
 
   void _handleYoutubeAccessChanged() {
@@ -440,6 +501,38 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   void _attachWindowsPlayer(mk.Player player) {
+    player.stream.audioDevices.listen((devices) {
+      if (!identical(player, _windowsPlayer)) return;
+      final normalized = _normalizeOutputDevices(devices);
+      availableOutputDevicesNotifier.value = normalized;
+      if (_hasUsableOutputDevice(devices)) {
+        outputDeviceErrorNotifier.value = null;
+      }
+      final selected = selectedOutputDeviceNotifier.value;
+      final selectedStillAvailable = selected.isSystemDefault || devices.any((device) => device.name == selected.name);
+      if (!selectedStillAvailable) {
+        // A USB/Bluetooth/HDMI endpoint may disappear while a track is
+        // playing. Fall back to the system route before the next open.
+        unawaited(setOutputDevice('auto', persist: true));
+      }
+      if (_playbackRequested && !_hasUsableOutputDevice(devices)) {
+        outputDeviceErrorNotifier.value = const NoAudioOutputDeviceException().message;
+        unawaited(_markPlaybackUnavailable(_loadGeneration));
+      }
+      final savedName = _savedWindowsOutputDeviceName;
+      if (savedName != null) {
+        _savedWindowsOutputDeviceName = null;
+        unawaited(setOutputDevice(savedName, persist: false));
+      }
+    });
+    player.stream.audioDevice.listen((device) {
+      if (!identical(player, _windowsPlayer)) return;
+      final known = availableOutputDevicesNotifier.value.firstWhere(
+        (candidate) => candidate.name == device.name,
+        orElse: () => PlaybackOutputDevice(name: device.name, description: device.description),
+      );
+      selectedOutputDeviceNotifier.value = known;
+    });
     player.stream.playing.listen((playing) {
       if (!identical(player, _windowsPlayer)) return;
       _updatePlaybackState();
@@ -483,7 +576,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         await player.seek(Duration.zero);
         await player.play();
       } else if (_loadGeneration == genAtCompletion) {
-        await _advanceAfterCompletion();
+        await _queueNavigation(_advanceAfterCompletion);
       }
     });
     player.stream.rate.listen((speed) {
@@ -497,6 +590,80 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       debugPrint('[PlayerHandler] Windows playback backend reported: $error');
       _armPlaybackHealthCheck(_loadGeneration, grace: const Duration(milliseconds: 1200), reason: error);
     });
+  }
+
+  List<PlaybackOutputDevice> _normalizeOutputDevices(List<mk.AudioDevice> devices) {
+    final result = <PlaybackOutputDevice>[const PlaybackOutputDevice.systemDefault()];
+    for (final device in devices) {
+      if (device.name.trim().isEmpty || device.name == 'auto') continue;
+      if (result.any((candidate) => candidate.name == device.name)) continue;
+      result.add(PlaybackOutputDevice(name: device.name, description: device.description));
+    }
+    return List.unmodifiable(result);
+  }
+
+  bool _hasUsableOutputDevice(List<mk.AudioDevice> devices) =>
+      hasUsableOutputDeviceNames(devices.map((device) => device.name));
+
+  bool get supportsOutputDeviceSelection => Platform.isWindows;
+
+  /// Selects a Windows output route and persists its stable media_kit name.
+  /// Returns false instead of throwing if the endpoint disappeared or the
+  /// native backend cannot switch to it.
+  Future<bool> setOutputDevice(String name, {bool persist = true}) async {
+    if (!Platform.isWindows || _windowsPlayer == null) return false;
+    final player = _windowsPlayer!;
+    try {
+      await player.platform?.waitForPlayerInitialization;
+      final device = name == 'auto'
+          ? mk.AudioDevice.auto()
+          : player.state.audioDevices.firstWhere((candidate) => candidate.name == name);
+      await player.setAudioDevice(device);
+      final selected = device.name == 'auto'
+          ? const PlaybackOutputDevice.systemDefault()
+          : PlaybackOutputDevice(name: device.name, description: device.description);
+      selectedOutputDeviceNotifier.value = selected;
+      outputDeviceErrorNotifier.value = null;
+      if (persist) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('windows_output_device', device.name);
+      }
+      return true;
+    } catch (error) {
+      debugPrint('[PlayerHandler] Could not select Windows output device "$name": $error');
+      outputDeviceErrorNotifier.value =
+          'The selected output is unavailable. Choose another device or connect an audio output.';
+      if (name != 'auto') {
+        try {
+          await player.setAudioDevice(mk.AudioDevice.auto());
+          selectedOutputDeviceNotifier.value = const PlaybackOutputDevice.systemDefault();
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('windows_output_device', 'auto');
+        } catch (fallbackError) {
+          debugPrint('[PlayerHandler] Could not fall back to the system output: $fallbackError');
+        }
+      }
+      return false;
+    }
+  }
+
+  Future<void> refreshOutputDevices() async {
+    if (!Platform.isWindows || _windowsPlayer == null) return;
+    try {
+      await _windowsPlayer!.platform?.waitForPlayerInitialization;
+      availableOutputDevicesNotifier.value = _normalizeOutputDevices(_windowsPlayer!.state.audioDevices);
+    } catch (error) {
+      debugPrint('[PlayerHandler] Could not refresh output devices: $error');
+    }
+  }
+
+  Future<void> _ensureWindowsAudioOutput(mk.Player player) async {
+    await player.platform?.waitForPlayerInitialization;
+    final devices = player.state.audioDevices;
+    availableOutputDevicesNotifier.value = _normalizeOutputDevices(devices);
+    if (!_hasUsableOutputDevice(devices)) {
+      throw const NoAudioOutputDeviceException();
+    }
   }
 
   void _attachJustAudioPlayer(AudioPlayer player) {
@@ -547,7 +714,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           await player.seek(Duration.zero);
           await player.play();
         } else if (_loadGeneration == genAtCompletion) {
-          await _advanceAfterCompletion();
+          await _queueNavigation(_advanceAfterCompletion);
         }
       }
     });
@@ -863,6 +1030,16 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   void _updatePlaybackState({bool force = false}) {
     final playing = !_playbackUnavailable && (Platform.isWindows ? _isWindowsPlaying : _player.playing);
+    final currentItem = mediaItem.value;
+    if (currentItem == null) {
+      _youtubeHistoryCoordinator?.onSessionEnded();
+    } else {
+      _youtubeHistoryCoordinator?.onPlaybackSnapshot(
+        mediaIdentity: currentItem.id,
+        playing: playing,
+        position: _currentPosition,
+      );
+    }
     final backendProcessingState = _playbackUnavailable
         ? AudioProcessingState.idle
         : Platform.isWindows
@@ -917,6 +1094,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> _initSavedState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (Platform.isWindows) {
+        final savedOutput = prefs.getString('windows_output_device');
+        if (savedOutput != null && savedOutput.isNotEmpty) {
+          _savedWindowsOutputDeviceName = savedOutput;
+          unawaited(setOutputDevice(savedOutput, persist: false));
+        }
+      }
       await _playbackPreferenceStore;
       _loudnessCache = await _loudnessCacheFuture;
 
@@ -1534,7 +1718,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             ? _windowsIsCompleted
             : _player.processingState == ProcessingState.completed;
         if (finished || (duration != null && duration - _currentPosition <= const Duration(milliseconds: 500))) {
-          await _advanceAfterCompletion();
+          await _queueNavigation(_advanceAfterCompletion);
         }
       }
     }
@@ -1997,6 +2181,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     }
 
     mediaItem.add(null);
+    _youtubeHistoryCoordinator?.onSessionEnded();
     playbackVisualNotifier.value = const PlaybackVisualState();
     playbackState.add(
       playbackState.value.copyWith(
@@ -2186,6 +2371,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         _windowsBufferedPosition = Duration.zero;
 
         final player = _windowsPlayer!;
+        await _ensureWindowsAudioOutput(player);
         // Keep source replacement and playback start in one media_kit command.
         // Splitting this into open(play: false) followed by play() regressed in
         // v2.3.0: mpv can acknowledge the open before the replacement source is
@@ -2270,7 +2456,22 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         }
         debugPrint('[PlayerHandler] Error loading track "$filePath": $e\n$st');
         _streamUrlCache.remove(filePath);
-        if (standalone) setStandalonePresentation(false);
+        if (e is NoAudioOutputDeviceException) {
+          // Do not retry/advance through the queue when the machine has no
+          // endpoint at all. Waiting for the user to connect an output keeps
+          // the queue intact and, importantly, avoids asking the native
+          // backend to open audio with an invalid device.
+          outputDeviceErrorNotifier.value = e.message;
+          _playbackRequested = false;
+          _playbackUnavailable = true;
+          playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
+          _updatePlaybackState(force: true);
+          return;
+        }
+        // A failed item in an existing standalone Home/Search queue must not
+        // destroy that queue. The user can move next/previous or retry it;
+        // only a one-off standalone stream has no session to preserve.
+        if (standalone && _standaloneStreamQueue.isEmpty) setStandalonePresentation(false);
         playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
         _updatePlaybackState();
         await _handlePlaybackFailure(myGen, e);
@@ -2563,7 +2764,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     }
     final target = await _automaticNextTarget();
     if (target == null) {
-      if (currentLoopMode == LoopMode.all) await next();
+      if (currentLoopMode == LoopMode.all) await _nextInternal();
       return;
     }
     await loadTrack(
@@ -2577,7 +2778,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     );
   }
 
-  Future<void> next() async {
+  Future<void> next() => _queueNavigation(_nextInternal);
+
+  Future<void> _nextInternal() async {
     if (_syncControlLocked) return;
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
@@ -2606,7 +2809,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   /// Moves to the previous track. Standard previous buttons restart the
   /// current track after three seconds; direct gestures can opt out.
-  Future<void> previous({bool restartCurrent = true}) async {
+  Future<void> previous({bool restartCurrent = true}) =>
+      _queueNavigation(() => _previousInternal(restartCurrent: restartCurrent));
+
+  Future<void> _previousInternal({bool restartCurrent = true}) async {
     if (_syncControlLocked) return;
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
@@ -2638,6 +2844,21 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       standalonePlaylistIndex: prevIndex,
       transitionDirection: TrackTransitionDirection.previous,
     );
+  }
+
+  Future<void> _queueNavigation(Future<void> Function() operation) {
+    final run = _navigationTail.then<void>((_) async {
+      try {
+        await operation();
+      } catch (error, stackTrace) {
+        // Navigation is initiated by UI callbacks, media keys, and backend
+        // listeners. A metadata/file error must not become an uncaught async
+        // exception (or prevent the next queued navigation from running).
+        debugPrint('[PlayerHandler] Track navigation failed: $error\n$stackTrace');
+      }
+    });
+    _navigationTail = run.catchError((_) {});
+    return run;
   }
 
   int _currentPlaylistIndex(List<String> playlist, String currentTrack) {
@@ -2958,6 +3179,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     youtubeFailureNotifier.dispose();
     trackTransitionNotifier.dispose();
     uiVisibleNotifier.dispose();
+    availableOutputDevicesNotifier.dispose();
+    selectedOutputDeviceNotifier.dispose();
+    outputDeviceErrorNotifier.dispose();
   }
 
   AudioProcessingState _getProcessingState(ProcessingState state) {

@@ -26,6 +26,8 @@ Resonance keeps ordinary local music at the center: import files, arrange them i
 - Edit a track's title, artist, and embedded cover art from its long-press/right-click menu. Metadata edits save reliably for every track, including entries at the end of long playlists.
 - Open the track-actions menu from the three-dot button for metadata editing, standalone playback, and permanent deletion.
 - Permanent deletion removes the file and all of its references from Resonance; the regular remove action only removes a track from the current playlist.
+- Find tracks by title or artist, with title matches ranked first. Windows keeps playlist search visible; Android opens it from **Search → Search this playlist**.
+- Download streamed playlist tracks directly from their three-dot menu, keeping their playlist position.
 - Preview artwork throughout the library and fill missing covers from the first matching YouTube result.
 - Tap **Currently Playing** to reveal the active track, even if it belongs to another playlist.
 

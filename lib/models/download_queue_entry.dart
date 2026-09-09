@@ -7,6 +7,7 @@ class DownloadQueueEntry {
   final String id;
   final YoutubeTrack track;
   final int playlistNumber;
+  final bool replaceStream;
   final DownloadQueueStatus status;
   final double progress;
   final String statusText;
@@ -18,6 +19,7 @@ class DownloadQueueEntry {
     required this.id,
     required this.track,
     required this.playlistNumber,
+    this.replaceStream = false,
     this.status = DownloadQueueStatus.queued,
     this.progress = 0,
     this.statusText = 'Waiting',
@@ -37,6 +39,7 @@ class DownloadQueueEntry {
     id: id,
     track: track,
     playlistNumber: playlistNumber,
+    replaceStream: replaceStream,
     status: status ?? this.status,
     progress: progress ?? this.progress,
     statusText: statusText ?? this.statusText,

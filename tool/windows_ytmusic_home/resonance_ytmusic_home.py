@@ -7,6 +7,7 @@ read in memory and are never written to stdout, disk, or Flutter.
 import argparse
 import http.cookiejar
 import json
+import re
 import sys
 import urllib.request
 
@@ -160,16 +161,48 @@ def _item(item):
     }
 
 
+def _build_authenticated_ytmusic(browser_source, cookie_file):
+    """Create the one authenticated YTMusic client used for an operation."""
+    cookie = _cookie_header(browser_source, cookie_file)
+    return YTMusic(auth=_auth_headers(cookie), language="en")
+
+
+def _validated_video_id(video_id):
+    value = str(video_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+        raise RuntimeError("The YouTube video ID is invalid")
+    return value
+
+
+def _add_history_item(ytmusic, video_id):
+    """Submit one genuine playback session to YouTube Music history."""
+    video_id = _validated_video_id(video_id)
+    song = ytmusic.get_song(video_id)
+    response = ytmusic.add_history_item(song)
+    status_code = getattr(response, "status_code", None)
+    if status_code != 204:
+        raise RuntimeError(f"YouTube Music history write failed with HTTP {status_code}")
+    return {"ok": True, "videoId": video_id, "statusCode": status_code}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser")
     parser.add_argument("--cookies-file")
+    parser.add_argument("--action", choices=("home", "add-history"), default="home")
+    parser.add_argument("--video-id")
     parser.add_argument("--limit", type=int, default=12)
     args = parser.parse_args()
     if not args.browser and not args.cookies_file:
         parser.error("one of --browser or --cookies-file is required")
-    cookie = _cookie_header(args.browser, args.cookies_file)
-    ytmusic = YTMusic(auth=_auth_headers(cookie), language="en")
+    if args.action == "add-history":
+        # Reject malformed input before touching a browser profile/cookie store
+        # or making an authenticated network request.
+        _validated_video_id(args.video_id)
+    ytmusic = _build_authenticated_ytmusic(args.browser, args.cookies_file)
+    if args.action == "add-history":
+        print(json.dumps(_add_history_item(ytmusic, args.video_id), ensure_ascii=False))
+        return
     # get_home is also available to guest clients. Confirm an authenticated-only
     # endpoint first so a rejected/wrong profile can never masquerade as a
     # successful generic Home response.

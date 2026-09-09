@@ -310,6 +310,18 @@ class FileService {
     await _publish(playlistNumber, kind);
   });
 
+  /// Replace surviving stream references atomically, preserving playlist order.
+  /// A track removed while downloading must not be added back.
+  Future<void> replaceStreamWithDownload(int playlistNumber, String stream, String localPath) =>
+      _serialize(playlistNumber, () async {
+        final tracks = await readPlaylistTracks(playlistNumber);
+        if (!tracks.contains(stream)) return;
+        final updated = tracks.map((track) => track == stream ? localPath : track).toList();
+        final file = await _ensurePlaylistFile(playlistNumber);
+        await file.writeAsString('#\n${updated.map((track) => '$track\n').join()}', flush: true);
+        await _publish(playlistNumber, PlaylistMutationKind.replaced);
+      });
+
   Future<bool> appendTrack(int playlistNumber, String trackPath) async {
     var changed = false;
     await _serialize(playlistNumber, () async {

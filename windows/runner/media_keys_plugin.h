@@ -1,8 +1,8 @@
 // windows/runner/media_keys_plugin.h
 //
 // A minimal native Windows plugin that registers global hotkeys for the
-// hardware Media Next Track / Media Previous Track keys using the raw
-// Win32 RegisterHotKey API directly.
+// hardware media transport keys (Play/Pause, Next, and Previous) using the
+// raw Win32 RegisterHotKey API directly.
 //
 // WHY THIS EXISTS:
 // hotkey_manager_windows crashes natively when asked to register
@@ -13,9 +13,10 @@
 // Next/Previous buttons only arm after a play/pause transition.
 //
 // This plugin sidesteps both issues by talking to Win32 directly:
-// RegisterHotKey + VK_MEDIA_NEXT_TRACK / VK_MEDIA_PREV_TRACK work fine
-// at the raw Win32 level; the bug is specific to hotkey_manager's
-// wrapper, not the underlying OS API.
+// RegisterHotKey + the VK_MEDIA_* transport keys work fine at the raw Win32
+// level; the bug is specific to hotkey_manager's wrapper, not the underlying
+// OS API. A WM_APPCOMMAND fallback also covers devices that emit the media
+// command message while Resonance is foregrounded.
 //
 #ifndef RUNNER_MEDIA_KEYS_PLUGIN_H_
 #define RUNNER_MEDIA_KEYS_PLUGIN_H_
@@ -38,6 +39,7 @@ namespace resonance {
 // per-process; arbitrary small integers are fine.
 constexpr int kHotkeyIdNext = 1001;
 constexpr int kHotkeyIdPrevious = 1002;
+constexpr int kHotkeyIdPlayPause = 1003;
 constexpr int kTaskbarButtonPrevious = 2001;
 constexpr int kTaskbarButtonPlayPause = 2002;
 constexpr int kTaskbarButtonNext = 2003;
@@ -92,6 +94,9 @@ class MediaKeysPlugin : public flutter::Plugin {
   flutter::PluginRegistrarWindows* registrar_;
   int window_proc_id_ = -1;
   bool registered_ = false;
+  bool play_pause_registered_ = false;
+  bool next_registered_ = false;
+  bool previous_registered_ = false;
   bool registration_requested_ = false;
   bool taskbar_requested_ = false;
   bool taskbar_ready_ = false;

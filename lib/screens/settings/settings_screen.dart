@@ -594,6 +594,68 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   stackTrailingOnNarrow: true,
                 ),
+                if (Platform.isWindows) ...[
+                  _Divider(),
+                  ValueListenableBuilder<List<PlaybackOutputDevice>>(
+                    valueListenable: handler.availableOutputDevicesNotifier,
+                    builder: (context, devices, _) => ValueListenableBuilder<PlaybackOutputDevice>(
+                      valueListenable: handler.selectedOutputDeviceNotifier,
+                      builder: (context, selected, _) {
+                        final selectedValue = devices.any((device) => device.name == selected.name)
+                            ? selected
+                            : const PlaybackOutputDevice.systemDefault();
+                        final hasPhysicalOutput = devices.any((device) => !device.isSystemDefault);
+                        return _SettingsTile(
+                          icon: Icons.speaker_rounded,
+                          title: 'Output device',
+                          subtitle: hasPhysicalOutput
+                              ? 'Choose where Resonance sends audio'
+                              : 'No physical output detected — connect speakers or headphones',
+                          trailing: SizedBox(
+                            width: 220,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<PlaybackOutputDevice>(
+                                      isExpanded: true,
+                                      value: selectedValue,
+                                      onChanged: (device) {
+                                        if (device != null) unawaited(handler.setOutputDevice(device.name));
+                                      },
+                                      items: [
+                                        for (final device in devices)
+                                          DropdownMenuItem<PlaybackOutputDevice>(
+                                            value: device,
+                                            child: Text(device.label, overflow: TextOverflow.ellipsis),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Refresh output devices',
+                                  onPressed: () => unawaited(handler.refreshOutputDevices()),
+                                  icon: const Icon(Icons.refresh_rounded, size: 19),
+                                ),
+                              ],
+                            ),
+                          ),
+                          stackTrailingOnNarrow: true,
+                        );
+                      },
+                    ),
+                  ),
+                ] else if (Platform.isAndroid) ...[
+                  _Divider(),
+                  const _SettingsTile(
+                    icon: Icons.speaker_rounded,
+                    title: 'Output device',
+                    subtitle: 'Android controls media routing. Use the system media output switcher to change devices.',
+                    trailing: Text('System'),
+                  ),
+                ],
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.multitrack_audio_rounded,

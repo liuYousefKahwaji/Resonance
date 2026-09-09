@@ -9,6 +9,7 @@ import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/windows_browser_detector.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/services/youtube/youtube_history_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class YoutubeAccessScreen extends StatefulWidget {
@@ -48,10 +49,20 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
   @override
   Widget build(BuildContext context) {
     final service = context.watch<YoutubeAccessService>();
+    final historyPreferences = context.watch<YoutubeHistoryPreferences?>();
     final content = <Widget>[
       _StatusCard(status: service.status),
       const SizedBox(height: 12),
       const _SafetyCard(),
+      if (historyPreferences != null) ...[
+        const SizedBox(height: 12),
+        _HistorySyncCard(
+          enabled: historyPreferences.enabled,
+          accessReady: service.isReady,
+          busy: _busy,
+          onChanged: historyPreferences.setEnabled,
+        ),
+      ],
       if (_screenMessage != null) ...[
         const SizedBox(height: 12),
         _MessageCard(message: _screenMessage!, details: _screenDetails),
@@ -469,6 +480,38 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+}
+
+class _HistorySyncCard extends StatelessWidget {
+  const _HistorySyncCard({
+    required this.enabled,
+    required this.accessReady,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  final bool enabled;
+  final bool accessReady;
+  final bool busy;
+  final Future<void> Function(bool value) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return _AccessCard(
+      title: 'YouTube Music history',
+      child: SwitchListTile.adaptive(
+        contentPadding: EdgeInsets.zero,
+        value: enabled,
+        onChanged: !accessReady || busy ? null : (value) => unawaited(onChanged(value)),
+        title: const Text('Sync plays to YouTube Music history'),
+        subtitle: Text(
+          accessReady
+              ? 'Adds YouTube tracks played in Resonance to your YouTube Music listening history.'
+              : 'Connect and test YouTube access before enabling history sync.',
+        ),
+      ),
+    );
   }
 }
 

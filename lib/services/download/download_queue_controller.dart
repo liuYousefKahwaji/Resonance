@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:resonance/core/storage/file_service.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:resonance/models/download_queue_entry.dart';
@@ -58,7 +59,7 @@ class DownloadQueueController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<String?> enqueue(YoutubeTrack track, int playlistNumber) {
+  Future<String?> enqueue(YoutubeTrack track, int playlistNumber, {bool replaceStream = false}) {
     final existing = pendingEntryFor(track.url, playlistNumber);
     if (existing != null) {
       return _completions[existing.id]?.future ?? Future.value(existing.localPath);
@@ -66,7 +67,9 @@ class DownloadQueueController extends ChangeNotifier {
     final id = '${DateTime.now().microsecondsSinceEpoch}-${_sequence++}';
     final completion = Completer<String?>();
     _completions[id] = completion;
-    _entries.add(DownloadQueueEntry(id: id, track: track, playlistNumber: playlistNumber));
+    _entries.add(
+      DownloadQueueEntry(id: id, track: track, playlistNumber: playlistNumber, replaceStream: replaceStream),
+    );
     notifyListeners();
     unawaited(_drain());
     return completion.future;
@@ -87,6 +90,7 @@ class DownloadQueueController extends ChangeNotifier {
       id: '${DateTime.now().microsecondsSinceEpoch}-${_sequence++}',
       track: old.track,
       playlistNumber: old.playlistNumber,
+      replaceStream: old.replaceStream,
     );
     notifyListeners();
     await _drain();
@@ -179,11 +183,16 @@ class DownloadQueueController extends ChangeNotifier {
     } else {
       throw UnsupportedError('YouTube downloads are supported on Android and Windows');
     }
+    if (firstPath == null) throw StateError('Download completed without an audio file');
     return firstPath;
   }
 
   Future<void> _finishTrack(DownloadQueueEntry entry, String path, String? videoId) async {
-    await ImportService.importFiles([path], (_) {}, playlistNumber: entry.playlistNumber);
+    if (entry.replaceStream) {
+      await FileService().replaceStreamWithDownload(entry.playlistNumber, entry.track.url, path);
+    } else {
+      await ImportService.importFiles([path], (_) {}, playlistNumber: entry.playlistNumber);
+    }
     if (videoId != null) {
       await const TrackSourceRepository().saveSource(
         localPath: path,
