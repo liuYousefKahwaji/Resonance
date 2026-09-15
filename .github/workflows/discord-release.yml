@@ -1,0 +1,111 @@
+name: Announce Release on Discord
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send release to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ROLE_ID: ${{ vars.DISCORD_RESONANCE_ROLE_ID }}
+
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          webhook = os.environ["DISCORD_WEBHOOK_URL"]
+          role_id = os.environ["ROLE_ID"]
+
+          release_name = os.environ.get("RELEASE_NAME", "").strip()
+          release_tag = os.environ.get("RELEASE_TAG", "").strip()
+          release_url = os.environ.get("RELEASE_URL", "").strip()
+          release_body = os.environ.get("RELEASE_BODY", "").strip()
+
+          title = release_name or release_tag
+
+          header = (
+              f"<@&{role_id}>\n\n"
+              f"## 🎵 {title}\n"
+              f"{release_url}\n\n"
+          )
+
+          # Discord messages are limited to 2000 characters.
+          # Leave room for the header in the first message.
+          first_limit = 2000 - len(header)
+
+          def split_text(text, limit):
+              chunks = []
+
+              while len(text) > limit:
+                  split_at = text.rfind("\n", 0, limit)
+
+                  if split_at < limit // 2:
+                      split_at = text.rfind(" ", 0, limit)
+
+                  if split_at < limit // 2:
+                      split_at = limit
+
+                  chunks.append(text[:split_at].rstrip())
+                  text = text[split_at:].lstrip()
+
+              if text:
+                  chunks.append(text)
+
+              return chunks
+
+          body_chunks = split_text(release_body, max(first_limit, 500))
+
+          if body_chunks:
+              messages = [header + body_chunks[0]]
+
+              for chunk in body_chunks[1:]:
+                  messages.extend(split_text(chunk, 2000))
+          else:
+              messages = [header.rstrip()]
+
+          for i, message in enumerate(messages):
+              payload = {
+                  "content": message,
+
+                  # Only allow the Resonance role ping.
+                  # This also prevents release-note text from
+                  # accidentally pinging @everyone or other roles.
+                  "allowed_mentions": {
+                      "roles": [role_id] if i == 0 else [],
+                      "users": [],
+                      "parse": []
+                  }
+              }
+
+              data = json.dumps(payload).encode("utf-8")
+
+              request = urllib.request.Request(
+                  webhook,
+                  data=data,
+                  headers={
+                      "Content-Type": "application/json",
+                      "User-Agent": "Resonance-GitHub-Release"
+                  },
+                  method="POST"
+              )
+
+              with urllib.request.urlopen(request) as response:
+                  if response.status not in (200, 204):
+                      raise RuntimeError(
+                          f"Discord webhook returned {response.status}"
+                      )
+
+          print(f"Sent {len(messages)} Discord message(s).")
+          PY
