@@ -2,7 +2,7 @@
 
 <img src="assets/icon/icon.png" width="112" alt="Resonance app icon">
 
-# $\color{#9827F5}{\textsf{\textbf{\Large Resonance}}}$
+# Resonance
 
 **A local-first music player for Windows and Android, with YouTube built in.**
 
@@ -10,218 +10,164 @@
 ![Windows](https://img.shields.io/badge/Windows-x64-2563EB?style=flat-square&logo=windows11&logoColor=white)
 ![Android](https://img.shields.io/badge/Android-7.0%2B-1DB954?style=flat-square&logo=android&logoColor=white)
 
-[Download](#download) · [Features](#features) · [Quick start](#quick-start) · [Build from source](#build-from-source) · [Release history](#release-history)
+[Download](#download) · [Features](#features) · [YouTube access](#youtube-access) · [Build](#build-from-source)
 
 </div>
 
-Resonance keeps ordinary local music at the center: import files, arrange them into playlists, edit their metadata, and listen without an account. When you want something that is not in your library, search YouTube and choose whether to play it once, stream it from a playlist, or download a local copy.
+Resonance keeps your music library on your device. Import local audio, build playlists, tune playback, and listen without an account. YouTube support adds search, streaming, downloads, personalized YouTube Music shelves, playlist imports, and listening history when you choose to connect it.
+
+## Current release
+
+Version **3.3.0** is the current packaged release. It adds the two-tab listening History page, progressive high-resolution artwork for streams, authenticated YouTube Music history, local playback history, and the playback, search, routing, and authentication improvements introduced across the 3.x releases.
+
+The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 
 ## Features
 
-### Library and playlists
+### Local library
 
-- Import MP3, WAV, M4A, OGG, Opus, WebM, AAC, and FLAC audio, plus M3U/M3U8 playlists.
-- Create, switch, rename, delete, and reorder playlists; names, order, and the active playlist persist between sessions.
-- Drag files into the Windows app or use the file picker on either platform.
-- Edit a track's title, artist, and embedded cover art from its long-press/right-click menu. Metadata edits save reliably for every track, including entries at the end of long playlists.
-- Open the track-actions menu from the three-dot button for metadata editing, standalone playback, and permanent deletion.
-- Permanent deletion removes the file and all of its references from Resonance; the regular remove action only removes a track from the current playlist.
-- Find tracks by title or artist, with title matches ranked first. Windows keeps playlist search visible; Android opens it from **Search → Search this playlist**.
-- Download streamed playlist tracks directly from their three-dot menu, keeping their playlist position.
-- Preview artwork throughout the library and fill missing covers from the first matching YouTube result.
-- Tap **Currently Playing** to reveal the active track, even if it belongs to another playlist.
+- Import MP3, WAV, M4A, OGG, Opus, WebM, AAC, and FLAC files.
+- Create, rename, reorder, switch, and delete playlists stored as local M3U8 files.
+- Search the active playlist by title or artist, with title matches ranked first.
+- Drag files into the Windows app or use the cross-platform file picker.
+- Edit title, artist, and embedded artwork without leaving the library.
+- Remove an entry from one playlist or delete its file and references everywhere.
+- Keep metadata and artwork cached for fast scrolling without moving source files.
 
 ### Playback
 
-- Play/pause, previous/next, scrubbing, mute, shuffle, and loop-off/one/all controls.
-- Open the real upcoming queue from a swipe-up sheet on Android or a persistent drawer on Windows; shuffled playback shows its already-generated order.
-- Optionally crossfade automatic track changes by 0–8 seconds with true overlapping playback.
-- Adjustable 1–15 second seek buttons and support for tracks longer than one hour.
-- Playback speed and pitch from 0.5× to 2.0×, plus a clearly marked volume boost up to 200%.
-- Shape the sound with a five-band equalizer covering 60 Hz, 230 Hz, 910 Hz, 3.6 kHz, and 12 kHz, with Flat, Bass Boost, Rock, Pop, Vocal, Electronic, and Custom presets.
-- Apply speed, pitch, and equalizer settings globally or override them for individual tracks. Global and per-track scopes keep separate Custom curves.
-- Custom equalizer curves survive preset changes, restarts, and Companion control updates; automatic preamp reduces clipping when bands are boosted.
-- Optionally normalize local-track loudness toward -14 LUFS using cached background analysis and a peak-safe gain limit. Streams retain their original loudness.
-- Optionally remember the position of tracks at least ten minutes long and resume them later.
-- Restores the last track and remembers volume, speed, pitch, loop, shuffle, equalizer, and playback-scope settings.
-- Responsive player layouts, embedded artwork, loading feedback, animated gradients, and an optional startup pulse.
-- Long titles scroll smoothly when they exceed the available space instead of being cut off.
-- Tap the standalone player artwork to slide out or tuck away a spinning vinyl record.
-- Opening a playlist track in the standalone player continues the current song instead of starting a second playback instance.
+- Play, pause, seek, shuffle, repeat, and navigate the real upcoming queue.
+- Use a full-screen player with lyrics, artwork-derived colors, an audio visualizer, gestures, and Pocket Vinyl.
+- Adjust speed and pitch from 0.5× to 2×, volume up to 200%, and a five-band equalizer with presets.
+- Apply playback settings globally or per track.
+- Normalize local tracks toward -14 LUFS using cached, peak-safe analysis.
+- Crossfade automatic track changes and resume long tracks from their saved position.
+- Select a Windows audio output device; Android continues to use system audio routing.
+- Control playback from Android notifications, widgets, Quick Settings, Windows media keys, taskbar controls, tray controls, hotkeys, and Discord Companion shortcuts.
 
-### YouTube and discovery
+### YouTube and YouTube Music
 
-- Search by song, artist, or album and browse up to ten results with artwork and duration, or paste a YouTube link.
-- After typing pauses, Resonance automatically shows a quick two-result preview; press Enter to load the full result set.
-- Tap outside the search field to dismiss the keyboard, and tap outside the song-identification dialog to return to the music list.
-- Open Search with an empty query to see **Suggested Music** based on the active playlist, with faster loading and a varied mix of artists.
-- Refresh produces a new repeatable suggestion set. Suggested Music filters songs and obvious variants already in the playlist, including slowed, reverb, lyric, and official-audio uploads.
-- Empty playlists, failed searches, interrupted suggestion loads, and no-result searches provide clear retry or next-step actions without breaking normal search.
-- **Play** opens a standalone, playlist-free Now Playing screen without discarding the current search results.
-- **Stream** adds the track's URL and artwork to the current playlist without downloading it. Stream badges distinguish remote tracks from local files.
-- Stream artwork is retained when a track is imported, transferred, or saved, and appears in both playlists and the player.
-- **Download** saves the audio locally, imports it, remembers its source, and shows live progress.
-- Search download history by title or artist, review successes and failures, replay completed tracks, reveal files on Windows, or remove old records.
-- Unicode titles and artists are preserved across Android search and download events.
-- Uses bundled tools: yt-dlp, FFmpeg, and Deno on Windows; embedded Python/yt-dlp with Android-safe conversion on Android.
+- Search YouTube by title, artist, album, or URL with quick previews and engagement counts.
+- Play a result in a temporary queue, add it as a stream, or download it into a playlist.
+- Convert an existing streamed playlist entry into a local download from its three-dot menu while preserving its position.
+- Display streamed artwork immediately at thumbnail quality, then crossfade to a higher-resolution version when it is ready.
+- Browse authenticated YouTube Music Home shelves such as Quick Picks, Suggestions, and Speed Dial.
+- Open YouTube Music albums and playlists as session queues or import them for streaming or download.
+- Recover stalled Windows streams by resolving a fresh media URL once.
+- Optionally report genuine Resonance YouTube plays to YouTube Music after three seconds. This is off by default.
+- Browse a two-tab listening History page: recent YouTube Music plays and up to 100 recent local Resonance plays. YouTube rows appear before view and like counts finish loading.
 
-#### YouTube verification and cookies
+### Discovery and lyrics
 
-YouTube sometimes blocks an IP address until a signed-in session is supplied. If Resonance shows **YouTube verification required**, open **Settings → YouTube Access**:
+- Generate Suggested Music from the active playlist and filter tracks already present.
+- Identify nearby audio with the built-in Shazam-compatible recognizer.
+- Fetch synchronized lyrics from Better Lyrics, AMLL, and LRCLIB, with local sidecar support and manual selection.
+- Follow the active lyric line at 30 or 120 FPS, or scroll manually and resume following when ready.
 
-- On Windows, connect the browser where YouTube is signed in. Resonance asks yt-dlp to read that browser session locally each time; it stores only the browser choice and never creates a Windows cookie file.
-- On Android, follow the in-app Firefox guide. Disable Firefox's **Open links in apps**, install the third-party [cookies.txt add-on](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/), sign in from one private tab, confirm your profile avatar is visible, open and reload `https://www.youtube.com/robots.txt` in that tab, and choose **Current Site → Download**. Import that file into Resonance, close the private tabs, and delete the original export from Downloads. Resonance rejects exports which contain only logged-out YouTube cookies.
+### Import, transfer, and Sync
 
-Treat `cookies.txt` like a password. Do not export **ALL** sites. Resonance validates the import and keeps its copy in Android's private no-backup storage, but automated requests can still cause YouTube to restrict an account; use access only when required, avoid large batches, and consider a separate account.
+- Import public playlists from YouTube/YouTube Music and supported external music sites.
+- Move playlists between Windows and Android using compressed, checksummed QR payloads.
+- Review automatic source matches before transfer and reuse local downloads when possible.
+- Use Resonance Sync on Android to host or join a local-network listening session.
+- Pair the Android Companion with Windows for authenticated LAN playback control.
 
-### Playlist transfer
+### Appearance
 
-- Move playlists between Windows and Android with one or more QR codes—no account, server, cloud storage, or background sync.
-- Resonance finds YouTube sources for local tracks, selects likely matches, and lets you replace or skip them before export.
-- Playlist order and duplicate entries are preserved. Payloads are compressed, versioned, checksummed, and decoded locally.
-- Existing local matches are reused. Missing tracks are shown for review and downloaded only after confirmation; failures can be retried or skipped.
-- Android scans continuously with the camera; Windows imports QR images. Both platforms can save generated codes as PNG files.
+- Choose Obsidian, Quartz, Aurum, and other theme styles independently from light/dark mode.
+- Use artwork-derived player colors, reduced motion, optional tracklist motion blur, and Windows native controls.
+- Responsive layouts adapt the library, player, queue, YouTube shelves, and settings to desktop and mobile widths.
 
-### Cross-website playlist import
+## Listening history
 
-- Import a **public** YouTube, YouTube Music, Spotify, or Audiomack playlist from its link.
-- YouTube playlists preserve the exact videos, original order, and duplicates without searching for replacements. Playlist links pasted into Search open the cross-website importer automatically.
-- For Spotify and Audiomack, Resonance scans track metadata, finds the top matching YouTube result, and lets you review the matches before creating a new playlist.
-- Choose whether imported tracks should be downloaded locally or streamed from the playlist.
-- Duplicate entries and their original order are preserved, and repeated YouTube sources are downloaded only once.
+The History button lives in the main header beside Settings.
 
-### Desktop and mobile integration
+- **YouTube Music** reads recent plays from the connected account. Rows load first; views and likes display `—` until background lookups finish. Tracks can be played, streamed into the active playlist, or downloaded.
+- **Resonance** records a local file after three seconds of genuine forward playback. Replaying it moves it to the top. Streams are excluded, the list is capped at 100 distinct tracks, and clearing history never deletes audio.
 
-| Windows | Android |
-| --- | --- |
-| Configurable global hotkeys for transport, seek, volume, and speed | Background playback and music-recognition result notifications |
-| Hardware media keys and taskbar thumbnail buttons | Headset/media buttons, artwork, seek controls, and a true stop/exit action |
-| Fast, watchdog-backed close behavior; close to tray, minimize to tray, or disable the tray | Quick Settings tile for microphone or device-audio song recognition |
-| Optional Discord Rich Presence | Android share target for YouTube, YouTube Music, Spotify, Audiomack, playlist links, and search text |
-| Windows-native control styling enabled by default, with the classic Resonance style available as a fallback | Theme-aware compact, standard, and expanded home-screen playback widgets |
-| Native-style spacing, buttons, menus, focus states, sliders, and scrollbars | Widget controls for previous, play/pause, next, repeat, and shuffle, with immediate updates and a safety sync |
-| Local Companion server with queue, transport, loop, shuffle, speed, pitch, equalizer, and Discord shortcut controls | Local-network PC Companion remote with queue and playback controls |
-| Discord mute/deafen shortcuts can be recorded, tested, reset, and saved | Companion mute/deafen buttons without Discord account access or claimed state tracking |
-| Discord shortcuts target the background client without stealing focus and report when delivery fails | Widget expansion is bounded while the default compact layout remains intact |
-|  | Runtime audio, storage, camera, microphone, and notification permissions |
-|  | QR camera scanning and export to `Pictures/Resonance` |
+Local history begins when a build containing the feature is installed; earlier plays cannot be reconstructed.
 
-## Themes
+## YouTube access
 
-Every style has light and dark variants and can be changed without restarting. The theme style setting switches between the original accent-only appearance and the newer full palette treatment:
+Most public operations work without an account. When YouTube requires verification, open **Settings → YouTube Access**.
 
-$\color{#9827F5}{\textsf{\textbf{Obsidian}}}$ · $\color{#1DB954}{\textsf{\textbf{Jade}}}$ · $\color{#2563EB}{\textsf{\textbf{Cobalt}}}$ · $\color{#FF1744}{\textsf{\textbf{Magma}}}$ · $\color{#B8BDC7}{\textsf{\textbf{Void}}}$ · $\color{#E7E9EE}{\textsf{\textbf{Quartz}}}$ · $\color{#F2C14E}{\textsf{\textbf{Aurum}}}$
+### Windows
 
-Void uses a true black base in dark mode for an OLED-style look. Quartz adapts its white/silver character to a darker gray accent in light mode so controls remain readable, while Aurum uses a warm gold palette.
+Connect a supported signed-in browser profile or select a Netscape `cookies.txt` file. Resonance reads the chosen source locally for each operation. Cookie values never enter Flutter preferences, UI, logs, or diagnostics.
 
-The full style changes backgrounds and surfaces as well as the accent. Disabling full styling restores the older neutral Resonance surfaces while preserving the selected accent. Obsidian now receives its own full purple-styled treatment instead of looking identical in both modes.
+### Android
 
-An optional artwork-color setting extracts and caches a safe palette for Currently Playing, the standalone player, and the visualizer glow while preserving the selected theme and Void's true-black surfaces. Standalone-player gradients animate subtly and continue to respect the selected theme.
+Use the in-app Firefox guide to export the current YouTube site as `cookies.txt`, then import it with the system file picker. Resonance validates the file and stores a private copy under Android's no-backup storage. Each operation receives a unique temporary copy which is deleted afterward.
 
-## Performance and reliability
-
-Playback and interface updates are kept lighter during normal use and when Resonance is minimized to the tray. Track menus and playlist scrolling also use smoother transitions, with a subtle blur effect while scrolling.
-
-Stream visualizers reuse playback data instead of downloading or decoding the stream a second time. Loudness analysis runs in the background and is cached so it does not delay local playback.
-
-Windows playback includes fixes for local tracks that could previously stall indefinitely and stop automatic queue progression. Existing playlists, saved metadata, Companion pairings, widget state, shortcuts, downloads, and settings remain compatible across recent releases.
+Treat exported cookies like a password. Export only the current YouTube site, delete the original file after import, and reconnect when the session expires.
 
 ## Download
 
-The latest stable release is **v3.0.0**:
+Download packaged builds from [GitHub Releases](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
 
-- [Android APK](https://github.com/liuYousefKahwaji/Resonance/releases/download/3.0.0/Resonance-Android-v3.0.0.apk) — Android 7.0 (API 24) or newer.
-- [Windows x64 package](https://github.com/liuYousefKahwaji/Resonance/releases/download/3.0.0/Resonance-Windows-v3.0.0.zip) — extract the entire archive, then run `resonance.exe`.
+- **Windows:** extract the complete ZIP and run `resonance.exe`. Keep `data/`, DLLs, and `bin/` beside the executable.
+- **Android:** install the APK. Android may ask permission because the package is installed outside Google Play.
 
-All versions and their notes are on the [Releases page](https://github.com/liuYousefKahwaji/Resonance/releases). Keep the Windows package together after extraction; its `bin` folder contains the tools used for YouTube features.
+The app stores playlists and preferences in platform application data. Downloaded audio remains in the location selected by the platform downloader.
 
 ## Quick start
 
-1. Open the playlist menu to create or name a playlist.
-2. Press **+** to import local audio. On Windows, you can also drag files or an M3U/M3U8 playlist into the track list.
-3. Press the search icon for YouTube. Choose **Play**, **Stream**, or **Download** on a result, or browse Suggested Music before entering a query.
-4. Long-press or right-click a track to edit its metadata, or open its three-dot menu for playback and permanent deletion. Drag its handle to change playlist order.
-5. Open Playback Settings to change speed, pitch, scope, or the equalizer. Volume normalization is available under Settings → Playback.
-6. Use the QR buttons to transfer the current playlist or import one from another device. You can also use **Cross-website playlist import** for public YouTube, YouTube Music, Spotify, or Audiomack playlists.
-7. On Android, add a Resonance playback widget from the launcher or open Settings → Companion to control Resonance running on a Windows PC over the local network.
-
-On Android, grant audio/storage access for local imports, notifications for background controls, and camera access only if you use QR scanning. Microphone or device-audio access is needed only for song identification. Local playback works offline; YouTube search, suggestions, streaming, downloads, cover lookup, and source matching require an internet connection.
+1. Import local tracks or drag files into the Windows library.
+2. Create or rename playlists from the playlist menu.
+3. Open Search to play, stream, or download YouTube results.
+4. Connect YouTube Access only if verification or authenticated YouTube Music features require it.
+5. Open the full player for lyrics, queue controls, playback tuning, and gestures.
 
 ## Build from source
 
 ### Requirements
 
-- [Flutter](https://docs.flutter.dev/get-started/install) with Dart 3.9.2 or newer.
-- **Windows builds:** Visual Studio with **Desktop development with C++**.
-- **Android builds:** Android SDK, JDK 17, and Python 3.10 for Chaquopy's embedded yt-dlp environment.
+- Flutter with Dart compatible with `pubspec.yaml` (currently Dart `^3.9.2`).
+- Windows: Visual Studio with **Desktop development with C++** and the Windows SDK.
+- Android: Android SDK, a compatible JDK, and the NDK/Gradle versions resolved by the project.
+- The licensed runtime tools expected under `assets/bin/` for Windows packaging.
 
 ```powershell
-git clone https://github.com/liuYousefKahwaji/Resonance.git
-cd Resonance
 flutter pub get
-flutter devices
-flutter run -d <device-id>
-```
-
-Run the checks:
-
-```powershell
 flutter analyze
 flutter test
-python -m unittest discover -s test/python -p "test_*.py"
-```
-
-Create release builds:
-
-```powershell
 flutter build apk --release
 flutter build windows --release
 ```
 
-Windows packages yt-dlp, FFmpeg, and Deno from `assets/bin` into the release bundle automatically.
+Android packages pinned Python/yt-dlp dependencies through Chaquopy and includes its required QuickJS runtime. Windows release builds copy yt-dlp, FFmpeg, Deno, and the packaged YouTube Music helper into `bin/`. Do not distribute only `resonance.exe`.
 
-## Project layout
+## Project structure
 
 ```text
-lib/
-├── core/       audio, storage, metadata, equalizer, normalization, and low-level playback logic
-├── services/   import, artwork cache, suggestions, Companion, source tracking, and QR transfer
-├── screens/    YouTube search, standalone player, equalizer, settings, Companion, and transfer flows
-├── widgets/    library, player, discovery, and platform-responsive UI
-└── platform/   Windows tray/hotkeys and Android permission/effect integration
-android/        native YouTube, widgets, QR, loudness, and background-service bridges
-windows/        runner, hardware media keys, Discord shortcuts, and taskbar thumbnail controls
-test/           Flutter/Dart and Python tests
+lib/main.dart                         App composition and library UI
+lib/core/audio/                       Playback, queues, effects, and recovery
+lib/core/storage/                     Playlist persistence and mutations
+lib/screens/                          Full-page player, history, settings, import, and Sync UI
+lib/services/                         YouTube, history, metadata, transfer, lyrics, and LAN services
+lib/widgets/                          Library, player, YouTube, and common UI components
+android/app/src/main/kotlin/          Android channels, widgets, services, and cookie boundary
+android/app/src/main/python/          Android yt-dlp/YouTube Music bridge
+windows/runner/                       Windows runner and native media integrations
+tool/windows_ytmusic_home/            Source and build script for the packaged Windows helper
+test/                                 Flutter and host-side regression tests
 ```
 
-## Release history
+Architecture and session notes live under `docs/` in development checkouts.
 
-The table condenses every published changelog; each version links to its full release notes.
+## Recent releases
 
-| Release | What changed |
+| Release | Highlights |
 | --- | --- |
-| [v3.0.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/3.0.0) | Cross-platform YouTube Access with Windows browser-session connection and Android Firefox cookies.txt import; signed-in session validation, private cookie storage, sanitized diagnostics, and Android-safe cookie-free fallback for current yt-dlp JavaScript challenges; updated nightly reliability fixes and release packaging. |
-| [v2.7.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.7.0) | Quartz and Aurum themes; distinct full-style Obsidian; animated gradients and fixed overflowing titles; reliable end-of-playlist metadata edits; persistent Global/Per-track Custom EQ curves; bounded Android widget expansion. |
-| [v2.6.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.6.0) | Compact, standard, and expanded Android playback widgets with synchronized controls; updated playback-settings flow and vinyl presentation; reliable background Discord Companion shortcuts that preserve application focus. |
-| [v2.5.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.5.0) | Cross-platform five-band equalizer and presets; cached local-track volume normalization; equalizer-aware playback scopes and Companion controls; Pocket Vinyl; Windows stalled-track playback fix. |
-| [v2.4.1](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.4.1) | Automatic two-result search previews; keyboard and song-identification dismissal improvements; Suggested Music recovery during overlapping searches. |
-| [v2.4.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.4.0) | Configurable Discord mute/deafen Companion controls; playlist-based Suggested Music; persistent stream artwork, badges, and efficient visualizers; preserved search previews; native Windows styling. |
-| [v2.3.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.3.0) | Background Android recognition, Quick Settings and share-sheet integration, the visual queue, crossfade, long-track resume, scoped audio controls and real bass, download history, artwork-derived player colors, Unicode-safe downloads, and faster Windows shutdown. |
-| [v2.2.1](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.2.1) | Restored exact YouTube and YouTube Music playlist imports, unified cross-website downloads and streams, bounded metadata extraction, and fixed metadata leaking between playlists. |
-| [v2.2.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.2.0) | Shazam-style song identification, standalone-player gestures, touch-safe scrolling, Currently Playing navigation improvements, and an About section with the packaged version. |
-| [v2.1.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.1.0) | Faster local track switching, a unified gradient standalone player, a real audio-reactive visualizer, and double-click/tap standalone playback. |
-| [v2.0.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/2.0.0) | Spotify and Audiomack playlist importing, download-or-stream transfers, track actions and permanent deletion, full theme styling, smoother menus and scrolling, and improved standalone playback. |
-| [v1.9.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.9.0) | Dedicated YouTube search and standalone player, five theme styles, better artwork, responsive layouts, and more reliable streams/downloads. |
-| [v1.8.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.8.0) | Local QR playlist transfer, persistent YouTube source matching, reuse of local tracks, and narrow-screen toolbar improvements. |
-| [v1.7.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.7.0) | Long-press playlist actions, cover editing and previews, automatic missing-cover lookup, smoother switching, and proper Android notification exit. |
-| [v1.6.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.6.0) | Complete playlist management, persistent playback state, Currently Playing navigation, Windows hotkey fixes, and much smaller release packages. |
-| [v1.5.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.5.0) | YouTube streaming, playlists, full cover art, 200% volume, custom seek buttons, startup intro, long-track support, and Windows media_kit playback. |
-| [v1.3.2](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.3.2) | The Obsidian Pulse UI, refined seek/volume styling, repeat fixes, Windows hover feedback, and revised Android controls. |
-| [v1.3.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.3.0) | Initial YouTube search and download support with yt-dlp, FFmpeg, FFprobe, and Deno. |
-| [v1.2.5](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.25) | Pitch control and the combined Android Playback Controls panel. |
-| [v1.2](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.2) | Playback speed, title/artist metadata editing, Windows speed hotkeys, and Android notification fixes. |
-| [v1.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/1.0) | First complete Windows and Android release. |
+| v3.3.0 | YouTube Music and local Resonance listening history, background view/like hydration, progressive high-resolution stream artwork, and refreshed documentation. |
+| [v3.2.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.2.0) | Playlist search, stream-to-download conversion, Windows output routing, opt-in YouTube Music history reporting, media-key reliability, and authenticated playback improvements. |
+| [v3.1.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.1.0) | Personalized YouTube Music Home, persistent authenticated sessions, complete session queues, and stream recovery. |
+| [v3.0.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.0.0) | Cross-platform YouTube Access with Windows browser sessions, Android private cookie import, validation, and sanitized diagnostics. |
+| [v2.9.2](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v2.9.2) | Android extraction and packaging reliability fixes. |
+| [v2.9.1](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v2.9.1) | Playlist transfer and playback fixes. |
+
+Older releases remain available in the [GitHub release archive](https://github.com/liuYousefKahwaji/Resonance/releases).
 
 ---
 
-Resonance is built for personal music libraries. Please respect artists, copyright, and the terms of any service you use with it.
+Resonance is built for personal music libraries. Respect artists, copyright, and the terms of the services you use.

@@ -23,6 +23,7 @@ import 'package:path/path.dart' as p;
 import 'package:metadata_god/metadata_god.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:resonance/services/youtube/youtube_playback_history_coordinator.dart';
+import 'package:resonance/services/local_playback_history_coordinator.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
@@ -457,8 +458,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   PlayerHandler({
     YoutubeAccessService? youtubeAccessService,
     YoutubePlaybackHistoryCoordinator? youtubeHistoryCoordinator,
+    LocalPlaybackHistoryCoordinator? localHistoryCoordinator,
   }) : _youtubeAccessService = youtubeAccessService,
-       _youtubeHistoryCoordinator = youtubeHistoryCoordinator {
+       _youtubeHistoryCoordinator = youtubeHistoryCoordinator,
+       _localHistoryCoordinator = localHistoryCoordinator {
     _youtubeAccessService?.addListener(_handleYoutubeAccessChanged);
     _playbackPreferenceStore = PlaybackPreferenceStore.load();
     _loudnessCacheFuture = LoudnessProfileCache.load();
@@ -483,6 +486,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   final YoutubeAccessService? _youtubeAccessService;
   final YoutubePlaybackHistoryCoordinator? _youtubeHistoryCoordinator;
+  final LocalPlaybackHistoryCoordinator? _localHistoryCoordinator;
   int _youtubeAccessRevision = 0;
 
   void _handleYoutubeAccessChanged() {
@@ -1033,12 +1037,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final currentItem = mediaItem.value;
     if (currentItem == null) {
       _youtubeHistoryCoordinator?.onSessionEnded();
+      _localHistoryCoordinator?.onSessionEnded();
     } else {
       _youtubeHistoryCoordinator?.onPlaybackSnapshot(
         mediaIdentity: currentItem.id,
         playing: playing,
         position: _currentPosition,
       );
+      _localHistoryCoordinator?.onPlaybackSnapshot(item: currentItem, playing: playing, position: _currentPosition);
     }
     final backendProcessingState = _playbackUnavailable
         ? AudioProcessingState.idle
@@ -2321,6 +2327,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _normalizationMultiplier = _normalizationMultiplierFor(filePath);
 
     // Optimistic UI update
+    // A deliberate reload of the same local path is a new listening session.
+    _localHistoryCoordinator?.onSessionEnded();
     mediaItem.add(
       MediaItem(
         id: filePath,

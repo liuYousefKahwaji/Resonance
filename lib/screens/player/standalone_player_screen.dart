@@ -19,6 +19,7 @@ import 'package:resonance/widgets/player/audio_visualizer.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
 import 'package:resonance/widgets/player/upcoming_queue.dart';
 import 'package:resonance/widgets/player/vinyl_disc.dart';
+import 'package:resonance/widgets/common/progressive_network_artwork.dart';
 
 const nowPlayingArtworkHeroTag = 'resonance-now-playing-artwork';
 
@@ -1825,10 +1826,12 @@ class _LargeArtwork extends StatelessWidget {
             errorBuilder: (_, __, ___) => _ArtworkFallback(primary: primary),
           )
         : uri != null && (uri.scheme == 'http' || uri.scheme == 'https')
-        ? Image.network(
-            uri.toString(),
+        ? ProgressiveNetworkArtwork(
+            url: uri.toString(),
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _ArtworkFallback(primary: primary),
+            lowCacheSize: 320,
+            highCacheSize: 1200,
+            fallback: _ArtworkFallback(primary: primary),
           )
         : _ArtworkFallback(primary: primary);
     return AspectRatio(

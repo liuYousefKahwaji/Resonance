@@ -399,6 +399,23 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         self.assertNotIn("postprocessors", FakeYoutubeDL.calls[0])
         self.assertEqual(FakeYoutubeDL.calls[0]["cookiefile"], cookie_file)
 
+    def test_music_history_is_normalized_and_bounded(self):
+        class FakeMusic:
+            def get_history(self):
+                return [
+                    {"videoId": "abcdefghijk", "title": "First", "artists": [{"name": "Artist"}]},
+                    {"videoId": "lmnopqrstuv", "title": "Second", "artists": [{"name": "Other"}]},
+                ]
+
+        original = bridge._build_authenticated_ytmusic
+        bridge._build_authenticated_ytmusic = lambda _cookie: FakeMusic()
+        try:
+            payload = json.loads(bridge.get_music_history(1, "private-cookies.txt"))
+        finally:
+            bridge._build_authenticated_ytmusic = original
+        self.assertEqual(len(payload["tracks"]), 1)
+        self.assertEqual(payload["tracks"][0]["title"], "First")
+
     def test_download_event_preserves_unicode_metadata_and_filename_as_utf8(self):
         cases = [
             ("øneheart - apathy (slowed)", "øneheart"),

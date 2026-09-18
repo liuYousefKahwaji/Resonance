@@ -32,6 +32,7 @@ import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/widgets/common/artwork_thumbnail.dart';
+import 'package:resonance/widgets/common/progressive_network_artwork.dart';
 import 'package:metadata_god/metadata_god.dart';
 
 class TrackTile extends StatefulWidget {
@@ -999,12 +1000,12 @@ class _StreamArtworkThumbnail extends StatelessWidget {
     child: Stack(
       fit: StackFit.expand,
       children: [
-        Image.network(
-          url,
+        ProgressiveNetworkArtwork(
+          url: url,
           fit: BoxFit.cover,
-          cacheWidth: 102,
-          cacheHeight: 102,
-          errorBuilder: (_, __, ___) => ColoredBox(
+          lowCacheSize: 102,
+          highCacheSize: 384,
+          fallback: ColoredBox(
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
             child: const Icon(Icons.sensors_rounded, size: 17),
           ),

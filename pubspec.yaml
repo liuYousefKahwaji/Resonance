@@ -1,7 +1,7 @@
 name: resonance
 description: "A local music player with youtube support"
 publish_to: 'none'
-version: 3.2.0+5
+version: 3.3.0+6
 
 environment:
   sdk: ^3.9.2

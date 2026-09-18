@@ -141,6 +141,17 @@ class WindowsYoutubeMusicHomeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
             helper._add_history_item(FakeMusic(), "jNQXAC9IVRw")
 
+    def test_history_read_preserves_order_and_limit(self):
+        class FakeMusic:
+            def get_history(self):
+                return [
+                    {"videoId": "abcdefghijk", "title": "First", "artists": [{"name": "Artist"}]},
+                    {"videoId": "lmnopqrstuv", "title": "Second", "artists": [{"name": "Other"}]},
+                ]
+
+        result = helper._history(FakeMusic(), 1)
+        self.assertEqual([track["title"] for track in result["tracks"]], ["First"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/widgets/player/audio_visualizer.dart';
 import 'package:resonance/widgets/player/vinyl_disc.dart';
+import 'package:resonance/widgets/common/progressive_network_artwork.dart';
 
 class AlbumCover extends StatelessWidget {
   final ValueChanged<String>? onTap;
@@ -351,13 +352,13 @@ class _AlbumIcon extends StatelessWidget {
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 200),
             child: uri != null && (uri.scheme == 'http' || uri.scheme == 'https')
-                ? Image.network(
-                    uri.toString(),
+                ? ProgressiveNetworkArtwork(
+                    url: uri.toString(),
                     key: ValueKey('remote-art-$uri'),
-                    width: 42,
-                    height: 42,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Icon(Icons.music_note_rounded, color: primary),
+                    lowCacheSize: 126,
+                    highCacheSize: 384,
+                    fallback: Icon(Icons.music_note_rounded, color: primary),
                   )
                 : uri != null && uri.scheme == 'file'
                 ? Image.file(

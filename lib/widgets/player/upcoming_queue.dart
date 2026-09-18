@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:resonance/widgets/common/progressive_network_artwork.dart';
 import 'package:resonance/models/playback_queue_snapshot.dart';
 
 class UpcomingQueuePanel extends StatelessWidget {
@@ -313,7 +314,13 @@ class _QueueArtworkState extends State<_QueueArtwork> {
               : uri.scheme == 'file'
               ? Image.file(File.fromUri(uri), fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback())
               : uri.scheme == 'http' || uri.scheme == 'https'
-              ? Image.network(uri.toString(), fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback())
+              ? ProgressiveNetworkArtwork(
+                  url: uri.toString(),
+                  fit: BoxFit.cover,
+                  lowCacheSize: 114,
+                  highCacheSize: 384,
+                  fallback: fallback(),
+                )
               : fallback();
           return AnimatedSwitcher(
             duration: const Duration(milliseconds: 220),

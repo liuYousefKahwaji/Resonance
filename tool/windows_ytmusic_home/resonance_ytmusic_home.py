@@ -185,11 +185,22 @@ def _add_history_item(ytmusic, video_id):
     return {"ok": True, "videoId": video_id, "statusCode": status_code}
 
 
+def _history(ytmusic, limit):
+    tracks = []
+    for item in ytmusic.get_history() or []:
+        track = _track(item)
+        if track:
+            tracks.append(track)
+        if len(tracks) >= max(1, min(int(limit), 100)):
+            break
+    return {"tracks": tracks}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser")
     parser.add_argument("--cookies-file")
-    parser.add_argument("--action", choices=("home", "add-history"), default="home")
+    parser.add_argument("--action", choices=("home", "history", "add-history"), default="home")
     parser.add_argument("--video-id")
     parser.add_argument("--limit", type=int, default=12)
     args = parser.parse_args()
@@ -209,6 +220,9 @@ def main():
     account = ytmusic.get_account_info()
     if not isinstance(account, dict) or not account.get("accountName"):
         raise RuntimeError("The selected browser profile is not signed in to YouTube Music")
+    if args.action == "history":
+        print(json.dumps(_history(ytmusic, args.limit), ensure_ascii=False))
+        return
     home = ytmusic.get_home(limit=max(1, min(args.limit, 80))) or []
     shelves = []
     for shelf in home:

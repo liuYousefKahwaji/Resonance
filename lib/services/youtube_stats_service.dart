@@ -52,7 +52,7 @@ class YoutubeStatsService {
     try {
       final request = await client.getUrl(Uri.https('returnyoutubedislikeapi.com', '/votes', {'videoId': id}));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set(HttpHeaders.userAgentHeader, 'Resonance/2.8.0');
+      request.headers.set(HttpHeaders.userAgentHeader, 'Resonance/3.3.0');
       final response = await request.close().timeout(_timeout);
       if (response.statusCode != HttpStatus.ok) {
         await response.drain<void>();

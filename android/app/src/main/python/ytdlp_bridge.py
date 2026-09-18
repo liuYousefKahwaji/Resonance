@@ -338,6 +338,19 @@ def get_music_home(limit: int = 12, cookie_file=None) -> str:
     return json.dumps({"shelves": shelves}, ensure_ascii=False)
 
 
+def get_music_history(limit: int = 100, cookie_file=None) -> str:
+    """Return recent listening history immediately, without engagement lookups."""
+    ytmusic = _build_authenticated_ytmusic(cookie_file)
+    tracks = []
+    for item in ytmusic.get_history() or []:
+        track = _normalize_music_item(item)
+        if track:
+            tracks.append(track)
+        if len(tracks) >= max(1, min(int(limit), 100)):
+            break
+    return json.dumps({"tracks": tracks}, ensure_ascii=False)
+
+
 def add_music_history(video_id: str, cookie_file=None) -> str:
     """Best-effort write of one genuine Resonance listen to YT Music history."""
     video_id = _validated_music_video_id(video_id)

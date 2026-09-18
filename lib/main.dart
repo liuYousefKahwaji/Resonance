@@ -51,6 +51,9 @@ import 'package:resonance/services/youtube/youtube_history_preferences.dart';
 import 'package:resonance/services/youtube/youtube_history_service.dart';
 import 'package:resonance/services/youtube/youtube_music_home_service.dart';
 import 'package:resonance/services/youtube/youtube_playback_history_coordinator.dart';
+import 'package:resonance/services/listening_history_repository.dart';
+import 'package:resonance/services/local_playback_history_coordinator.dart';
+import 'package:resonance/screens/history/history_screen.dart';
 import 'package:resonance/screens/sync/sync_screens.dart';
 import 'package:resonance/widgets/music_recognition/music_recognition_dialog.dart';
 import 'package:resonance/widgets/youtube/windows_youtube.dart';
@@ -116,6 +119,8 @@ Future<void> main() async {
     reporter: youtubeHistoryService,
     isEnabled: () => youtubeHistoryPreferences.enabled,
   );
+  await ListeningHistoryRepository.instance.initialize();
+  final localHistoryCoordinator = LocalPlaybackHistoryCoordinator(repository: ListeningHistoryRepository.instance);
 
   // Windows uses PlayerHandler directly. The app already owns its Windows
   // media keys/taskbar controls, and the optional audio_service_win plugin
@@ -128,12 +133,14 @@ Future<void> main() async {
     handler = PlayerHandler(
       youtubeAccessService: youtubeAccessService,
       youtubeHistoryCoordinator: youtubeHistoryCoordinator,
+      localHistoryCoordinator: localHistoryCoordinator,
     );
   } else {
     handler = await AudioService.init<PlayerHandler>(
       builder: () => PlayerHandler(
         youtubeAccessService: youtubeAccessService,
         youtubeHistoryCoordinator: youtubeHistoryCoordinator,
+        localHistoryCoordinator: localHistoryCoordinator,
       ),
       config: const AudioServiceConfig(
         androidNotificationChannelId: 'com.resonance.audio',
@@ -1329,6 +1336,21 @@ class _MainAppState extends State<MainApp> {
     if (mounted) setState(() => _artworkRevision++);
   }
 
+  Future<void> _openHistory(BuildContext context) async {
+    await Navigator.push<void>(
+      context,
+      PageRouteBuilder<void>(
+        pageBuilder: (_, __, ___) => HistoryScreen(
+          playlistNumber: activePlaylistNumber,
+          playlistName: playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber',
+        ),
+        transitionsBuilder: (_, animation, __, child) => FadeTransition(opacity: animation, child: child),
+        transitionDuration: const Duration(milliseconds: 180),
+      ),
+    );
+    if (mounted) await _loadPlaylistFromDisk();
+  }
+
   PreferredSizeWidget _buildAppBar(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
@@ -1349,6 +1371,12 @@ class _MainAppState extends State<MainApp> {
               children: [
                 Text('Library', style: theme.appBarTheme.titleTextStyle),
                 const Spacer(),
+                IconButton(
+                  key: const Key('windows-history-command'),
+                  onPressed: () => _openHistory(context),
+                  icon: const Icon(Icons.history_rounded, size: 18),
+                  tooltip: 'History',
+                ),
                 IconButton(
                   key: const Key('windows-settings-command'),
                   onPressed: () => _openSettings(context),
@@ -1399,6 +1427,11 @@ class _MainAppState extends State<MainApp> {
       ),
       centerTitle: true,
       actions: [
+        IconButton(
+          onPressed: () => _openHistory(context),
+          icon: Icon(Icons.history_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+          tooltip: 'History',
+        ),
         IconButton(
           onPressed: () => _openSettings(context),
           icon: Icon(Icons.tune_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
