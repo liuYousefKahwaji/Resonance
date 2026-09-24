@@ -433,9 +433,10 @@ def _extract_info(target, extra=None, download=False, cookie_file=None, transfor
 
 def search(query: str, limit: int = 10, cookie_file=None) -> str:
     """Return a JSON array capped to the requested search result count."""
-    result_limit = max(1, min(int(limit), 10))
-    # YT Music's search endpoint returns parsed video results in one request.
-    # A guest request also avoids reading/copying browser cookies for each keypress.
+    result_limit = max(1, min(int(limit), 120))
+    # YT Music's search endpoint returns parsed video results and follows its
+    # continuation pages up to the requested limit. Guest search avoids reading
+    # or copying browser cookies for each request.
     try:
         from ytmusicapi import YTMusic
         items = YTMusic(language="en").search(query, filter="videos", limit=result_limit)

@@ -13,6 +13,7 @@ This release brings music discovery into the main player, speeds up YouTube brow
 ## Faster YouTube listening
 
 - YouTube search responds sooner while you type, with faster result loading on Android and Windows.
+- Search results now continue in batches as you scroll, up to 120 results.
 - YouTube Music Home shows its first shelves sooner, fills in more as you browse, and can show previously loaded shelves immediately when you return.
 - Opening a stream brings up the player while the audio connects. Resonance prepares likely songs and nearby queue tracks in the background, so many starts and skips need less waiting.
 - Stream playback and next/previous controls are more reliable, including rapid song changes. The player now keeps the selected song and the audio you hear in sync and recovers more promptly from a stalled stream.

@@ -12,7 +12,7 @@ class WindowsFastSearch {
 
   const WindowsFastSearch();
 
-  Future<List<YoutubeTrack>> search(String query) async {
+  Future<List<YoutubeTrack>> search(String query, {int limit = 10}) async {
     final uri = Uri.https('www.youtube.com', '/results', {'search_query': query});
     final request = await _client.getUrl(uri);
     request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
@@ -20,10 +20,11 @@ class WindowsFastSearch {
     final response = await request.close().timeout(const Duration(seconds: 6));
     if (response.statusCode != HttpStatus.ok) return const [];
     final html = await utf8.decoder.bind(response).join().timeout(const Duration(seconds: 6));
-    return parseHtml(html);
+    return parseHtml(html, limit: limit);
   }
 
-  List<YoutubeTrack> parseHtml(String html) {
+  List<YoutubeTrack> parseHtml(String html, {int limit = 10}) {
+    final resultLimit = limit.clamp(1, 120).toInt();
     const marker = 'var ytInitialData = ';
     final start = html.indexOf(marker);
     if (start < 0) return const [];
@@ -61,7 +62,7 @@ class WindowsFastSearch {
     final seen = <String>{};
 
     void visit(dynamic node) {
-      if (tracks.length >= 10) return;
+      if (tracks.length >= resultLimit) return;
       if (node is List) {
         for (final child in node) {
           visit(child);

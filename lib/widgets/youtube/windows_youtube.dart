@@ -81,33 +81,48 @@ class MediaDownloader {
   }
 
   Future<List<YoutubeTrack>> search(String query, {int limit = 10, bool background = false}) async {
-    final resultLimit = limit.clamp(1, 10);
+    final resultLimit = limit.clamp(1, 120).toInt();
+    final fetchLimit = resultLimit < 10 ? 10 : resultLimit;
     final normalizedQuery = query.trim().toLowerCase();
     final cached = _searchCache[normalizedQuery];
-    if (cached != null && DateTime.now().difference(cached.storedAt) < _searchCacheTtl) {
+    if (cached != null &&
+        DateTime.now().difference(cached.storedAt) < _searchCacheTtl &&
+        cached.tracks.length >= fetchLimit) {
       return cached.tracks.take(resultLimit).toList(growable: false);
     }
-    final inFlight = _searchesInFlight[normalizedQuery];
+    final requestKey = '$normalizedQuery:$fetchLimit';
+    final inFlight = _searchesInFlight[requestKey];
     if (inFlight != null) {
       return (await inFlight).take(resultLimit).toList(growable: false);
     }
-    final search = _runSearch(query.trim(), background: background);
-    _searchesInFlight[normalizedQuery] = search;
+    final search = _runSearch(query.trim(), limit: fetchLimit, background: background);
+    _searchesInFlight[requestKey] = search;
     try {
       final tracks = await search;
-      _searchCache[normalizedQuery] = (storedAt: DateTime.now(), tracks: tracks);
-      return tracks.take(resultLimit).toList(growable: false);
+      final previous = _searchCache[normalizedQuery];
+      final merged = <YoutubeTrack>[...tracks];
+      final seen = merged.map((track) => track.url).toSet();
+      if (previous != null && DateTime.now().difference(previous.storedAt) < _searchCacheTtl) {
+        merged.addAll(previous.tracks.where((track) => seen.add(track.url)));
+      }
+      _searchCache[normalizedQuery] = (storedAt: DateTime.now(), tracks: merged);
+      return merged.take(resultLimit).toList(growable: false);
     } finally {
-      if (identical(_searchesInFlight[normalizedQuery], search)) {
-        _searchesInFlight.remove(normalizedQuery);
+      if (identical(_searchesInFlight[requestKey], search)) {
+        _searchesInFlight.remove(requestKey);
       }
     }
   }
 
-  Future<List<YoutubeTrack>> _runSearch(String query, {required bool background, bool guest = true}) async {
+  Future<List<YoutubeTrack>> _runSearch(
+    String query, {
+    required int limit,
+    required bool background,
+    bool guest = true,
+  }) async {
     if (guest) {
-      final fastResults = await _searchMusicVideos(query);
-      if (fastResults.isNotEmpty) return fastResults;
+      final fastResults = await _searchMusicVideos(query, limit: limit);
+      if (fastResults.length >= limit) return fastResults;
     }
     final started = await _runner.start([
       '--flat-playlist',
@@ -116,10 +131,7 @@ class MediaDownloader {
 
       '--no-download',
 
-      // Always fill the small cache with the complete result page. This
-      // lets a two-item type-ahead preview and the subsequent Enter key
-      // share one native process instead of paying Windows startup twice.
-      'ytsearch10:$query',
+      'ytsearch$limit:$query',
     ], guest: guest);
     final process = started.process;
     if (background) _backgroundSearchProcesses.add(process);
@@ -139,7 +151,7 @@ class MediaDownloader {
 
     if (exitCode != 0) {
       if (guest && _runner.hasConfiguredAccess) {
-        return _runSearch(query, background: background, guest: false);
+        return _runSearch(query, limit: limit, background: background, guest: false);
       }
       throw _runner.failureForDiagnostics(
         stderr.isEmpty ? 'yt-dlp exited with code $exitCode' : stderr,
@@ -164,9 +176,9 @@ class MediaDownloader {
     return results;
   }
 
-  Future<List<YoutubeTrack>> _searchMusicVideos(String query) async {
+  Future<List<YoutubeTrack>> _searchMusicVideos(String query, {required int limit}) async {
     try {
-      return await const WindowsFastSearch().search(query);
+      return await const WindowsFastSearch().search(query, limit: limit);
     } catch (_) {
       return const [];
     }

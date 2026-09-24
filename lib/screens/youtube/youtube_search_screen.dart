@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
@@ -72,7 +73,12 @@ class YoutubeSearchScreen extends StatefulWidget {
 }
 
 class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
+  static const _searchPageSize = 10;
+  static const _maxSearchResults = 120;
+  static const _loadMoreThreshold = 420.0;
+
   final _controller = TextEditingController();
+  final _resultsScrollController = ScrollController();
   final MediaDownloader _windows = MediaDownloader();
   final AndroidYoutubeDownloader _android = AndroidYoutubeDownloader();
   final SuggestedMusicService _suggestions = const SuggestedMusicService();
@@ -81,6 +87,11 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   List<YoutubeTrack> _results = const [];
   bool _loading = false;
   String? _error;
+  String? _submittedSearchQuery;
+  String? _loadMoreError;
+  int _searchRequestLimit = _searchPageSize;
+  bool _hasMoreSearchResults = false;
+  bool _loadingMoreResults = false;
   String? _busyUrl;
   PlaylistProfile? _suggestionProfile;
   List<YoutubeTrack> _suggestionTracks = const [];
@@ -129,6 +140,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     _homeGeneration++;
     _statsGeneration++;
     _controller.dispose();
+    _resultsScrollController.dispose();
     super.dispose();
   }
 
@@ -149,6 +161,11 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
           _youtubeMusicHomeLoading = false;
           _results = const [];
           _error = null;
+          _submittedSearchQuery = null;
+          _loadMoreError = null;
+          _searchRequestLimit = _searchPageSize;
+          _hasMoreSearchResults = false;
+          _loadingMoreResults = false;
         });
       }
       _previewTimer = Timer(widget.previewDelay, () => unawaited(_loadPreview(input, generation)));
@@ -373,6 +390,11 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       _waitingForPreview = false;
       _error = null;
       _results = const [];
+      _submittedSearchQuery = null;
+      _loadMoreError = null;
+      _searchRequestLimit = _searchPageSize;
+      _hasMoreSearchResults = false;
+      _loadingMoreResults = false;
     });
     try {
       final uri = Uri.tryParse(input);
@@ -392,7 +414,12 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       }
       final results = await _search(input);
       if (mounted && generation == _searchGeneration && input == _controller.text.trim()) {
-        setState(() => _results = results.take(10).toList(growable: false));
+        setState(() {
+          _results = results.take(_searchPageSize).toList(growable: false);
+          _submittedSearchQuery = _isLink(input) ? null : input;
+          _searchRequestLimit = _searchPageSize;
+          _hasMoreSearchResults = !_isLink(input) && results.length >= _searchPageSize;
+        });
         if (widget.searchLoader == null) {
           unawaited(context.read<PlayerHandler>().warmStreamCandidates(_results.map((track) => track.url)));
         }
@@ -414,6 +441,64 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       }
     } finally {
       if (mounted && generation == _searchGeneration) setState(() => _loading = false);
+    }
+  }
+
+  void _onResultsScroll(ScrollNotification notification) {
+    // Only a user initiated scroll may request another page. Layout/metrics
+    // updates after appending rows must never chain-load pages on their own.
+    final userScroll = notification is UserScrollNotification && notification.direction != ScrollDirection.idle;
+    final activeDrag = notification is ScrollUpdateNotification && notification.dragDetails != null;
+    if (!userScroll && !activeDrag) {
+      return;
+    }
+    if (!_resultsScrollController.hasClients || _resultsScrollController.position.extentAfter > _loadMoreThreshold) {
+      return;
+    }
+    unawaited(_loadMoreSearchResults());
+  }
+
+  Future<void> _loadMoreSearchResults() async {
+    final query = _submittedSearchQuery;
+    if (query == null ||
+        _loading ||
+        _loadingMoreResults ||
+        !_hasMoreSearchResults ||
+        _results.isEmpty ||
+        _results.length >= _maxSearchResults) {
+      return;
+    }
+    final generation = _searchGeneration;
+    final nextLimit = (_searchRequestLimit + _searchPageSize).clamp(1, _maxSearchResults).toInt();
+    if (nextLimit <= _searchRequestLimit) {
+      setState(() => _hasMoreSearchResults = false);
+      return;
+    }
+    setState(() {
+      _loadingMoreResults = true;
+      _loadMoreError = null;
+    });
+    try {
+      final results = await _search(query, limit: nextLimit);
+      if (!mounted || generation != _searchGeneration || query != _controller.text.trim()) return;
+      final existingUrls = _results.map((track) => track.url).toSet();
+      final additions = results
+          .where((track) => existingUrls.add(track.url))
+          .take(_searchPageSize)
+          .toList(growable: false);
+      setState(() {
+        _results = [..._results, ...additions].take(_maxSearchResults).toList(growable: false);
+        _searchRequestLimit = nextLimit;
+        _hasMoreSearchResults =
+            _results.length < _maxSearchResults && results.length >= nextLimit && additions.isNotEmpty;
+      });
+      if (additions.isNotEmpty) unawaited(_hydrateStats(additions, suggestions: false));
+    } catch (error) {
+      if (!mounted || generation != _searchGeneration) return;
+      setState(() => _loadMoreError = 'Could not load more results. Scroll to retry.');
+      debugPrint('Could not load more YouTube results: $error');
+    } finally {
+      if (mounted && generation == _searchGeneration) setState(() => _loadingMoreResults = false);
     }
   }
 
@@ -762,7 +847,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         message: 'Paste a video link or search by song, artist, or album.',
       );
     }
-    return _buildResults(_results);
+    return _buildResults(_results, paginate: _submittedSearchQuery != null);
   }
 
   Widget _buildSuggestions() {
@@ -970,38 +1055,58 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     return shelves;
   }
 
-  Widget _buildResults(List<YoutubeTrack> tracks) => ListView.separated(
-    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-    itemCount: tracks.length,
-    separatorBuilder: (_, __) => const SizedBox(height: 10),
-    itemBuilder: (_, index) {
-      final track = tracks[index];
-      final pending = DownloadQueueController.instance.pendingEntryFor(track.url, widget.playlistNumber);
-      final card = _ResultCard(
-        track: track,
-        busy: _busyUrl == track.url,
-        queued: pending != null,
-        downloading: pending?.status == DownloadQueueStatus.downloading,
-        progress: pending?.progress ?? 0,
-        onPlay: () => _play(track),
-        onStream: () => _stream(track),
-        onDownload: () => _download(track),
-      );
-      return TweenAnimationBuilder<double>(
-        key: ValueKey('result-${track.url}'),
-        duration: resonanceDuration(
-          context,
-          index < 8 ? resonanceMotion(context).contentTransition + Duration(milliseconds: index * 35) : Duration.zero,
-        ),
-        curve: resonanceMotion(context).emphasizedCurve,
-        tween: Tween(begin: 0, end: 1),
-        builder: (context, value, child) => Opacity(
-          opacity: value,
-          child: Transform.translate(offset: Offset(0, 14 * (1 - value)), child: child),
-        ),
-        child: card,
-      );
+  Widget _buildResults(List<YoutubeTrack> tracks, {bool paginate = false}) => NotificationListener<ScrollNotification>(
+    onNotification: (notification) {
+      if (paginate) _onResultsScroll(notification);
+      return false;
     },
+    child: ListView.separated(
+      controller: paginate ? _resultsScrollController : null,
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+      itemCount:
+          tracks.length +
+          (paginate && (_hasMoreSearchResults || _loadingMoreResults || _loadMoreError != null) ? 1 : 0),
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (_, index) {
+        if (index >= tracks.length) {
+          return SizedBox(
+            height: 56,
+            child: Center(
+              child: _loadingMoreResults
+                  ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Text(_loadMoreError ?? 'Scroll to load more', style: Theme.of(context).textTheme.bodySmall),
+            ),
+          );
+        }
+        final track = tracks[index];
+        final pending = DownloadQueueController.instance.pendingEntryFor(track.url, widget.playlistNumber);
+        final card = _ResultCard(
+          track: track,
+          busy: _busyUrl == track.url,
+          queued: pending != null,
+          downloading: pending?.status == DownloadQueueStatus.downloading,
+          progress: pending?.progress ?? 0,
+          onPlay: () => _play(track),
+          onStream: () => _stream(track),
+          onDownload: () => _download(track),
+        );
+        return TweenAnimationBuilder<double>(
+          key: ValueKey('result-${track.url}'),
+          duration: resonanceDuration(
+            context,
+            index < 8 ? resonanceMotion(context).contentTransition + Duration(milliseconds: index * 35) : Duration.zero,
+          ),
+          curve: resonanceMotion(context).emphasizedCurve,
+          tween: Tween(begin: 0, end: 1),
+          builder: (context, value, child) => Opacity(
+            opacity: value,
+            child: Transform.translate(offset: Offset(0, 14 * (1 - value)), child: child),
+          ),
+          child: card,
+        );
+      },
+    ),
   );
 }
 

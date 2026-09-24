@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-Version **3.4.0** is the current packaged release. It brings Discover into the main player, speeds up YouTube search and streaming, improves stream switching, and adds a collapsible Discover player and pull-to-refresh on Android.
+Version **3.4.0** is the current packaged release. It brings Discover into the main player, speeds up YouTube search and streaming, loads more search results as you scroll, improves stream switching, and adds a collapsible Discover player and pull-to-refresh on Android.
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 
@@ -159,7 +159,7 @@ Architecture and session notes live under `docs/` in development checkouts.
 
 | Release | Highlights |
 | --- | --- |
-| v3.4.0 | Main-window Discover and listening focus, faster YouTube search and streaming, more reliable stream switching, Android Discover controls and refresh, and right-to-left lyrics. |
+| v3.4.0 | Main-window Discover and listening focus, faster YouTube search and streaming, up to 120 search results loaded as you scroll, more reliable stream switching, Android Discover controls and refresh, and right-to-left lyrics. |
 | v3.3.0 | YouTube Music and local Resonance listening history, background view/like hydration, progressive high-resolution stream artwork, and refreshed documentation. |
 | [v3.2.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.2.0) | Playlist search, stream-to-download conversion, Windows output routing, opt-in YouTube Music history reporting, media-key reliability, and authenticated playback improvements. |
 | [v3.1.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.1.0) | Personalized YouTube Music Home, persistent authenticated sessions, complete session queues, and stream recovery. |

@@ -61,32 +61,43 @@ class AndroidYoutubeDownloader {
   }
 
   Future<List<YoutubeTrack>> search(String query, {int limit = 10}) async {
-    final resultLimit = limit.clamp(1, 10);
+    final resultLimit = limit.clamp(1, 120).toInt();
+    // A two-item type-ahead preview and the submitted first page share one
+    // request; later scroll pages ask for a longer prefix only when needed.
+    final fetchLimit = resultLimit < 10 ? 10 : resultLimit;
     final normalized = query.trim().toLowerCase();
     final access = YoutubeAccessService.active;
     final key = '${identityHashCode(access)}:${access?.revision ?? 0}:$normalized';
     final cached = _searchCache[key];
-    if (cached != null && DateTime.now().difference(cached.storedAt) < _searchCacheTtl) {
+    if (cached != null &&
+        DateTime.now().difference(cached.storedAt) < _searchCacheTtl &&
+        cached.tracks.length >= fetchLimit) {
       return cached.tracks.take(resultLimit).toList(growable: false);
     }
-    var pending = _searchesInFlight[key];
+    final requestKey = '$key:$fetchLimit';
+    var pending = _searchesInFlight[requestKey];
     if (pending == null) {
-      pending = _runSearch(query.trim());
-      _searchesInFlight[key] = pending;
+      pending = _runSearch(query.trim(), limit: fetchLimit);
+      _searchesInFlight[requestKey] = pending;
     }
     try {
       final tracks = await pending;
-      _searchCache[key] = (storedAt: DateTime.now(), tracks: tracks);
+      final previous = _searchCache[key];
+      final merged = <YoutubeTrack>[...tracks];
+      final seen = merged.map((track) => track.url).toSet();
+      if (previous != null && DateTime.now().difference(previous.storedAt) < _searchCacheTtl) {
+        merged.addAll(previous.tracks.where((track) => seen.add(track.url)));
+      }
+      _searchCache[key] = (storedAt: DateTime.now(), tracks: merged);
       if (_searchCache.length > 32) _searchCache.remove(_searchCache.keys.first);
-      return tracks.take(resultLimit).toList(growable: false);
+      return merged.take(resultLimit).toList(growable: false);
     } finally {
-      if (identical(_searchesInFlight[key], pending)) _searchesInFlight.remove(key);
+      if (identical(_searchesInFlight[requestKey], pending)) _searchesInFlight.remove(requestKey);
     }
   }
 
-  Future<List<YoutubeTrack>> _runSearch(String query) async {
-    // Fill the whole small page so type-ahead and Enter share one native call.
-    final raw = await _invoke<String>('search', {'query': query, 'limit': 10});
+  Future<List<YoutubeTrack>> _runSearch(String query, {required int limit}) async {
+    final raw = await _invoke<String>('search', {'query': query, 'limit': limit});
     final decoded = jsonDecode(raw ?? '[]') as List;
     return decoded.map((e) => YoutubeTrack.fromJson(Map<String, dynamic>.from(e as Map))).toList(growable: false);
   }
