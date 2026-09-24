@@ -5,12 +5,15 @@ import 'package:resonance/app/theme.dart';
 import 'package:resonance/services/artwork_palette_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+enum ListeningFocus { local, stream }
+
 class ThemeProvider extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.system;
   ResonanceThemeStyle _themeStyle = ResonanceThemeStyle.obsidian;
   bool _fullThemePalette = true;
   bool _artworkPlayerColors = false;
   bool _windowsNativeControls = Platform.isWindows;
+  ListeningFocus _listeningFocus = ListeningFocus.local;
   ArtworkPalette? _artworkPalette;
   final ArtworkPaletteService _artworkPaletteService = ArtworkPaletteService();
   String? _currentArtworkKey;
@@ -22,6 +25,7 @@ class ThemeProvider extends ChangeNotifier {
   bool get fullThemePalette => _fullThemePalette;
   bool get artworkPlayerColors => _artworkPlayerColors;
   bool get windowsNativeControls => _windowsNativeControls;
+  ListeningFocus get listeningFocus => _listeningFocus;
   bool get hasArtworkPalette => _artworkPlayerColors && _artworkPalette != null;
   bool get preserveOledPlayerSurface => _themeStyle == ResonanceThemeStyle.voidTheme;
 
@@ -35,6 +39,9 @@ class ThemeProvider extends ChangeNotifier {
     _themeStyle = ResonanceThemeStyleLabel.fromStorage(prefs.getString('theme_style'));
     _fullThemePalette = prefs.getBool('theme_full_palette') ?? true;
     _windowsNativeControls = prefs.getBool('windows_native_controls') ?? Platform.isWindows;
+    _listeningFocus = prefs.getString('listening_focus') == ListeningFocus.stream.name
+        ? ListeningFocus.stream
+        : ListeningFocus.local;
     final artworkPlayerColors = prefs.getBool('artwork_player_colors') ?? false;
     if (artworkPlayerColors && !_artworkPlayerColors && _currentArtworkKey != null) {
       // The player can publish its current artwork before async preferences
@@ -90,6 +97,14 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('windows_native_controls', enabled);
+  }
+
+  Future<void> setListeningFocus(ListeningFocus focus) async {
+    if (_listeningFocus == focus) return;
+    _listeningFocus = focus;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('listening_focus', focus.name);
   }
 
   Future<void> updatePlayerArtwork(Uri? artworkUri) async {

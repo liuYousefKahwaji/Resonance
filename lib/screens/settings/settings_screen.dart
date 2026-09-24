@@ -433,6 +433,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SettingsCard(
               children: [
                 Consumer<ThemeProvider>(
+                  builder: (context, themeProvider, child) => _SettingsTile(
+                    icon: Icons.explore_rounded,
+                    title: 'Listening focus',
+                    subtitle: themeProvider.listeningFocus == ListeningFocus.local
+                        ? 'Open your local library first'
+                        : 'Open music discovery first; keep your library one tap away',
+                    trailing: DropdownButtonHideUnderline(
+                      child: DropdownButton<ListeningFocus>(
+                        key: const Key('listening-focus-setting'),
+                        value: themeProvider.listeningFocus,
+                        onChanged: (focus) {
+                          if (focus != null) themeProvider.setListeningFocus(focus);
+                        },
+                        items: const [
+                          DropdownMenuItem(value: ListeningFocus.local, child: Text('Local')),
+                          DropdownMenuItem(value: ListeningFocus.stream, child: Text('Stream')),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                _Divider(),
+                Consumer<ThemeProvider>(
                   builder: (context, themeProvider, child) {
                     return _SettingsTile(
                       icon: Icons.dark_mode_rounded,

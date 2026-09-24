@@ -2,6 +2,10 @@ import importlib.util
 import http.cookiejar
 import sys
 import unittest
+from unittest.mock import patch
+from contextlib import redirect_stdout
+import io
+import json
 from pathlib import Path
 
 
@@ -22,6 +26,22 @@ finally:
 
 
 class WindowsYoutubeMusicHomeTests(unittest.TestCase):
+    def test_guest_search_requires_no_browser_cookies(self):
+        class FakeMusic:
+            def __init__(self, language):
+                self.language = language
+
+            def search(self, query, filter, limit):
+                return [{"title": query, "videoId": "jNQXAC9IVRw", "artists": [{"name": "Artist"}]}]
+
+        output = io.StringIO()
+        with patch.object(helper, "YTMusic", FakeMusic), \
+                patch.object(sys, "argv", ["helper", "--action", "search", "--query", "Quick result", "--limit", "2"]), \
+                redirect_stdout(output):
+            helper.main()
+
+        self.assertEqual(json.loads(output.getvalue())[0]["title"], "Quick result")
+
     @staticmethod
     def _cookie(name, value, domain, path="/"):
         return http.cookiejar.Cookie(
@@ -151,6 +171,39 @@ class WindowsYoutubeMusicHomeTests(unittest.TestCase):
 
         result = helper._history(FakeMusic(), 1)
         self.assertEqual([track["title"] for track in result["tracks"]], ["First"])
+
+    def test_playable_home_avoids_optional_history_and_radio_calls(self):
+        class FakeMusic:
+            def __init__(self):
+                self.calls = []
+
+            def get_account_info(self):
+                self.calls.append("account")
+                return {"accountName": "Listener"}
+
+            def get_home(self, limit):
+                self.calls.append(("home", limit))
+                return [{"title": "Songs", "contents": [
+                    {"title": f"Song {index}", "videoId": f"aaaaaaaaaa{index}"}
+                    for index in range(4)
+                ]}]
+
+            def get_history(self):
+                self.calls.append("history")
+                return []
+
+            def get_watch_playlist(self, **_):
+                self.calls.append("radio")
+                return {}
+
+        music = FakeMusic()
+        output = io.StringIO()
+        with patch.object(helper, "_build_authenticated_ytmusic", return_value=music), \
+                patch.object(sys, "argv", ["helper", "--browser", "chrome"]), redirect_stdout(output):
+            helper.main()
+
+        self.assertEqual(music.calls, ["account", ("home", 24)])
+        self.assertTrue(json.loads(output.getvalue())["shelves"])
 
 
 if __name__ == "__main__":

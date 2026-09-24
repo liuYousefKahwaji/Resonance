@@ -200,10 +200,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser")
     parser.add_argument("--cookies-file")
-    parser.add_argument("--action", choices=("home", "history", "add-history"), default="home")
+    parser.add_argument("--action", choices=("home", "history", "add-history", "search"), default="home")
     parser.add_argument("--video-id")
-    parser.add_argument("--limit", type=int, default=12)
+    parser.add_argument("--query")
+    parser.add_argument("--limit", type=int, default=24)
     args = parser.parse_args()
+    if args.action == "search":
+        if not args.query or not args.query.strip():
+            parser.error("--query is required for search")
+        results = YTMusic(language="en").search(args.query, filter="videos", limit=max(1, min(args.limit, 10)))
+        tracks = [_track(item) for item in results]
+        print(json.dumps([track for track in tracks if track][:args.limit], ensure_ascii=False))
+        return
     if not args.browser and not args.cookies_file:
         parser.error("one of --browser or --cookies-file is required")
     if args.action == "add-history":
@@ -243,22 +251,24 @@ def main():
     # happens to return it after other continuation rows.
     shelves.sort(key=lambda shelf: 0 if "quick pick" in shelf["title"].lower() else 1)
 
-    history_tracks = []
-    try:
-        for history_item in ytmusic.get_history() or []:
-            track = _track(history_item)
-            if track and track not in history_tracks:
-                history_tracks.append(track)
-    except Exception:
-        # Home itself remains useful when history is unavailable or disabled.
-        pass
     existing_playable = []
     for shelf in shelves:
         for track in shelf["tracks"]:
             if track not in existing_playable:
                 existing_playable.append(track)
+    # Avoid extra network calls when the native Home feed is already playable.
+    history_tracks = []
+    if len(existing_playable) < 4:
+        try:
+            for history_item in ytmusic.get_history() or []:
+                track = _track(history_item)
+                if track and track not in history_tracks:
+                    history_tracks.append(track)
+        except Exception:
+            # Home itself remains useful when history is unavailable.
+            pass
     fallback_tracks = []
-    if not history_tracks and len(existing_playable) < 20:
+    if not history_tracks and not existing_playable:
         resolution_attempts = 0
         for shelf in home:
             for item in shelf.get("contents") or []:
@@ -278,9 +288,9 @@ def main():
                             fallback_tracks.append(track)
                 except Exception:
                     continue
-                if len(fallback_tracks) >= 20 or resolution_attempts >= 6:
+                if fallback_tracks or resolution_attempts >= 2:
                     break
-            if len(fallback_tracks) >= 20 or resolution_attempts >= 6:
+            if fallback_tracks or resolution_attempts >= 2:
                 break
     pick_source = history_tracks or (existing_playable + [track for track in fallback_tracks if track not in existing_playable])
     if pick_source and not any("quick pick" in shelf["title"].lower() for shelf in shelves):
@@ -298,7 +308,7 @@ def main():
         seen = set()
         suggestions = []
         seed = next((track for shelf in shelves for track in shelf["tracks"]), None)
-        if seed:
+        if seed and len(pick_source) < 4:
             try:
                 video_id = seed["url"].split("v=", 1)[1].split("&", 1)[0]
                 for item in (ytmusic.get_watch_playlist(videoId=video_id, radio=True, limit=25) or {}).get("tracks") or []:

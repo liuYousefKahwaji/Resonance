@@ -214,6 +214,12 @@ Future<void> main() async {
     ),
   );
 
+  // Start the small first Home page while the launch animation is visible.
+  // The Discover screen joins this request or paints the saved shelves.
+  if (youtubeAccessService.isConfigured && prefs.getString('listening_focus') == ListeningFocus.stream.name) {
+    unawaited(const YoutubeMusicHomeService().fetch(limit: 6).then<void>((_) {}, onError: (Object _) {}));
+  }
+
   if (Platform.isWindows) {
     unawaited(
       MediaKeysService.register(
@@ -331,6 +337,8 @@ class _MainAppState extends State<MainApp> {
   bool? _windowsChromeEnabled;
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   bool _handlingAndroidAction = false;
+  bool _streamControlsExpanded = false;
+  bool _streamControlsAutoOpened = false;
 
   final SettingsService _settingsService = SettingsService();
   _DesktopWindowHandler? _desktopHandler;
@@ -338,6 +346,10 @@ class _MainAppState extends State<MainApp> {
   @override
   void initState() {
     super.initState();
+    final alreadyPlaying = widget.handler.playbackVisualNotifier.value.playing;
+    _streamControlsExpanded = alreadyPlaying;
+    _streamControlsAutoOpened = alreadyPlaying;
+    if (Platform.isAndroid) widget.handler.playbackVisualNotifier.addListener(_openStreamControlsOnFirstPlay);
     widget.handler.youtubeFailureNotifier.addListener(_showPlaybackYoutubeFailure);
     widget.handler.outputDeviceErrorNotifier.addListener(_showOutputDeviceError);
     _initIntro();
@@ -440,6 +452,7 @@ class _MainAppState extends State<MainApp> {
 
   @override
   void dispose() {
+    if (Platform.isAndroid) widget.handler.playbackVisualNotifier.removeListener(_openStreamControlsOnFirstPlay);
     widget.handler.youtubeFailureNotifier.removeListener(_showPlaybackYoutubeFailure);
     widget.handler.outputDeviceErrorNotifier.removeListener(_showOutputDeviceError);
     _introTimer?.cancel();
@@ -451,6 +464,12 @@ class _MainAppState extends State<MainApp> {
       unawaited(MediaKeysService.unregister());
     }
     super.dispose();
+  }
+
+  void _openStreamControlsOnFirstPlay() {
+    if (_streamControlsAutoOpened || !widget.handler.playbackVisualNotifier.value.playing) return;
+    _streamControlsAutoOpened = true;
+    if (mounted) setState(() => _streamControlsExpanded = true);
   }
 
   int _playlistSearchRequest = 0;
@@ -1304,7 +1323,18 @@ class _MainAppState extends State<MainApp> {
                       child: Scaffold(
                         backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
                         appBar: _buildAppBar(nestedContext),
-                        body: _buildBody(nestedContext),
+                        body: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 240),
+                          switchInCurve: Curves.easeOutCubic,
+                          // Drop the outgoing page immediately: the library
+                          // owns track GlobalKeys that must never be mounted
+                          // twice during rapid focus switches.
+                          layoutBuilder: (currentChild, _) => currentChild ?? const SizedBox.shrink(),
+                          child: KeyedSubtree(
+                            key: ValueKey(themeProvider.listeningFocus),
+                            child: _buildBody(nestedContext),
+                          ),
+                        ),
                       ),
                     );
             },
@@ -1354,6 +1384,8 @@ class _MainAppState extends State<MainApp> {
   PreferredSizeWidget _buildAppBar(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final focus = context.watch<ThemeProvider>().listeningFocus;
+    final isStreamFocus = focus == ListeningFocus.stream;
     if (Platform.isWindows && useWindowsNativeControls(context)) {
       final border = theme.colorScheme.outline;
       final surface = theme.colorScheme.surface;
@@ -1369,8 +1401,25 @@ class _MainAppState extends State<MainApp> {
             ),
             child: Row(
               children: [
-                Text('Library', style: theme.appBarTheme.titleTextStyle),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  child: Text(
+                    isStreamFocus ? 'Discover' : 'Library',
+                    key: ValueKey(focus),
+                    style: theme.appBarTheme.titleTextStyle,
+                  ),
+                ),
                 const Spacer(),
+                Row(
+                  key: const Key('listening-focus-switcher'),
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildFocusTab(context, focus, ListeningFocus.local, 'Library', Icons.library_music_rounded),
+                    _buildFocusTab(context, focus, ListeningFocus.stream, 'Discover', Icons.explore_rounded),
+                  ],
+                ),
+                const SizedBox(width: 8),
+                if (isStreamFocus) _buildRootDownloadQueueToggle(compact: true),
                 IconButton(
                   key: const Key('windows-history-command'),
                   onPressed: () => _openHistory(context),
@@ -1395,38 +1444,50 @@ class _MainAppState extends State<MainApp> {
       scrolledUnderElevation: 0,
       surfaceTintColor: Colors.transparent,
       shadowColor: Colors.transparent,
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Theme.of(context).colorScheme.primary,
-              boxShadow: [
-                BoxShadow(
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6),
-                  blurRadius: 8,
-                  spreadRadius: 1,
+      title: InkWell(
+        key: const Key('listening-focus-switcher'),
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => context.read<ThemeProvider>().setListeningFocus(
+          isStreamFocus ? ListeningFocus.local : ListeningFocus.stream,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Theme.of(context).colorScheme.primary,
+                boxShadow: [
+                  BoxShadow(
+                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              child: Text(
+                isStreamFocus ? 'Discover' : 'Resonance',
+                key: ValueKey(focus),
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                  color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A),
                 ),
-              ],
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            'Resonance',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.5,
-              color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
       centerTitle: true,
       actions: [
+        if (isStreamFocus) _buildRootDownloadQueueToggle(),
         IconButton(
           onPressed: () => _openHistory(context),
           icon: Icon(Icons.history_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
@@ -1441,7 +1502,95 @@ class _MainAppState extends State<MainApp> {
     );
   }
 
+  Widget _buildFocusTab(
+    BuildContext context,
+    ListeningFocus current,
+    ListeningFocus option,
+    String label,
+    IconData icon,
+  ) {
+    final colors = Theme.of(context).colorScheme;
+    final selected = current == option;
+    return Semantics(
+      selected: selected,
+      button: true,
+      child: InkWell(
+        onTap: () => context.read<ThemeProvider>().setListeningFocus(option),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: selected ? colors.primary : Colors.transparent, width: 2)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 17, color: selected ? colors.primary : colors.onSurfaceVariant),
+              const SizedBox(width: 7),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: selected ? colors.onSurface : colors.onSurfaceVariant,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRootDownloadQueueToggle({bool compact = false}) => AnimatedBuilder(
+    animation: DownloadQueueController.instance,
+    builder: (context, _) {
+      final queue = DownloadQueueController.instance;
+      return IconButton(
+        key: const Key('root-download-queue-toggle'),
+        tooltip: queue.queueMode ? 'Disable download queue' : 'Enable download queue',
+        onPressed: () => queue.setQueueMode(!queue.queueMode),
+        icon: Badge(
+          isLabelVisible: queue.pendingCount > 0,
+          label: Text('${queue.pendingCount}'),
+          child: Icon(
+            queue.queueMode ? Icons.playlist_add_check_circle_rounded : Icons.playlist_add_rounded,
+            size: compact ? 18 : null,
+          ),
+        ),
+      );
+    },
+  );
+
   Widget _buildBody(BuildContext nestedContext) {
+    if (nestedContext.watch<ThemeProvider>().listeningFocus == ListeningFocus.stream) {
+      return Column(
+        children: [
+          Expanded(
+            child: YoutubeSearchScreen(
+              key: ValueKey('discover-$activePlaylistNumber'),
+              playlistNumber: activePlaylistNumber,
+              playlistName: playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber',
+              embedded: true,
+              startOnMusicHome: YoutubeAccessService.active?.isConfigured == true,
+              onLibraryChanged: () => unawaited(_loadPlaylistFromDisk()),
+              onOpenLibrary: () => nestedContext.read<ThemeProvider>().setListeningFocus(ListeningFocus.local),
+            ),
+          ),
+          if (Platform.isAndroid)
+            _buildStreamControls()
+          else ...[
+            AlbumCover(
+              onTap: _handleNowPlayingTap,
+              onArtworkTap: _handleNowPlayingArtworkTap,
+              onQueueRequested: _toggleUpcomingQueue,
+              artworkRevision: _artworkRevision,
+            ),
+            const PlayerControls(),
+          ],
+        ],
+      );
+    }
     final trackListWidget = isLoading
         ? Center(
             child: Column(
@@ -1553,6 +1702,46 @@ class _MainAppState extends State<MainApp> {
           ],
         );
       },
+    );
+  }
+
+  Widget _buildStreamControls() {
+    final colors = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        InkWell(
+          key: const Key('stream-controls-toggle'),
+          onTap: () => setState(() => _streamControlsExpanded = !_streamControlsExpanded),
+          child: SizedBox(
+            height: _streamControlsExpanded ? 30 : 44,
+            child: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _streamControlsExpanded ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
+                    color: colors.onSurfaceVariant,
+                  ),
+                  if (!_streamControlsExpanded) ...[
+                    const SizedBox(width: 4),
+                    Text('Show player', style: TextStyle(color: colors.onSurfaceVariant)),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (_streamControlsExpanded) ...[
+          AlbumCover(
+            onTap: _handleNowPlayingTap,
+            onArtworkTap: _handleNowPlayingArtworkTap,
+            onQueueRequested: _toggleUpcomingQueue,
+            artworkRevision: _artworkRevision,
+          ),
+          const PlayerControls(),
+        ],
+      ],
     );
   }
 

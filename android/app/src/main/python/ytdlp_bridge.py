@@ -25,8 +25,10 @@ import yt_dlp
 
 _BASE_OPTS = {
     "quiet": True,
-    "extractor_retries": 3,
-    "socket_timeout": 20,
+    # Interactive search and playback must fail promptly. Downloads override
+    # these limits below because a long transfer can tolerate retries.
+    "extractor_retries": 1,
+    "socket_timeout": 12,
 }
 
 _MAX_DIAGNOSTIC_CHARS = 4096
@@ -88,6 +90,20 @@ _ANDROID_VR_EXTRACTOR_ARGS = {
 _WEB_EMBEDDED_EXTRACTOR_ARGS = {
     "youtube": {"player_client": ["web_embedded"]},
 }
+
+
+def _should_try_alternate_player(message):
+    """Player clients can repair format failures, not network or login errors."""
+    lowered = str(message).lower()
+    return not any(marker in lowered for marker in (
+        "timed out",
+        "network is unreachable",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "sign in to confirm",
+        "account cookies are no longer valid",
+        "http error 429",
+    ))
 
 
 def _ytmusic_cookie_header(cookie_file):
@@ -212,7 +228,7 @@ def _normalize_music_home_item(item):
     }
 
 
-def get_music_home(limit: int = 12, cookie_file=None) -> str:
+def get_music_home(limit: int = 24, cookie_file=None) -> str:
     """Return normalized authenticated shelves from YouTube Music home."""
     ytmusic = _build_authenticated_ytmusic(cookie_file)
     home = ytmusic.get_home(limit=max(1, min(int(limit), 80)))
@@ -231,21 +247,23 @@ def get_music_home(limit: int = 12, cookie_file=None) -> str:
         if title and items:
             shelves.append({"title": title, "tracks": tracks, "items": items})
     shelves.sort(key=lambda shelf: 0 if "quick pick" in shelf["title"].lower() else 1)
-    history_tracks = []
-    try:
-        for history_item in ytmusic.get_history() or []:
-            track = _normalize_music_item(history_item)
-            if track and track not in history_tracks:
-                history_tracks.append(track)
-    except Exception:
-        pass
     existing_playable = []
     for shelf in shelves:
         for track in shelf["tracks"]:
             if track not in existing_playable:
                 existing_playable.append(track)
+    # Optional enrichment should not block an already playable Home feed.
+    history_tracks = []
+    if len(existing_playable) < 4:
+        try:
+            for history_item in ytmusic.get_history() or []:
+                track = _normalize_music_item(history_item)
+                if track and track not in history_tracks:
+                    history_tracks.append(track)
+        except Exception:
+            pass
     fallback_tracks = []
-    if not history_tracks and len(existing_playable) < 20:
+    if not history_tracks and not existing_playable:
         resolution_attempts = 0
         for shelf in home or []:
             for item in shelf.get("contents") or []:
@@ -265,9 +283,9 @@ def get_music_home(limit: int = 12, cookie_file=None) -> str:
                             fallback_tracks.append(track)
                 except Exception:
                     continue
-                if len(fallback_tracks) >= 20 or resolution_attempts >= 6:
+                if fallback_tracks or resolution_attempts >= 2:
                     break
-            if len(fallback_tracks) >= 20 or resolution_attempts >= 6:
+            if fallback_tracks or resolution_attempts >= 2:
                 break
     pick_source = history_tracks or (existing_playable + [track for track in fallback_tracks if track not in existing_playable])
     if pick_source and not any("quick pick" in shelf["title"].lower() for shelf in shelves):
@@ -281,7 +299,7 @@ def get_music_home(limit: int = 12, cookie_file=None) -> str:
         seen = set()
         suggestions = []
         seed = next((track for shelf in shelves for track in shelf["tracks"]), None)
-        if seed:
+        if seed and len(pick_source) < 4:
             try:
                 video_id = seed["url"].split("v=", 1)[1].split("&", 1)[0]
                 for item in (ytmusic.get_watch_playlist(videoId=video_id, radio=True, limit=25) or {}).get("tracks") or []:
@@ -406,6 +424,8 @@ def _extract_info(target, extra=None, download=False, cookie_file=None, transfor
                 if detail and detail not in message
                 else error
             )
+            if not _should_try_alternate_player(f"{message} | {detail}"):
+                raise last_error
     raise last_error or RuntimeError(f"Could not extract: {target}")
 
 
@@ -414,11 +434,35 @@ def _extract_info(target, extra=None, download=False, cookie_file=None, transfor
 def search(query: str, limit: int = 10, cookie_file=None) -> str:
     """Return a JSON array capped to the requested search result count."""
     result_limit = max(1, min(int(limit), 10))
+    # YT Music's search endpoint returns parsed video results in one request.
+    # A guest request also avoids reading/copying browser cookies for each keypress.
+    try:
+        from ytmusicapi import YTMusic
+        items = YTMusic(language="en").search(query, filter="videos", limit=result_limit)
+        fast_results = [_normalize_music_item(item) for item in items]
+        fast_results = [item for item in fast_results if item][:result_limit]
+        if fast_results:
+            return json.dumps(fast_results, ensure_ascii=False)
+    except Exception:
+        pass  # Preserve yt-dlp's broader YouTube search as a fallback.
     opts = {
         "extract_flat": True,
         "skip_download": True,
     }
-    info, _ = _extract_info(f"ytsearch{result_limit}:{query}", opts, cookie_file=cookie_file)
+    # A flat search never extracts a video player. Running the android_vr and
+    # web_embedded player fallbacks on search errors repeats the same request
+    # and can turn a network failure into a minute-long wait.
+    logger = _DiagnosticLogger()
+    try:
+        with _make_ydl(opts, cookie_file=cookie_file, logger=logger) as ydl:
+            info = ydl.extract_info(f"ytsearch{result_limit}:{query}", download=False)
+            if logger.account_cookies_invalid:
+                raise RuntimeError(logger.summary)
+    except Exception as error:
+        detail = logger.summary
+        if detail and detail not in str(error):
+            raise RuntimeError(f"{error} | {detail}") from error
+        raise
 
     results = []
     for entry in (info.get("entries") or []):
@@ -596,28 +640,16 @@ def get_stream_data(url: str, cookie_file=None) -> str:
     # Prefer a single non-DRM audio stream. This may be a direct HTTPS URL or
     # HLS manifest; ExoPlayer handles both. Do not filter to protocol^=http,
     # because that rejects valid m3u8_native streams before ExoPlayer sees them.
-    last_error = None
-    for fmt in [
-        "bestaudio[has_drm!=true]/best[has_drm!=true]",
-        "bestaudio/best",
-    ]:
-        opts = {
-            "skip_download": True,
-            "format": fmt,
-            "no_playlist": True,
-        }
-        try:
-            payload, _ = _extract_info(
-                url,
-                opts,
-                cookie_file=cookie_file,
-                transform=_stream_payload,
-            )
-            return json.dumps(payload, ensure_ascii=False)
-        except Exception as error:
-            last_error = error
-
-    raise last_error or RuntimeError(f"Could not resolve stream URL for: {url}")
+    # The format expression already has a best-audio/best fallback. Repeating
+    # the complete extractor chain with a second expression doubles the
+    # worst-case playback startup without adding a distinct source.
+    opts = {
+        "skip_download": True,
+        "format": "bestaudio[has_drm!=true]/best[has_drm!=true]/bestaudio/best",
+        "no_playlist": True,
+    }
+    payload, _ = _extract_info(url, opts, cookie_file=cookie_file, transform=_stream_payload)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def get_stream_url(url: str, cookie_file=None) -> str:
@@ -767,6 +799,8 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None) -> None:
         # Conversion is handled by the app's bundled FFmpegKit library.
         # Never ask yt-dlp to locate desktop ffmpeg/ffprobe executables on Android.
         "yes_playlist": True,
+        "extractor_retries": 3,
+        "socket_timeout": 20,
     }
 
     try:

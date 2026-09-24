@@ -6,6 +6,7 @@ import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/windows_ytmusic_helper.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:resonance/services/youtube/youtube_history_preferences.dart';
+import 'package:resonance/services/youtube/youtube_music_history_service.dart';
 
 enum YoutubeHistoryWriteStatus { written, disabled, skipped, authUnavailable, unsupported, failed }
 
@@ -76,6 +77,7 @@ class YoutubeHistoryService implements YoutubeHistoryReporter {
       final payload = _decodePayload(raw);
       if (payload?['ok'] == true && _asInt(payload?['statusCode']) == 204) {
         await _access.recordAuthenticatedSuccess();
+        YoutubeMusicHistoryService.clearCache();
         return YoutubeHistoryWriteResult(YoutubeHistoryWriteStatus.written, videoId: videoId);
       }
       return YoutubeHistoryWriteResult(

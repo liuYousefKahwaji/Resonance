@@ -177,6 +177,38 @@ void main() {
     expect(find.text('Connect YouTube access'), findsOneWidget);
   });
 
+  testWidgets('embedded Discover opens Home without a second app bar or eager suggestion search', (tester) async {
+    var suggestionCalls = 0;
+    var homeCalls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          appBar: AppBar(title: const Text('Discover')),
+          body: YoutubeSearchScreen(
+            playlistNumber: 1,
+            playlistName: 'Playlist 1',
+            embedded: true,
+            startOnMusicHome: true,
+            suggestionsLoader: ({required bool refresh, required bool Function() isCancelled}) async {
+              suggestionCalls++;
+              throw StateError('Suggestions should stay idle');
+            },
+            youtubeMusicHomeLoader: () async {
+              homeCalls++;
+              return const YoutubeMusicHome(shelves: []);
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AppBar), findsOneWidget);
+    expect(find.byKey(const Key('youtube-search-field')), findsOneWidget);
+    expect(homeCalls, 1);
+    expect(suggestionCalls, 0);
+  });
+
   testWidgets('YouTube Music Home renders compact picks and collection shelves', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1000, 1200));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -228,7 +260,8 @@ void main() {
     await tester.tap(find.text('YouTube Music Home'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Your YouTube Music'), findsOneWidget);
+    expect(find.text('Your YouTube Music'), findsNothing);
+    if (Platform.isWindows) expect(find.byTooltip('Refresh home'), findsOneWidget);
     expect(find.text('Quick picks'), findsOneWidget);
     expect(find.text('Playable pick'), findsOneWidget);
     expect(find.text('New releases'), findsOneWidget);

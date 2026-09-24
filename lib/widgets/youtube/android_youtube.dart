@@ -37,6 +37,9 @@ import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 class AndroidYoutubeDownloader {
   static const _method = MethodChannel('resonance/android_youtube');
   static const _event = EventChannel('resonance/android_youtube/events');
+  static const _searchCacheTtl = Duration(minutes: 5);
+  static final Map<String, ({DateTime storedAt, List<YoutubeTrack> tracks})> _searchCache = {};
+  static final Map<String, Future<List<YoutubeTrack>>> _searchesInFlight = {};
 
   static YoutubeFailure _failure(Object error, {String? sourceUrl}) {
     final service = YoutubeAccessService.active;
@@ -58,9 +61,34 @@ class AndroidYoutubeDownloader {
   }
 
   Future<List<YoutubeTrack>> search(String query, {int limit = 10}) async {
-    final raw = await _invoke<String>('search', {'query': query, 'limit': limit.clamp(1, 10)});
+    final resultLimit = limit.clamp(1, 10);
+    final normalized = query.trim().toLowerCase();
+    final access = YoutubeAccessService.active;
+    final key = '${identityHashCode(access)}:${access?.revision ?? 0}:$normalized';
+    final cached = _searchCache[key];
+    if (cached != null && DateTime.now().difference(cached.storedAt) < _searchCacheTtl) {
+      return cached.tracks.take(resultLimit).toList(growable: false);
+    }
+    var pending = _searchesInFlight[key];
+    if (pending == null) {
+      pending = _runSearch(query.trim());
+      _searchesInFlight[key] = pending;
+    }
+    try {
+      final tracks = await pending;
+      _searchCache[key] = (storedAt: DateTime.now(), tracks: tracks);
+      if (_searchCache.length > 32) _searchCache.remove(_searchCache.keys.first);
+      return tracks.take(resultLimit).toList(growable: false);
+    } finally {
+      if (identical(_searchesInFlight[key], pending)) _searchesInFlight.remove(key);
+    }
+  }
+
+  Future<List<YoutubeTrack>> _runSearch(String query) async {
+    // Fill the whole small page so type-ahead and Enter share one native call.
+    final raw = await _invoke<String>('search', {'query': query, 'limit': 10});
     final decoded = jsonDecode(raw ?? '[]') as List;
-    return decoded.map((e) => YoutubeTrack.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+    return decoded.map((e) => YoutubeTrack.fromJson(Map<String, dynamic>.from(e as Map))).toList(growable: false);
   }
 
   Future<YoutubeTrack> lookup(String url) async {

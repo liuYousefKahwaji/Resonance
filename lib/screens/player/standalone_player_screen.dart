@@ -10,6 +10,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/models/lyrics.dart';
+import 'package:resonance/core/lyrics/lyrics_direction.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/services/lyrics_service.dart';
 import 'package:resonance/services/lyrics_display_preferences.dart';
@@ -1156,72 +1157,86 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
                   final line = document.lines[index];
                   final isActive = index == _activeLine;
                   final isPast = _activeLine >= 0 && index < _activeLine;
-                  return InkWell(
-                    key: _lineKeys[index],
-                    borderRadius: BorderRadius.circular(18),
-                    onTap: line.start == null ? null : () => _seekLine(line),
-                    child: AnimatedScale(
-                      scale: isActive ? 1.025 : 1,
-                      alignment: Alignment.centerLeft,
-                      duration: const Duration(milliseconds: 260),
-                      curve: Curves.easeOutBack,
-                      child: AnimatedContainer(
+                  final direction = lyricTextDirection(line.text);
+                  return Directionality(
+                    textDirection: direction,
+                    child: InkWell(
+                      key: _lineKeys[index],
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: line.start == null ? null : () => _seekLine(line),
+                      child: AnimatedScale(
+                        scale: isActive ? 1.025 : 1,
+                        alignment: direction == TextDirection.rtl ? Alignment.centerRight : Alignment.centerLeft,
                         duration: const Duration(milliseconds: 260),
-                        curve: Curves.easeOutCubic,
-                        margin: EdgeInsets.symmetric(vertical: isActive ? 5 : 2),
-                        padding: EdgeInsets.fromLTRB(isActive ? 14 : 8, isActive ? 16 : 10, 10, isActive ? 16 : 10),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(18),
-                          gradient: isActive
-                              ? LinearGradient(
-                                  colors: [
-                                    theme.colorScheme.primary.withValues(alpha: .22),
-                                    theme.colorScheme.secondary.withValues(alpha: .08),
-                                    Colors.transparent,
-                                  ],
-                                )
-                              : null,
-                          border: isActive ? Border.all(color: theme.colorScheme.primary.withValues(alpha: .34)) : null,
-                          boxShadow: isActive
-                              ? [
-                                  BoxShadow(
-                                    color: theme.colorScheme.primary.withValues(alpha: .20),
-                                    blurRadius: 24,
-                                    spreadRadius: -5,
-                                  ),
-                                ]
-                              : null,
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 240),
-                              width: isActive ? 4 : 0,
-                              height: isActive ? 30 : 0,
-                              margin: EdgeInsets.only(right: isActive ? 12 : 0, top: 1),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.primary,
-                                borderRadius: BorderRadius.circular(99),
-                                boxShadow: isActive
-                                    ? [
-                                        BoxShadow(
-                                          color: theme.colorScheme.primary.withValues(alpha: .75),
-                                          blurRadius: 12,
-                                        ),
-                                      ]
-                                    : null,
+                        curve: Curves.easeOutBack,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 260),
+                          curve: Curves.easeOutCubic,
+                          margin: EdgeInsets.symmetric(vertical: isActive ? 5 : 2),
+                          padding: EdgeInsetsDirectional.fromSTEB(
+                            isActive ? 14 : 8,
+                            isActive ? 16 : 10,
+                            10,
+                            isActive ? 16 : 10,
+                          ),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(18),
+                            gradient: isActive
+                                ? LinearGradient(
+                                    begin: AlignmentDirectional.centerStart,
+                                    end: AlignmentDirectional.centerEnd,
+                                    colors: [
+                                      theme.colorScheme.primary.withValues(alpha: .22),
+                                      theme.colorScheme.secondary.withValues(alpha: .08),
+                                      Colors.transparent,
+                                    ],
+                                  )
+                                : null,
+                            border: isActive
+                                ? Border.all(color: theme.colorScheme.primary.withValues(alpha: .34))
+                                : null,
+                            boxShadow: isActive
+                                ? [
+                                    BoxShadow(
+                                      color: theme.colorScheme.primary.withValues(alpha: .20),
+                                      blurRadius: 24,
+                                      spreadRadius: -5,
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                          child: Row(
+                            textDirection: direction,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              AnimatedContainer(
+                                duration: const Duration(milliseconds: 240),
+                                width: isActive ? 4 : 0,
+                                height: isActive ? 30 : 0,
+                                margin: EdgeInsetsDirectional.only(end: isActive ? 12 : 0, top: 1),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.primary,
+                                  borderRadius: BorderRadius.circular(99),
+                                  boxShadow: isActive
+                                      ? [
+                                          BoxShadow(
+                                            color: theme.colorScheme.primary.withValues(alpha: .75),
+                                            blurRadius: 12,
+                                          ),
+                                        ]
+                                      : null,
+                                ),
                               ),
-                            ),
-                            Expanded(
-                              child: _LyricLineText(
-                                line: line,
-                                position: _lyricPosition,
-                                active: isActive,
-                                past: isPast,
+                              Expanded(
+                                child: _LyricLineText(
+                                  line: line,
+                                  position: _lyricPosition,
+                                  active: isActive,
+                                  past: isPast,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -1258,6 +1273,7 @@ class _LyricLineText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final direction = lyricTextDirection(line.text);
     final base = theme.textTheme.headlineSmall?.copyWith(
       height: 1.16,
       fontWeight: active ? FontWeight.w900 : FontWeight.w700,
@@ -1266,7 +1282,12 @@ class _LyricLineText extends StatelessWidget {
       color: active ? theme.colorScheme.onSurface : theme.colorScheme.onSurface.withValues(alpha: past ? 0.48 : 0.30),
     );
     if (!active || line.words.isEmpty || base == null) {
-      return Text(line.text.isEmpty ? '♪' : line.text, style: base);
+      return Text(
+        line.text.isEmpty ? '♪' : line.text,
+        style: base,
+        textDirection: direction,
+        textAlign: TextAlign.start,
+      );
     }
     return _KaraokeText(
       line: line,
@@ -1298,7 +1319,7 @@ class _KaraokeText extends StatelessWidget {
         activeStyle: activeStyle,
         maxWidth: constraints.maxWidth,
         textScaler: MediaQuery.textScalerOf(context),
-        textDirection: Directionality.of(context),
+        textDirection: lyricTextDirection(line.text),
       );
       return RepaintBoundary(
         child: CustomPaint(size: Size(constraints.maxWidth, painter.height), painter: painter),
@@ -1333,6 +1354,7 @@ class _KaraokePainter extends CustomPainter {
     text: TextSpan(text: text, style: style),
     textScaler: textScaler,
     textDirection: textDirection,
+    textAlign: TextAlign.start,
   )..layout(maxWidth: maxWidth);
 
   double get height => _base.height;
@@ -1353,8 +1375,12 @@ class _KaraokePainter extends CustomPainter {
           : (currentPosition - word.start).inMicroseconds / span.inMicroseconds;
       if (fraction > 0) {
         for (final box in _active.getBoxesForSelection(TextSelection(baseOffset: offset, extentOffset: end))) {
-          final filledRight = box.left + box.toRect().width * fraction;
-          path.addRect(Rect.fromLTRB(box.left, box.top, filledRight, box.bottom));
+          final width = box.toRect().width * fraction;
+          path.addRect(
+            box.direction == TextDirection.rtl
+                ? Rect.fromLTRB(box.right - width, box.top, box.right, box.bottom)
+                : Rect.fromLTRB(box.left, box.top, box.left + width, box.bottom),
+          );
         }
       }
       offset = end;
@@ -1369,6 +1395,8 @@ class _KaraokePainter extends CustomPainter {
   bool shouldRepaint(covariant _KaraokePainter oldDelegate) =>
       oldDelegate.line != line ||
       oldDelegate.maxWidth != maxWidth ||
+      oldDelegate.textDirection != textDirection ||
+      oldDelegate.textScaler != textScaler ||
       oldDelegate.baseStyle != baseStyle ||
       oldDelegate.activeStyle != activeStyle;
 }

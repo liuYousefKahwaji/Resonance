@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/models/youtube_track.dart';
@@ -212,6 +214,33 @@ void main() {
 
     expect(result.tracks, hasLength(10));
     expect(calls, SuggestedMusicService.minimumSearchRequests);
+  });
+
+  test('the first four suggestion searches start in the same network wave', () async {
+    final prefs = await SharedPreferences.getInstance();
+    final profile = _profile([
+      for (var index = 0; index < 6; index++)
+        PlaylistProfileTrack(path: 'parallel-$index', title: 'Seed $index', artist: 'Artist $index'),
+    ]);
+    final requests = <Completer<List<YoutubeTrack>>>[];
+    final result = SuggestedMusicService(preferences: prefs).generate(
+      profile: profile,
+      search: (_) {
+        final request = Completer<List<YoutubeTrack>>();
+        requests.add(request);
+        return request.future;
+      },
+    );
+
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(requests, hasLength(4));
+    for (var batch = 0; batch < requests.length; batch++) {
+      requests[batch].complete([
+        for (var index = 0; index < 10; index++)
+          _youtube(900 + batch * 10 + index, artist: 'New Artist ${batch * 10 + index}'),
+      ]);
+    }
+    expect((await result).tracks, hasLength(10));
   });
 
   testWidgets('ranking isolate does not retain the UI cancellation context', (tester) async {

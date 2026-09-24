@@ -25,6 +25,7 @@ import 'package:resonance/core/youtube/windows_process_output.dart';
 import 'package:resonance/services/youtube_stats_service.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
+import 'package:resonance/services/youtube/windows_fast_search.dart';
 import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
@@ -103,7 +104,11 @@ class MediaDownloader {
     }
   }
 
-  Future<List<YoutubeTrack>> _runSearch(String query, {required bool background}) async {
+  Future<List<YoutubeTrack>> _runSearch(String query, {required bool background, bool guest = true}) async {
+    if (guest) {
+      final fastResults = await _searchMusicVideos(query);
+      if (fastResults.isNotEmpty) return fastResults;
+    }
     final started = await _runner.start([
       '--flat-playlist',
 
@@ -115,7 +120,7 @@ class MediaDownloader {
       // lets a two-item type-ahead preview and the subsequent Enter key
       // share one native process instead of paying Windows startup twice.
       'ytsearch10:$query',
-    ]);
+    ], guest: guest);
     final process = started.process;
     if (background) _backgroundSearchProcesses.add(process);
 
@@ -133,6 +138,9 @@ class MediaDownloader {
     final stderr = await stderrFuture;
 
     if (exitCode != 0) {
+      if (guest && _runner.hasConfiguredAccess) {
+        return _runSearch(query, background: background, guest: false);
+      }
       throw _runner.failureForDiagnostics(
         stderr.isEmpty ? 'yt-dlp exited with code $exitCode' : stderr,
         authenticated: started.authenticated,
@@ -154,6 +162,14 @@ class MediaDownloader {
     }
 
     return results;
+  }
+
+  Future<List<YoutubeTrack>> _searchMusicVideos(String query) async {
+    try {
+      return await const WindowsFastSearch().search(query);
+    } catch (_) {
+      return const [];
+    }
   }
 
   Future<YoutubeTrack> lookup(String url) async {
@@ -425,7 +441,6 @@ class MediaDownloader {
             final candidatePath = separator < 0 ? trimmed : trimmed.substring(0, separator);
             if (_looksLikeAudioPath(candidatePath)) {
               final cleanPath = p.normalize(candidatePath);
-              await Future.delayed(const Duration(milliseconds: 150));
               await importPath(
                 cleanPath,
                 youtubeVideoId: candidateId != null && TrackSourceRepository.isValidYoutubeVideoId(candidateId)

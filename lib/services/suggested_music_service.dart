@@ -587,9 +587,11 @@ class SuggestedMusicService {
     }
     final candidates = <RecommendationCandidate>[];
     final requestCount = math.min(jobs.length, maxSearchRequests);
-    for (var offset = 0; offset < requestCount; offset += 2) {
+    // The minimum useful pool needs four searches. Start them together so
+    // discovery waits for one network round trip rather than two serial ones.
+    for (var offset = 0; offset < requestCount; offset += 4) {
       if (isCancelled?.call() ?? false) throw const SuggestedMusicCancelled();
-      final batch = jobs.skip(offset).take(math.min(2, requestCount - offset)).toList(growable: false);
+      final batch = jobs.skip(offset).take(math.min(4, requestCount - offset)).toList(growable: false);
       final batchResults = await Future.wait([
         for (final job in batch) _runSuggestionSearch(search, job.query, searchTimeout),
       ]);

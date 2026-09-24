@@ -160,9 +160,7 @@ class MainActivity : AudioServiceFragmentActivity() {
                         val limit = (call.argument<Int>("limit") ?: 10).coerceIn(1, 10)
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                val json = withYoutubeCookieCopy { cookiePath ->
-                                    bridge.callAttr("search", query, limit, cookiePath).toString()
-                                }
+                                val json = bridge.callAttr("search", query, limit).toString()
                                 withContext(Dispatchers.Main) { result.success(json) }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
@@ -289,7 +287,7 @@ class MainActivity : AudioServiceFragmentActivity() {
 
                     // ── getMusicHome ──────────────────────────────────────
                     "getMusicHome" -> {
-                        val limit = (call.argument<Int>("limit") ?: 60).coerceIn(1, 80)
+                        val limit = (call.argument<Int>("limit") ?: 24).coerceIn(1, 80)
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
                                 val json = withYoutubeCookieCopy { cookiePath ->

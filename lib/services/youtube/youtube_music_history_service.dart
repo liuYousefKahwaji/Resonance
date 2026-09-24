@@ -10,10 +10,14 @@ import 'package:resonance/services/youtube/youtube_access_service.dart';
 
 class YoutubeMusicHistoryService {
   static const _androidChannel = MethodChannel('resonance/android_youtube');
+  static const _cacheTtl = Duration(minutes: 2);
+  static ({YoutubeAccessService access, int revision, int limit, DateTime storedAt, List<YoutubeTrack> tracks})? _cache;
+
+  static void clearCache() => _cache = null;
 
   const YoutubeMusicHistoryService();
 
-  Future<List<YoutubeTrack>> fetch({int limit = 100}) async {
+  Future<List<YoutubeTrack>> fetch({int limit = 100, bool forceRefresh = false}) async {
     final access = YoutubeAccessService.active;
     if (access == null || !access.isConfigured) {
       throw const YoutubeFailure(
@@ -21,8 +25,17 @@ class YoutubeMusicHistoryService {
         userMessage: 'Connect YouTube access to view your YouTube Music history.',
       );
     }
+    final bounded = limit.clamp(1, 100);
+    final cached = _cache;
+    if (!forceRefresh &&
+        cached != null &&
+        identical(cached.access, access) &&
+        cached.revision == access.revision &&
+        cached.limit == bounded &&
+        DateTime.now().difference(cached.storedAt) < _cacheTtl) {
+      return cached.tracks;
+    }
     try {
-      final bounded = limit.clamp(1, 100);
       final raw = Platform.isAndroid
           ? await _androidChannel.invokeMethod<String>('getMusicHistory', {'limit': bounded})
           : Platform.isWindows
@@ -41,6 +54,13 @@ class YoutubeMusicHistoryService {
         if (track.videoId != null) tracks.add(track);
       }
       await access.recordAuthenticatedSuccess();
+      _cache = (
+        access: access,
+        revision: access.revision,
+        limit: bounded,
+        storedAt: DateTime.now(),
+        tracks: List.unmodifiable(tracks),
+      );
       return tracks;
     } catch (error) {
       final failure = error is YoutubeFailure

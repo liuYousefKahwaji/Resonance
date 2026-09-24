@@ -72,14 +72,14 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
     if (!_tabs.indexIsChanging) setState(() {});
   }
 
-  Future<void> _loadYoutube() async {
+  Future<void> _loadYoutube({bool refresh = false}) async {
     final generation = ++_loadGeneration;
     setState(() {
       _loadingYoutube = true;
       _youtubeError = null;
     });
     try {
-      final tracks = await _youtubeHistory.fetch(limit: 100);
+      final tracks = await _youtubeHistory.fetch(limit: 100, forceRefresh: refresh);
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _youtubeTracks = tracks;
@@ -125,7 +125,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
 
   Future<void> _playYoutube(YoutubeTrack selected) async {
     final tracks = _visibleYoutube;
-    await context.read<PlayerHandler>().playStandaloneStream(
+    final playback = context.read<PlayerHandler>().playStandaloneStream(
       url: selected.url,
       title: selected.title,
       artist: selected.artist,
@@ -141,7 +141,23 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
       ],
       queueIndex: tracks.indexWhere((track) => track.url == selected.url),
     );
-    if (mounted) await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const StandalonePlayerScreen()));
+    if (!mounted) {
+      await playback;
+      return;
+    }
+    final route = MaterialPageRoute<void>(builder: (_) => const StandalonePlayerScreen());
+    final page = Navigator.push<void>(context, route);
+    try {
+      await playback;
+    } catch (error) {
+      if (mounted && route.isCurrent) Navigator.pop(context);
+      await page;
+      if (mounted) {
+        await showYoutubeFailure(context, error, sourceUrl: selected.url, actionLabel: 'Could not play stream');
+      }
+      return;
+    }
+    await page;
   }
 
   Future<void> _stream(YoutubeTrack track) async {
@@ -223,7 +239,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
             ),
           if (_tabs.index == 0)
             IconButton(
-              onPressed: _loadingYoutube ? null : _loadYoutube,
+              onPressed: _loadingYoutube ? null : () => _loadYoutube(refresh: true),
               tooltip: 'Refresh',
               icon: const Icon(Icons.refresh_rounded),
             ),
@@ -282,7 +298,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
         title: 'Could not load YouTube Music history',
         message: 'Reconnect YouTube access if your session expired.',
         primaryLabel: 'Retry',
-        onPrimary: _loadYoutube,
+        onPrimary: () => _loadYoutube(refresh: true),
         secondaryLabel: 'YouTube access',
         onSecondary: () =>
             Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const YoutubeAccessScreen())),
@@ -299,7 +315,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
       );
     }
     return RefreshIndicator(
-      onRefresh: _loadYoutube,
+      onRefresh: () => _loadYoutube(refresh: true),
       child: ListView.builder(
         padding: const EdgeInsets.only(top: 4, bottom: 20),
         itemCount: tracks.length,

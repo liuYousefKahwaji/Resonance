@@ -45,6 +45,14 @@ class PlaybackVisualState {
   int get hashCode => Object.hash(trackId, playing, loading);
 }
 
+bool resolvedStreamCacheIsFresh(ResolvedYoutubeStream stream, DateTime resolvedAt, DateTime now, Duration maxAge) {
+  if (now.difference(resolvedAt) >= maxAge) return false;
+  final expirySeconds = int.tryParse(stream.uri.queryParameters['expire'] ?? '');
+  if (expirySeconds == null) return true;
+  final expiry = DateTime.fromMillisecondsSinceEpoch(expirySeconds * 1000);
+  return now.isBefore(expiry.subtract(const Duration(minutes: 1)));
+}
+
 /// A safe, platform-neutral description of an output route exposed by the
 /// Windows media_kit backend. Android routes audio through the OS and does
 /// not expose an equivalent per-player device API in just_audio.
@@ -151,7 +159,22 @@ bool playbackPositionAdvanced(Duration initial, Duration current) =>
     current - initial >= const Duration(milliseconds: 250);
 
 @visibleForTesting
-bool supportsPlaybackHealthMonitoring({required bool isWindows, required bool isStream}) => !isStream || isWindows;
+bool supportsPlaybackHealthMonitoring({required bool isWindows, required bool isStream}) => true;
+
+/// Keeps pause/open/source replacement commands from crossing on the native
+/// player. A failed command still releases the queue for the next selection.
+@visibleForTesting
+class BackendSourceOperationQueue {
+  Future<void> _tail = Future<void>.value();
+
+  Future<void> get idle => _tail;
+
+  Future<void> run(Future<void> Function() operation) {
+    final current = _tail.then((_) => operation());
+    _tail = current.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return current;
+  }
+}
 
 @visibleForTesting
 bool hasUsableOutputDeviceNames(Iterable<String> names) =>
@@ -301,6 +324,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   int _loadGeneration = 0;
   int? _activeTrackLoadGeneration;
+  int? _pendingStreamSourceGeneration;
   int _seekGeneration = 0;
   int? _activeSeekGeneration;
   Future<void> _seekOperationQueue = Future<void>.value();
@@ -322,6 +346,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   PlaybackAdjustments _globalPlaybackAdjustments = PlaybackAdjustments.neutral;
   PlaybackAdjustments _requestedPlaybackAdjustments = PlaybackAdjustments.neutral;
   Future<void> _playbackAdjustmentQueue = Future<void>.value();
+  final _backendSourceOperations = BackendSourceOperationQueue();
   Timer? _periodicPositionSaveTimer;
   Timer? _playbackHealthTimer;
   bool? _lastPresencePlaying;
@@ -441,8 +466,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   // Session-scoped cache: YouTube URL → resolved CDN/HLS URL.
-  final Map<String, ResolvedYoutubeStream> _streamUrlCache = {};
-  final _windowsStreamProxy = _WindowsStreamProxy();
+  final Map<String, ({ResolvedYoutubeStream stream, DateTime resolvedAt})> _streamUrlCache = {};
+  final Map<String, Future<ResolvedYoutubeStream>> _streamResolutionInFlight = {};
+  static const _streamCacheLifetime = Duration(minutes: 30);
   bool _windowsIsBuffering = false;
   bool _windowsIsCompleted = false;
   Duration _windowsPosition = Duration.zero;
@@ -488,12 +514,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   final YoutubePlaybackHistoryCoordinator? _youtubeHistoryCoordinator;
   final LocalPlaybackHistoryCoordinator? _localHistoryCoordinator;
   int _youtubeAccessRevision = 0;
+  final _forceAuthenticatedStreamIds = <String>{};
 
   void _handleYoutubeAccessChanged() {
     final revision = _youtubeAccessService?.revision ?? 0;
     if (revision == _youtubeAccessRevision) return;
     _youtubeAccessRevision = revision;
     _streamUrlCache.clear();
+    _streamResolutionInFlight.clear();
+    _forceAuthenticatedStreamIds.clear();
   }
 
   ({AudioPlayer player, AndroidLoudnessEnhancer loudnessEnhancer, AndroidEqualizer equalizer})
@@ -544,6 +573,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     });
     player.stream.position.listen((position) {
       if (!identical(player, _windowsPlayer)) return;
+      if (_pendingStreamSourceGeneration == _loadGeneration) return;
       _windowsPosition = position;
       _positionController.add(position);
       _updatePlaybackState();
@@ -551,6 +581,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     });
     player.stream.duration.listen((duration) {
       if (!identical(player, _windowsPlayer)) return;
+      if (_pendingStreamSourceGeneration == _loadGeneration) return;
       _windowsDuration = duration;
       _durationController.add(duration);
       final currentItem = mediaItem.value;
@@ -561,6 +592,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     });
     player.stream.buffer.listen((position) {
       if (!identical(player, _windowsPlayer)) return;
+      if (_pendingStreamSourceGeneration == _loadGeneration) return;
       _windowsBufferedPosition = position;
       _updatePlaybackState();
     });
@@ -571,11 +603,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     });
     player.stream.completed.listen((completed) async {
       if (!identical(player, _windowsPlayer) || !completed) return;
+      if (_pendingStreamSourceGeneration == _loadGeneration) return;
       _windowsIsCompleted = completed;
       _updatePlaybackState();
-      if (_crossfadeInProgress) return;
-      await _clearCurrentPlaybackPosition();
+      if (_crossfadeInProgress || _activeTrackLoadGeneration != null) return;
       final genAtCompletion = _loadGeneration;
+      await _clearCurrentPlaybackPosition();
+      if (_loadGeneration != genAtCompletion) return;
       if (currentLoopMode == LoopMode.one) {
         await player.seek(Duration.zero);
         await player.play();
@@ -692,6 +726,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
     player.durationStream.listen((duration) {
       if (!identical(player, _player)) return;
+      if (_pendingStreamSourceGeneration == _loadGeneration) return;
       _durationController.add(duration);
       final currentItem = mediaItem.value;
       if (currentItem != null && duration != null) {
@@ -702,6 +737,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
     player.positionStream.listen((position) {
       if (!identical(player, _player)) return;
+      if (_pendingStreamSourceGeneration == _loadGeneration) return;
       _positionController.add(position);
       _updatePlaybackState();
       _maybeStartAutomaticCrossfade();
@@ -711,9 +747,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (!identical(player, _player)) return;
       _updatePlaybackState();
       if (state == ProcessingState.completed) {
-        if (_crossfadeInProgress) return;
-        await _clearCurrentPlaybackPosition();
+        if (_crossfadeInProgress || _activeTrackLoadGeneration != null) return;
         final genAtCompletion = _loadGeneration;
+        await _clearCurrentPlaybackPosition();
+        if (_loadGeneration != genAtCompletion) return;
         if (currentLoopMode == LoopMode.one) {
           await player.seek(Duration.zero);
           await player.play();
@@ -762,31 +799,69 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<ResolvedYoutubeStream> _resolveStream(String url) async {
     final accessRevision = _youtubeAccessService?.revision ?? 0;
     final cached = _streamUrlCache[url];
-    if (cached != null && cached.accessRevision == accessRevision) {
+    if (cached != null &&
+        cached.stream.accessRevision == accessRevision &&
+        resolvedStreamCacheIsFresh(cached.stream, cached.resolvedAt, DateTime.now(), _streamCacheLifetime)) {
       debugPrint('[PlayerHandler] Stream URL cache hit for $url');
-      return cached;
+      return cached.stream;
     }
+    final pending = _streamResolutionInFlight[url];
+    if (pending != null) return pending;
 
+    final resolution = _resolveStreamUncached(url, accessRevision);
+    _streamResolutionInFlight[url] = resolution;
+    try {
+      return await resolution;
+    } finally {
+      if (identical(_streamResolutionInFlight[url], resolution)) {
+        _streamResolutionInFlight.remove(url);
+      }
+    }
+  }
+
+  Future<ResolvedYoutubeStream> _resolveStreamUncached(String url, int accessRevision) async {
+    final clock = Stopwatch()..start();
     debugPrint('[PlayerHandler] Resolving stream URL for $url');
     late ResolvedYoutubeStream resolved;
 
     if (Platform.isWindows) {
-      final result = await WindowsYtdlpRunner.instance.run(
-        [
-          '--dump-single-json',
-          '--no-warnings',
-          '--no-playlist',
-          '--skip-download',
-          '--format',
-          'bestaudio[has_drm!=true]/best[has_drm!=true]',
-          url,
-        ],
-        sourceUrl: url,
-        requireOutput: true,
-      );
+      final arguments = [
+        '--dump-single-json',
+        '--no-warnings',
+        '--no-playlist',
+        '--skip-download',
+        '--format',
+        'bestaudio[has_drm!=true]/best[has_drm!=true]',
+        url,
+      ];
+      final runner = WindowsYtdlpRunner.instance;
+      final authenticated = _youtubeAccessService?.isConfigured == true;
+      final useGuest = !authenticated || !_forceAuthenticatedStreamIds.contains(url);
+      late WindowsYtdlpResult result;
+      try {
+        result = await runner.run(
+          arguments,
+          guest: useGuest,
+          reportFailure: !authenticated || !useGuest,
+          sourceUrl: url,
+          requireOutput: true,
+        );
+      } on YoutubeFailure {
+        if (!authenticated || !useGuest) rethrow;
+        _forceAuthenticatedStreamIds.add(url);
+        result = await runner.run(arguments, sourceUrl: url, requireOutput: true);
+      }
       final info = jsonDecode(result.stdout) as Map<String, dynamic>;
-      final proxyUrl = await _windowsStreamProxy.register(info);
-      resolved = ResolvedYoutubeStream(uri: Uri.parse(proxyUrl), accessRevision: accessRevision);
+      final selected = _pickWindowsPlayableFormat(info);
+      final streamUrl = selected?['url']?.toString();
+      if (streamUrl == null || !streamUrl.startsWith('http')) {
+        throw StateError('yt-dlp returned no playable stream URL');
+      }
+      resolved = ResolvedYoutubeStream(
+        uri: Uri.parse(streamUrl),
+        headers: Map.unmodifiable(_readWindowsStreamHeaders(selected!, info)),
+        accessRevision: accessRevision,
+      );
     } else if (Platform.isAndroid) {
       const channel = MethodChannel('resonance/android_youtube');
       try {
@@ -817,15 +892,67 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       throw UnsupportedError('Streaming not supported on this platform');
     }
 
-    if (!_streamUrlCache.containsKey(url) && _streamUrlCache.length >= 32) {
+    if ((_youtubeAccessService?.revision ?? 0) != accessRevision) {
+      throw StateError('YouTube access changed during stream resolution');
+    }
+    if (!_streamUrlCache.containsKey(url) && _streamUrlCache.length >= 96) {
       _streamUrlCache.remove(_streamUrlCache.keys.first);
     }
-    _streamUrlCache[url] = resolved;
-    debugPrint('[PlayerHandler] Resolved YouTube stream for access revision $accessRevision');
+    _streamUrlCache[url] = (stream: resolved, resolvedAt: DateTime.now());
+    debugPrint('[PlayerHandler] Resolved YouTube stream in ${clock.elapsedMilliseconds} ms');
     return resolved;
   }
 
-  Future<String> _resolveStreamUrl(String url) async => (await _resolveStream(url)).uri.toString();
+  /// Warms the first likely selections while the user browses. Foreground
+  /// playback joins an in-flight resolution for the same URL.
+  Future<void> warmStreamCandidates(Iterable<String> urls) async {
+    final candidates = urls.where((url) => url.startsWith('https://') || url.startsWith('http://')).toSet().take(4);
+    await Future.wait(
+      candidates.map((url) async {
+        try {
+          await _resolveStream(url);
+        } catch (error) {
+          debugPrint('[PlayerHandler] Could not warm stream $url: $error');
+        }
+      }),
+    );
+  }
+
+  Future<void> _prefetchAdjacentStreams(int generation) async {
+    final items = _standaloneStreamQueue;
+    final index = _standaloneStreamQueueIndex;
+    if (_loadGeneration != generation || index == null || items.length < 2) return;
+    // Resolve the likely next selection first. The previous selection is
+    // usually already cached, but warm it as well when a session starts here.
+    await Future.wait(
+      [1, -1].map((offset) async {
+        if (_loadGeneration != generation) return;
+        final target = items[loopingStandaloneQueueIndex(currentIndex: index, offset: offset, length: items.length)];
+        if (target.url == mediaItem.value?.id) return;
+        try {
+          await _resolveStream(target.url);
+        } catch (error) {
+          // Prefetch is optional. Foreground loading reports the real failure.
+          debugPrint('[PlayerHandler] Could not prefetch stream ${target.url}: $error');
+        }
+      }),
+    );
+  }
+
+  Future<void> _prefetchPlaylistNeighborStreams(int generation) async {
+    if (_loadGeneration != generation || (isStandaloneMode && _standalonePlaylistNumber == null)) return;
+    final current = mediaItem.value;
+    if (current == null) return;
+    final playlist = await _effectivePlaybackOrder(playlistNumber: _standalonePlaylistNumber);
+    if (_loadGeneration != generation || playlist.length < 2) return;
+    final index = _currentPlaylistIndex(playlist, current.id);
+    if (index < 0) return;
+    final neighbors = [
+      playlist[(index + 1) % playlist.length],
+      playlist[(index - 1 + playlist.length) % playlist.length],
+    ];
+    await warmStreamCandidates(neighbors);
+  }
 
   Future<AudioSource> _buildAudioSource(String filePath) async {
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
@@ -837,12 +964,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     }
   }
 
-  Future<String> _buildMediaKitUri(String filePath) async {
+  Future<mk.Media> _buildMediaKitMedia(String filePath) async {
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
     if (isStream) {
-      return _resolveStreamUrl(filePath);
+      final resolved = await _resolveStream(filePath);
+      return mk.Media(resolved.uri.toString(), httpHeaders: resolved.headers);
     }
-    return Uri.file(filePath).toString();
+    return mk.Media(Uri.file(filePath).toString());
   }
 
   bool get _isWindowsPlaying => _windowsPlayer?.state.playing ?? false;
@@ -856,6 +984,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Duration get currentPosition => _currentPosition;
 
   Duration? get currentDuration => _currentDuration;
+
+  Duration get _streamStartupGrace => Platform.isWindows ? const Duration(seconds: 4) : const Duration(seconds: 6);
 
   String _failureTrackKey(String trackId) {
     if (trackId.startsWith('http://') || trackId.startsWith('https://')) return trackId;
@@ -893,21 +1023,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         return;
       }
       unawaited(
-        _handlePlaybackFailure(
-          generation,
-          reason ?? 'playback made no progress',
-          allowWindowsStreamRecovery: monitoredStream,
-        ),
+        _handlePlaybackFailure(generation, reason ?? 'playback made no progress', allowStreamRecovery: monitoredStream),
       );
     });
   }
 
-  Future<void> _handlePlaybackFailure(int generation, Object reason, {bool allowWindowsStreamRecovery = false}) async {
-    final recoveringWindowsStream = _currentTrackIsStream && Platform.isWindows && allowWindowsStreamRecovery;
+  Future<void> _handlePlaybackFailure(int generation, Object reason, {bool allowStreamRecovery = false}) async {
+    final recoveringStream = _currentTrackIsStream && allowStreamRecovery;
     if (_loadGeneration != generation ||
         _handledFailureGeneration == generation ||
         !_playbackRequested ||
-        (_currentTrackIsStream && !recoveringWindowsStream)) {
+        (_currentTrackIsStream && !recoveringStream)) {
       return;
     }
     final current = mediaItem.value;
@@ -917,7 +1043,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     debugPrint('[PlayerHandler] Playback failed for "${current.id}" (generation $generation): $reason');
 
     if (_retryLoadGeneration != generation) {
-      if (recoveringWindowsStream) _streamUrlCache.remove(current.id);
+      if (recoveringStream) {
+        _streamUrlCache.remove(current.id);
+        if (Platform.isWindows && _youtubeAccessService?.isConfigured == true) {
+          _forceAuthenticatedStreamIds.add(current.id);
+        }
+      }
       _retryLoadGeneration = _loadGeneration + 1;
       await loadTrack(
         current.id,
@@ -1033,7 +1164,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   void _updatePlaybackState({bool force = false}) {
-    final playing = !_playbackUnavailable && (Platform.isWindows ? _isWindowsPlaying : _player.playing);
+    final streamSourcePending = _pendingStreamSourceGeneration == _loadGeneration;
+    final playing =
+        !_playbackUnavailable && !streamSourcePending && (Platform.isWindows ? _isWindowsPlaying : _player.playing);
     final currentItem = mediaItem.value;
     if (currentItem == null) {
       _youtubeHistoryCoordinator?.onSessionEnded();
@@ -1048,6 +1181,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     }
     final backendProcessingState = _playbackUnavailable
         ? AudioProcessingState.idle
+        : streamSourcePending
+        ? AudioProcessingState.loading
         : Platform.isWindows
         ? _windowsIsCompleted
               ? AudioProcessingState.completed
@@ -1088,8 +1223,16 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         },
         processingState: processingState,
         playing: playing,
-        updatePosition: Platform.isWindows ? _windowsPosition : _player.position,
-        bufferedPosition: Platform.isWindows ? _windowsBufferedPosition : _player.bufferedPosition,
+        updatePosition: streamSourcePending
+            ? Duration.zero
+            : Platform.isWindows
+            ? _windowsPosition
+            : _player.position,
+        bufferedPosition: streamSourcePending
+            ? Duration.zero
+            : Platform.isWindows
+            ? _windowsBufferedPosition
+            : _player.bufferedPosition,
         speed: Platform.isWindows ? speedNotifier.value : _player.speed,
         queueIndex: Platform.isWindows ? 0 : _player.currentIndex,
       ),
@@ -1746,9 +1889,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _attachWindowsPlayer(incoming);
     var adopted = false;
     try {
-      final uri = await _buildMediaKitUri(target.path);
+      final media = await _buildMediaKitMedia(target.path);
       if (generation != _crossfadeGeneration) return;
-      await incoming.open(mk.Media(uri), play: false);
+      await incoming.open(media, play: false);
       final incomingEqualizerApplied = await _applyWindowsPlaybackAdjustments(
         incoming,
         incomingAdjustments,
@@ -2006,17 +2149,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       return;
     }
     _playbackRequested = true;
+    if (_pendingStreamSourceGeneration == _loadGeneration) return;
     if (Platform.isWindows) {
       try {
         if (!_isWindowsPlaying) await _windowsPlayer!.play();
       } catch (error) {
-        await _handlePlaybackFailure(_loadGeneration, error, allowWindowsStreamRecovery: _currentTrackIsStream);
+        await _handlePlaybackFailure(_loadGeneration, error, allowStreamRecovery: _currentTrackIsStream);
         return;
       }
       _updatePlaybackState();
       _armPlaybackHealthCheck(
         _loadGeneration,
-        grace: _currentTrackIsStream ? const Duration(seconds: 10) : const Duration(seconds: 5),
+        grace: _currentTrackIsStream ? _streamStartupGrace : const Duration(seconds: 5),
       );
       return;
     }
@@ -2029,7 +2173,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       );
     }
     _updatePlaybackState();
-    _armPlaybackHealthCheck(_loadGeneration);
+    _armPlaybackHealthCheck(
+      _loadGeneration,
+      grace: _currentTrackIsStream ? _streamStartupGrace : const Duration(seconds: 5),
+    );
   }
 
   @override
@@ -2037,6 +2184,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_syncControlLocked) return;
     _playbackRequested = false;
     _playbackHealthTimer?.cancel();
+    if (_pendingStreamSourceGeneration == _loadGeneration) {
+      await _queueBackendLoad(() async {
+        if (_playbackRequested) return;
+        if (Platform.isWindows) {
+          if (_isWindowsPlaying) await _windowsPlayer!.pause();
+        } else if (_player.playing) {
+          await _player.pause();
+        }
+      });
+      return;
+    }
     await saveCurrentPlaybackPosition();
     if (Platform.isWindows) {
       if (!_isWindowsPlaying) return;
@@ -2172,6 +2330,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     trackTransitionNotifier.value = TrackTransitionState(revision: trackTransitionNotifier.value.revision + 1);
 
     try {
+      await _backendSourceOperations.idle;
       if (Platform.isWindows) {
         await _windowsPlayer!.stop();
         _windowsPosition = Duration.zero;
@@ -2284,6 +2443,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   Object? _lastTrackLoadFailure;
 
+  Future<void> _queueBackendLoad(Future<void> Function() operation) {
+    return _backendSourceOperations.run(operation);
+  }
+
   Future<void> _loadTrackRequest(
     String filePath,
     String title,
@@ -2324,6 +2487,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_loadGeneration != myGen) return;
 
     _currentTrackIsStream = isStream;
+    _pendingStreamSourceGeneration = isStream ? myGen : null;
+    if (isStream) {
+      _windowsPosition = Duration.zero;
+      _windowsDuration = Duration.zero;
+      _windowsBufferedPosition = Duration.zero;
+      _positionController.add(Duration.zero);
+      _durationController.add(Duration.zero);
+    }
     _normalizationMultiplier = _normalizationMultiplierFor(filePath);
 
     // Optimistic UI update
@@ -2352,18 +2523,21 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       // that network work happens. Local sources are replaced directly by the
       // backend; an explicit pause only adds avoidable switching latency.
       if (isStream) {
-        if (Platform.isWindows) {
-          if (_isWindowsPlaying) await _windowsPlayer!.pause();
-        } else if (_player.playing) {
-          await _player.pause();
-        }
+        await _queueBackendLoad(() async {
+          if (_loadGeneration != myGen) return;
+          if (Platform.isWindows) {
+            if (_isWindowsPlaying) await _windowsPlayer!.pause();
+          } else if (_player.playing) {
+            await _player.pause();
+          }
+        });
       }
       if (_loadGeneration != myGen) return;
 
       if (Platform.isWindows) {
-        String uri;
+        mk.Media media;
         try {
-          uri = await _buildMediaKitUri(filePath);
+          media = await _buildMediaKitMedia(filePath);
         } catch (e) {
           if (_loadGeneration != myGen) return;
           debugPrint('[PlayerHandler] Failed to build media_kit URI for "$filePath": $e');
@@ -2379,16 +2553,20 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         _windowsBufferedPosition = Duration.zero;
 
         final player = _windowsPlayer!;
-        await _ensureWindowsAudioOutput(player);
-        // Keep source replacement and playback start in one media_kit command.
-        // Splitting this into open(play: false) followed by play() regressed in
-        // v2.3.0: mpv can acknowledge the open before the replacement source is
-        // ready to accept play, leaving an otherwise valid local track at 0:00.
-        await player.open(mk.Media(uri), play: true);
-        if (_loadGeneration != myGen) {
-          await player.stop();
-          return;
-        }
+        await _queueBackendLoad(() async {
+          if (_loadGeneration != myGen) return;
+          await _ensureWindowsAudioOutput(player);
+          if (_loadGeneration != myGen) return;
+          // Keep source replacement and playback start in one media_kit
+          // command. A stale open may finish after a newer selection; pause
+          // it here, then let the queued replacement open the selected song.
+          await player.open(media, play: true);
+          if (_loadGeneration != myGen || !_playbackRequested) await player.pause();
+          if (_loadGeneration == myGen) {
+            _windowsDuration = player.state.duration;
+            _windowsPosition = player.state.position;
+          }
+        });
       } else {
         AudioSource source;
         try {
@@ -2400,27 +2578,30 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         }
 
         if (_loadGeneration != myGen) return;
-        await _player.setAudioSource(source);
+        await _queueBackendLoad(() async {
+          if (_loadGeneration != myGen) return;
+          await _player.setAudioSource(source);
+        });
         if (_loadGeneration != myGen) return;
       }
 
       if (_loadGeneration != myGen) return;
+      _pendingStreamSourceGeneration = null;
+      _positionController.add(_currentPosition);
+      _durationController.add(_currentDuration);
       await _applyPlaybackAdjustments(adjustments, persist: false);
       if (_loadGeneration != myGen) return;
       await _restorePlaybackPosition(filePath, myGen);
       if (_loadGeneration != myGen) return;
-      if (!Platform.isWindows) {
+      if (!Platform.isWindows && _playbackRequested) {
         unawaited(
           _player.play().catchError((Object error, StackTrace stackTrace) async {
             debugPrint('[PlayerHandler] Playback start failed: $error\n$stackTrace');
-            await _handlePlaybackFailure(myGen, error);
+            await _handlePlaybackFailure(myGen, error, allowStreamRecovery: isStream);
           }),
         );
       }
-      _armPlaybackHealthCheck(
-        myGen,
-        grace: isStream && Platform.isWindows ? const Duration(seconds: 10) : const Duration(seconds: 5),
-      );
+      _armPlaybackHealthCheck(myGen, grace: isStream ? _streamStartupGrace : const Duration(seconds: 5));
 
       // Do not stop the background visualizer decoder until the new source is
       // already ready (and Windows is already playing). Process cancellation
@@ -2443,6 +2624,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       );
 
       _updatePlaybackState();
+      if (isStream && _standaloneStreamQueue.isNotEmpty) {
+        unawaited(_prefetchAdjacentStreams(myGen));
+      } else {
+        unawaited(_prefetchPlaylistNeighborStreams(myGen));
+      }
       final loadedFromOutsidePlaylist = standaloneModeNotifier.value && _standalonePlaylistNumber == null;
       unawaited(
         _finishTrackLoad(
@@ -2458,6 +2644,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       unawaited(_prepareLoudnessAnalysis(generation: myGen, filePath: filePath));
     } catch (e, st) {
       if (_loadGeneration == myGen) {
+        _pendingStreamSourceGeneration = null;
         _lastTrackLoadFailure = e;
         if (!standalone && e is YoutubeFailure && e.isAccessFailure) {
           youtubeFailureNotifier.value = e;
@@ -2482,7 +2669,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         if (standalone && _standaloneStreamQueue.isEmpty) setStandalonePresentation(false);
         playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
         _updatePlaybackState();
-        await _handlePlaybackFailure(myGen, e);
+        await _handlePlaybackFailure(myGen, e, allowStreamRecovery: isStream && e is! YoutubeFailure);
       }
     }
   }
@@ -2554,7 +2741,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _standaloneStreamQueue = requestedQueue.isEmpty ? const [] : List.unmodifiable(requestedQueue);
     _standaloneStreamQueueIndex = resolvedIndex >= 0 ? resolvedIndex : null;
     final artworkUri = thumbnailUrl == null || thumbnailUrl.isEmpty ? null : Uri.tryParse(thumbnailUrl);
-    await MetadataCacheService.set(url, title, artist, artworkUrl: thumbnailUrl);
+    unawaited(MetadataCacheService.set(url, title, artist, artworkUrl: thumbnailUrl));
     await loadTrack(url, title, artist, standalone: true, artworkUri: artworkUri);
     if (!isStandaloneMode ||
         mediaItem.value?.id != url ||
@@ -2883,10 +3070,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> _moveStandaloneStreamQueue(int offset, TrackTransitionDirection direction) async {
     final items = _standaloneStreamQueue;
     if (items.isEmpty) return;
-    final currentUrl = mediaItem.value?.id;
     var index = _standaloneStreamQueueIndex;
-    if (index == null || index < 0 || index >= items.length || items[index].url != currentUrl) {
-      index = items.indexWhere((item) => item.url == currentUrl);
+    if (index == null || index < 0 || index >= items.length) {
+      index = items.indexWhere((item) => item.url == mediaItem.value?.id);
     }
     if (index < 0) return;
     final targetIndex = loopingStandaloneQueueIndex(currentIndex: index, offset: offset, length: items.length);
@@ -2901,14 +3087,21 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final artworkUri = target.thumbnailUrl == null || target.thumbnailUrl!.isEmpty
         ? null
         : Uri.tryParse(target.thumbnailUrl!);
-    await MetadataCacheService.set(target.url, target.title, target.artist, artworkUrl: target.thumbnailUrl);
-    await loadTrack(
-      target.url,
-      target.title,
-      target.artist,
-      standalone: true,
-      artworkUri: artworkUri,
-      transitionDirection: direction,
+    unawaited(MetadataCacheService.set(target.url, target.title, target.artist, artworkUrl: target.thumbnailUrl));
+    // Commit the selection now. Resolution of an uncached YouTube URL can
+    // take seconds; later skips should supersede it instead of waiting for
+    // that obsolete request to finish.
+    unawaited(
+      loadTrack(
+        target.url,
+        target.title,
+        target.artist,
+        standalone: true,
+        artworkUri: artworkUri,
+        transitionDirection: direction,
+      ).catchError((Object error, StackTrace stackTrace) {
+        debugPrint('[PlayerHandler] Standalone stream load failed: $error\n$stackTrace');
+      }),
     );
   }
 
@@ -3154,12 +3347,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     await _seekOperationQueue;
     _loadGeneration++;
     _activeTrackLoadGeneration = null;
+    await _backendSourceOperations.idle;
     _crossfadeGeneration++;
     _crossfadeInProgress = false;
     _envelopeAnalyzer.dispose();
     _loudnessAnalyzer.dispose();
     await saveState();
-    await _windowsStreamProxy.dispose();
     if (Platform.isWindows) {
       await _windowsPlayer?.dispose();
     } else {
@@ -3208,160 +3401,47 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 }
 
-class _WindowsStreamProxy {
-  HttpServer? _server;
-  final _streams = <String, _WindowsStreamInfo>{};
-  int _nextId = 0;
-  static const _maximumRegistrations = 64;
+Map<String, dynamic>? _pickWindowsPlayableFormat(Map<String, dynamic> info) {
+  final direct = info['url'] as String?;
+  if (direct != null && direct.startsWith('http')) return info;
 
-  Future<String> register(Map<String, dynamic> info) async {
-    if (!Platform.isWindows) {
-      return info['url'] as String? ?? '';
-    }
-
-    final selected = _pickPlayableFormat(info);
-    final url = selected?['url']?.toString();
-    if (url == null || url.isEmpty) {
-      throw Exception('yt-dlp returned no playable stream URL');
-    }
-
-    final server = await _ensureServer();
-    _pruneRegistrations();
-    final id = (++_nextId).toString();
-    _streams[id] = _WindowsStreamInfo(url: url, headers: _readHeaders(selected!, info));
-
-    return Uri(
-      scheme: 'http',
-      host: InternetAddress.loopbackIPv4.address,
-      port: server.port,
-      pathSegments: ['stream', id],
-    ).toString();
+  final requestedDownloads = info['requested_downloads'];
+  if (requestedDownloads is List && requestedDownloads.isNotEmpty) {
+    final first = requestedDownloads.first;
+    if (first is Map && first['url'] is String) return Map<String, dynamic>.from(first);
   }
 
-  Future<HttpServer> _ensureServer() async {
-    final existing = _server;
-    if (existing != null) return existing;
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    _server = server;
-    unawaited(server.listen(_handleRequest).asFuture<void>());
-    return server;
-  }
-
-  Future<void> _handleRequest(HttpRequest request) async {
-    final id = request.uri.pathSegments.length >= 2 ? request.uri.pathSegments[1] : null;
-    final stream = id == null ? null : _streams[id];
-    if (stream == null) {
-      request.response.statusCode = HttpStatus.notFound;
-      await request.response.close();
-      return;
-    }
-    stream.lastAccessedAt = DateTime.now();
-
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 20);
-    try {
-      final upstream = await client.getUrl(Uri.parse(stream.url));
-      for (final entry in stream.headers.entries) {
-        upstream.headers.set(entry.key, entry.value);
-      }
-      final range = request.headers.value(HttpHeaders.rangeHeader);
-      if (range != null) {
-        upstream.headers.set(HttpHeaders.rangeHeader, range);
-      }
-
-      final upstreamResponse = await upstream.close();
-      request.response.statusCode = upstreamResponse.statusCode;
-      for (final header in [
-        HttpHeaders.acceptRangesHeader,
-        HttpHeaders.contentLengthHeader,
-        HttpHeaders.contentRangeHeader,
-        HttpHeaders.contentTypeHeader,
-        HttpHeaders.etagHeader,
-        HttpHeaders.lastModifiedHeader,
-      ]) {
-        final value = upstreamResponse.headers.value(header);
-        if (value != null) {
-          request.response.headers.set(header, value);
-        }
-      }
-      await upstreamResponse.pipe(request.response);
-    } catch (e) {
-      debugPrint('[WindowsStreamProxy] request failed: $e');
-      try {
-        request.response.statusCode = HttpStatus.badGateway;
-        await request.response.close();
-      } catch (_) {}
-    } finally {
-      client.close(force: true);
+  final requestedFormats = info['requested_formats'];
+  if (requestedFormats is List && requestedFormats.isNotEmpty) {
+    for (final format in requestedFormats.reversed) {
+      if (format is Map && format['url'] is String) return Map<String, dynamic>.from(format);
     }
   }
 
-  Map<String, dynamic>? _pickPlayableFormat(Map<String, dynamic> info) {
-    final direct = info['url'] as String?;
-    if (direct != null && direct.startsWith('http')) return info;
-
-    final requestedDownloads = info['requested_downloads'];
-    if (requestedDownloads is List && requestedDownloads.isNotEmpty) {
-      final first = requestedDownloads.first;
-      if (first is Map && first['url'] is String) return Map<String, dynamic>.from(first);
-    }
-
-    final requestedFormats = info['requested_formats'];
-    if (requestedFormats is List && requestedFormats.isNotEmpty) {
-      for (final format in requestedFormats.reversed) {
-        if (format is Map && format['url'] is String) return Map<String, dynamic>.from(format);
+  final formats = info['formats'];
+  if (formats is List && formats.isNotEmpty) {
+    for (final format in formats.reversed) {
+      if (format is Map && format['url'] is String && (format['acodec'] as String?) != 'none') {
+        return Map<String, dynamic>.from(format);
       }
     }
-
-    final formats = info['formats'];
-    if (formats is List && formats.isNotEmpty) {
-      for (final format in formats.reversed) {
-        if (format is Map && format['url'] is String && (format['acodec'] as String?) != 'none') {
-          return Map<String, dynamic>.from(format);
-        }
-      }
-    }
-
-    return null;
   }
 
-  Map<String, String> _readHeaders(Map<String, dynamic> selected, Map<String, dynamic> info) {
-    final rawHeaders = selected['http_headers'] ?? info['http_headers'];
-    final headers = <String, String>{};
-    if (rawHeaders is Map) {
-      for (final entry in rawHeaders.entries) {
-        final key = entry.key?.toString();
-        final value = entry.value?.toString();
-        if (key != null && key.isNotEmpty && value != null && value.isNotEmpty) {
-          headers[key] = value;
-        }
-      }
-    }
-    headers.putIfAbsent(HttpHeaders.userAgentHeader, () => 'Mozilla/5.0');
-    return headers;
-  }
-
-  void _pruneRegistrations() {
-    final cutoff = DateTime.now().subtract(const Duration(hours: 2));
-    _streams.removeWhere((_, stream) => stream.lastAccessedAt.isBefore(cutoff));
-    while (_streams.length >= _maximumRegistrations) {
-      final oldest = _streams.entries.reduce(
-        (first, second) => first.value.lastAccessedAt.isBefore(second.value.lastAccessedAt) ? first : second,
-      );
-      _streams.remove(oldest.key);
-    }
-  }
-
-  Future<void> dispose() async {
-    await _server?.close(force: true);
-    _server = null;
-    _streams.clear();
-  }
+  return null;
 }
 
-class _WindowsStreamInfo {
-  final String url;
-  final Map<String, String> headers;
-  DateTime lastAccessedAt;
-  _WindowsStreamInfo({required this.url, required this.headers}) : lastAccessedAt = DateTime.now();
+Map<String, String> _readWindowsStreamHeaders(Map<String, dynamic> selected, Map<String, dynamic> info) {
+  final rawHeaders = selected['http_headers'] ?? info['http_headers'];
+  final headers = <String, String>{};
+  if (rawHeaders is Map) {
+    for (final entry in rawHeaders.entries) {
+      final key = entry.key?.toString();
+      final value = entry.value?.toString();
+      if (key != null && key.isNotEmpty && value != null && value.isNotEmpty) {
+        headers[key] = value;
+      }
+    }
+  }
+  headers.putIfAbsent(HttpHeaders.userAgentHeader, () => 'Mozilla/5.0');
+  return headers;
 }

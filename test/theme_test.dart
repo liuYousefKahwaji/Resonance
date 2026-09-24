@@ -169,6 +169,21 @@ void main() {
     final preferences = await SharedPreferences.getInstance();
     expect(preferences.getBool('windows_native_controls'), isTrue);
   });
+
+  test('listening focus defaults to local and persists stream focus', () async {
+    SharedPreferences.setMockInitialValues({});
+    final provider = ThemeProvider();
+    await Future<void>.delayed(Duration.zero);
+    expect(provider.listeningFocus, ListeningFocus.local);
+
+    await provider.setListeningFocus(ListeningFocus.stream);
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getString('listening_focus'), 'stream');
+
+    final restored = ThemeProvider();
+    await Future<void>.delayed(Duration.zero);
+    expect(restored.listeningFocus, ListeningFocus.stream);
+  });
 }
 
 double _contrastRatio(Color a, Color b) {

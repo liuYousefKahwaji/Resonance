@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/models/playback_queue_snapshot.dart';
@@ -28,9 +30,38 @@ void main() {
     expect(snapshot.shuffled, isFalse);
   });
 
-  test('Windows streams participate in playback health recovery', () {
+  test('streams on both platforms participate in playback health recovery', () {
     expect(supportsPlaybackHealthMonitoring(isWindows: true, isStream: true), isTrue);
-    expect(supportsPlaybackHealthMonitoring(isWindows: false, isStream: true), isFalse);
+    expect(supportsPlaybackHealthMonitoring(isWindows: false, isStream: true), isTrue);
     expect(supportsPlaybackHealthMonitoring(isWindows: false, isStream: false), isTrue);
+  });
+
+  test('backend source swaps finish in selection order after a slow open', () async {
+    final operations = BackendSourceOperationQueue();
+    final firstOpen = Completer<void>();
+    final firstStarted = Completer<void>();
+    final events = <String>[];
+    final first = operations.run(() async {
+      events.add('first start');
+      firstStarted.complete();
+      await firstOpen.future;
+      events.add('first end');
+    });
+    await firstStarted.future;
+    final second = operations.run(() async => events.add('second open'));
+    await Future<void>.delayed(Duration.zero);
+    expect(events, ['first start']);
+    firstOpen.complete();
+    await Future.wait([first, second, operations.idle]);
+    expect(events, ['first start', 'first end', 'second open']);
+  });
+
+  test('failed backend open does not block the next source', () async {
+    final operations = BackendSourceOperationQueue();
+    final first = operations.run(() async => throw StateError('failed open'));
+    final second = operations.run(() async {});
+    await expectLater(first, throwsStateError);
+    await second;
+    await operations.idle;
   });
 }

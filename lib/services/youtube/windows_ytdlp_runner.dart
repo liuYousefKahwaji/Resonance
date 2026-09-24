@@ -46,19 +46,25 @@ class WindowsYtdlpRunner {
   String get denoPath => p.join(binDirectory, 'deno.exe');
   String get ffmpegPath => p.join(binDirectory, 'ffmpeg.exe');
   String get ytMusicHomePath => p.join(binDirectory, 'resonance-ytmusic-home.exe');
+  bool get hasConfiguredAccess => _accessService?.isConfigured == true;
 
-  List<String> buildArguments(List<String> arguments, {String? overrideBrowserId, String? overrideCookieFile}) => [
+  List<String> buildArguments(
+    List<String> arguments, {
+    String? overrideBrowserId,
+    String? overrideCookieFile,
+    bool guest = false,
+  }) => [
     '--js-runtimes',
     'deno:$denoPath',
     '--force-ipv4',
     ...windowsYtDlpUtf8Arguments,
-    if (overrideBrowserId != null) ...[
+    if (!guest && overrideBrowserId != null) ...[
       '--cookies-from-browser',
       overrideBrowserId,
-    ] else if (overrideCookieFile != null) ...[
+    ] else if (!guest && overrideCookieFile != null) ...[
       '--cookies',
       overrideCookieFile,
-    ] else
+    ] else if (!guest)
       ...?_accessService?.windowsAuthArguments(),
     ...arguments,
   ];
@@ -67,6 +73,7 @@ class WindowsYtdlpRunner {
     List<String> arguments, {
     String? overrideBrowserId,
     String? overrideCookieFile,
+    bool guest = false,
   }) async {
     if (!await File(ytDlpPath).exists()) {
       throw const YoutubeFailure(
@@ -83,11 +90,16 @@ class WindowsYtdlpRunner {
       );
     }
     final authenticated =
-        overrideBrowserId != null || overrideCookieFile != null || _accessService?.isConfigured == true;
+        !guest && (overrideBrowserId != null || overrideCookieFile != null || _accessService?.isConfigured == true);
     try {
       final process = await Process.start(
         ytDlpPath,
-        buildArguments(arguments, overrideBrowserId: overrideBrowserId, overrideCookieFile: overrideCookieFile),
+        buildArguments(
+          arguments,
+          overrideBrowserId: overrideBrowserId,
+          overrideCookieFile: overrideCookieFile,
+          guest: guest,
+        ),
         environment: windowsYtDlpUtf8Environment,
         includeParentEnvironment: true,
         runInShell: false,
@@ -102,6 +114,8 @@ class WindowsYtdlpRunner {
     List<String> arguments, {
     String? overrideBrowserId,
     String? overrideCookieFile,
+    bool guest = false,
+    bool reportFailure = true,
     Duration? timeout,
     String? sourceUrl,
     bool requireOutput = false,
@@ -110,6 +124,7 @@ class WindowsYtdlpRunner {
       arguments,
       overrideBrowserId: overrideBrowserId,
       overrideCookieFile: overrideCookieFile,
+      guest: guest,
     );
     final stdoutFuture = collectWindowsProcessOutput(started.process.stdout);
     final stderrFuture = _collectTail(started.process.stderr);
@@ -124,7 +139,7 @@ class WindowsYtdlpRunner {
       );
       if (result.exitCode != 0 || (requireOutput && result.stdout.trim().isEmpty)) {
         final failure = failureForResult(result, sourceUrl: sourceUrl);
-        _accessService?.observeFailure(failure);
+        if (reportFailure) _accessService?.observeFailure(failure);
         throw failure;
       }
       return result;
@@ -136,7 +151,7 @@ class WindowsYtdlpRunner {
         technicalSummary: 'yt-dlp timed out.',
         sourceUrl: sourceUrl,
       );
-      _accessService?.observeFailure(failure);
+      if (reportFailure) _accessService?.observeFailure(failure);
       throw failure;
     }
   }

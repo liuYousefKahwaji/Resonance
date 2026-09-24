@@ -68,6 +68,26 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         FakeYoutubeDL.calls = []
         FakeCookieJar.header = None
         bridge._QUICKJS_PATH = None
+        self._guest_music_patch = patch.dict(sys.modules, {"ytmusicapi": types.ModuleType("ytmusicapi")})
+        self._guest_music_patch.start()
+        self.addCleanup(self._guest_music_patch.stop)
+
+    def test_search_uses_one_guest_music_request_when_results_are_available(self):
+        fake_ytmusic = types.ModuleType("ytmusicapi")
+
+        class FakeMusic:
+            def __init__(self, language):
+                self.language = language
+
+            def search(self, query, filter, limit):
+                self.assertion = (query, filter, limit)
+                return [{"title": "Quick result", "videoId": "jNQXAC9IVRw", "artists": [{"name": "Artist"}]}]
+
+        fake_ytmusic.YTMusic = FakeMusic
+        with patch.dict(sys.modules, {"ytmusicapi": fake_ytmusic}):
+            results = json.loads(bridge.search("quick result", 2))
+        self.assertEqual(results[0]["title"], "Quick result")
+        self.assertEqual(FakeYoutubeDL.calls, [])
 
     def test_bundled_quickjs_is_enabled_for_every_yt_dlp_operation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -261,6 +281,79 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         self.assertEqual(result[0]["title"], "Me at the zoo")
         self.assertNotIn("extractor_args", FakeYoutubeDL.calls[0])
 
+    def test_flat_search_failure_does_not_repeat_video_player_fallbacks(self):
+        FakeYoutubeDL.responder = lambda *_: (_ for _ in ()).throw(RuntimeError("Network unavailable"))
+
+        with self.assertRaisesRegex(RuntimeError, "Network unavailable"):
+            bridge.search("any song")
+
+        self.assertEqual(len(FakeYoutubeDL.calls), 1)
+
+    def test_stream_resolution_uses_one_format_chain(self):
+        FakeYoutubeDL.responder = lambda *_: {"url": "https://cdn.example/audio.m4a"}
+
+        bridge.get_stream_data("https://youtu.be/jNQXAC9IVRw")
+
+        self.assertEqual(len(FakeYoutubeDL.calls), 1)
+        self.assertIn("/bestaudio/best", FakeYoutubeDL.calls[0]["format"])
+
+    def test_playable_music_home_skips_optional_network_enrichment(self):
+        class FakeMusic:
+            def __init__(self):
+                self.calls = []
+
+            def get_home(self, limit):
+                self.calls.append(("home", limit))
+                return [{"title": "Songs", "contents": [
+                    {"title": f"Song {index}", "videoId": f"aaaaaaaaaa{index}"}
+                    for index in range(4)
+                ]}]
+
+            def get_history(self):
+                self.calls.append(("history",))
+                return []
+
+            def get_watch_playlist(self, **_):
+                self.calls.append(("radio",))
+                return {}
+
+        music = FakeMusic()
+        with patch.object(bridge, "_build_authenticated_ytmusic", return_value=music):
+            result = json.loads(bridge.get_music_home())
+
+        self.assertEqual(music.calls, [("home", 24)])
+        self.assertTrue(result["shelves"])
+
+    def test_collection_only_home_tries_one_more_collection_if_first_is_empty(self):
+        class FakeMusic:
+            def __init__(self):
+                self.playlists = []
+
+            def get_home(self, limit):
+                return [{"title": "Albums", "contents": [
+                    {"title": "Empty", "playlistId": "first"},
+                    {"title": "Playable", "playlistId": "second"},
+                ]}]
+
+            def get_history(self):
+                return []
+
+            def get_playlist(self, playlist_id, limit):
+                self.playlists.append(playlist_id)
+                return {"tracks": [] if playlist_id == "first" else [
+                    {"title": "Song", "videoId": "jNQXAC9IVRw"},
+                ]}
+
+            def get_watch_playlist(self, **_):
+                return {}
+
+        music = FakeMusic()
+        with patch.object(bridge, "_build_authenticated_ytmusic", return_value=music):
+            result = json.loads(bridge.get_music_home())
+
+        self.assertEqual(music.playlists, ["first", "second"])
+        self.assertTrue(any(shelf["title"] == "Quick picks" for shelf in result["shelves"]))
+
     def test_cookie_file_is_optional_and_propagates_to_all_operations(self):
         with tempfile.TemporaryDirectory() as directory:
             cookie_file = os.path.join(directory, "cookies.txt")
@@ -310,6 +403,15 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "Sign in to confirm"):
             bridge.get_stream_data("https://youtu.be/test")
+        self.assertEqual(len(FakeYoutubeDL.calls), 1)
+
+    def test_network_timeout_does_not_retry_with_other_player_clients(self):
+        FakeYoutubeDL.responder = lambda *_: (_ for _ in ()).throw(RuntimeError("The connection timed out"))
+
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            bridge.get_stream_data("https://youtu.be/test")
+
+        self.assertEqual(len(FakeYoutubeDL.calls), 1)
 
     def test_rotated_account_cookie_warning_is_preserved_as_an_error(self):
         def respond(ydl, _target, _download):

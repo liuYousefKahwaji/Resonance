@@ -8,6 +8,13 @@ void main() {
     final args = runner.buildArguments(['--dump-json', 'https://example.test'], overrideBrowserId: 'firefox');
     expect(args, containsAllInOrder(['--js-runtimes', r'deno:C:\Resonance\bin\deno.exe', '--force-ipv4']));
     expect(args, containsAllInOrder(['--cookies-from-browser', 'firefox']));
+    final guestArgs = runner.buildArguments(
+      ['--dump-json', 'https://example.test'],
+      overrideBrowserId: 'firefox',
+      guest: true,
+    );
+    expect(guestArgs, isNot(contains('--cookies-from-browser')));
+    expect(guestArgs, isNot(contains('--cookies')));
   });
 
   test('browser identifiers are mapped from ProgIDs and executables', () {
