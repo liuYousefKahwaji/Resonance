@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -30,7 +31,7 @@ class WindowsYtMusicHelper {
     final configuredAccess = access ?? YoutubeAccessService.active;
     final browser = overrideBrowserSource ?? configuredAccess?.windowsBrowserId;
     final cookiePath = configuredAccess?.windowsCookiePath;
-    if (browser == null && cookiePath == null) {
+    if (action != 'related' && browser == null && cookiePath == null) {
       throw const YoutubeFailure(
         kind: YoutubeFailureKind.verificationRequired,
         userMessage: 'Connect YouTube access before using YouTube Music.',
@@ -38,15 +39,29 @@ class WindowsYtMusicHelper {
     }
 
     final process = await Process.start(helper, [
-      if (browser != null) ...['--browser', browser] else ...['--cookies-file', cookiePath!],
+      if (action != 'related')
+        if (browser != null) ...['--browser', browser] else ...['--cookies-file', cookiePath!],
       '--action',
       action,
       if (limit != null) ...['--limit', '$limit'],
       if (videoId != null) ...['--video-id', videoId],
     ], runInShell: false);
-    final stdout = await process.stdout.transform(utf8.decoder).join();
-    final stderr = await process.stderr.transform(utf8.decoder).join();
-    final exitCode = await process.exitCode;
+    late final String stdout;
+    late final String stderr;
+    late final int exitCode;
+    try {
+      final output = await Future.wait<Object>([
+        process.stdout.transform(utf8.decoder).join(),
+        process.stderr.transform(utf8.decoder).join(),
+        process.exitCode,
+      ]).timeout(action == 'related' ? const Duration(seconds: 10) : const Duration(seconds: 60));
+      stdout = output[0] as String;
+      stderr = output[1] as String;
+      exitCode = output[2] as int;
+    } on TimeoutException {
+      process.kill();
+      throw TimeoutException('YouTube Music did not respond in time.');
+    }
     if (exitCode != 0 || stdout.trim().isEmpty) {
       throw YoutubeFailureClassifier.classify(
         stderr.isEmpty ? 'YouTube Music helper exited with code $exitCode' : stderr,

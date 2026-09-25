@@ -1,4 +1,30 @@
 class YoutubeTrack {
+  /// A playable result from a copied YouTube link, available without a
+  /// network round trip. Full metadata can arrive after the result is shown.
+  static YoutubeTrack? fromVideoLink(String link) {
+    final uri = Uri.tryParse(link.trim());
+    if (uri == null || !{'http', 'https'}.contains(uri.scheme)) return null;
+    final host = uri.host.toLowerCase();
+    if (!{
+      'youtube.com',
+      'www.youtube.com',
+      'm.youtube.com',
+      'music.youtube.com',
+      'youtu.be',
+      'www.youtu.be',
+    }.contains(host)) {
+      return null;
+    }
+    final id = YoutubeTrack(title: '', artist: '', url: link).videoId;
+    if (id == null) return null;
+    return YoutubeTrack(
+      title: 'YouTube video',
+      artist: 'Loading details…',
+      url: 'https://www.youtube.com/watch?v=$id',
+      thumbnailUrl: 'https://i.ytimg.com/vi/$id/hqdefault.jpg',
+    );
+  }
+
   final String title;
   final String artist;
   final String url;

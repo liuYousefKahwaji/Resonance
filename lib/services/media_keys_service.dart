@@ -13,10 +13,9 @@ import 'package:flutter/services.dart';
 /// 2. audio_service_win's SMTC integration has its own bug where the
 ///    Next/Previous buttons only arm after a play/pause transition.
 ///
-/// This bridge talks directly to Win32's RegisterHotKey with the media
-/// transport virtual keys, bypassing both third-party audio plugins. This
-/// keeps hardware media controls available without creating a second native
-/// audio pipeline.
+/// The native bridge publishes a Windows system media session for the media
+/// card and Bluetooth controls. It uses RegisterHotKey as a fallback before
+/// a track is loaded, without creating a second audio pipeline.
 class MediaKeysService {
   static const MethodChannel _methodChannel = MethodChannel('resonance/media_keys');
   static const EventChannel _eventChannel = EventChannel('resonance/media_keys/events');
@@ -40,6 +39,8 @@ class MediaKeysService {
     required VoidCallback onNext,
     required VoidCallback onPrevious,
     VoidCallback? onPlayPause,
+    VoidCallback? onPlay,
+    VoidCallback? onPause,
   }) async {
     if (_registered) return true;
 
@@ -56,6 +57,10 @@ class MediaKeysService {
             onPrevious();
           } else if (event == 'play_pause') {
             onPlayPause?.call();
+          } else if (event == 'play') {
+            onPlay?.call();
+          } else if (event == 'pause') {
+            onPause?.call();
           }
         },
         onError: (Object error) {
@@ -85,6 +90,29 @@ class MediaKeysService {
     try {
       await _methodChannel.invokeMethod('updateTaskbarPlaying', playing);
     } catch (_) {}
+  }
+
+  static Future<void> updateSystemMediaControls({
+    required bool active,
+    required bool playing,
+    String? title,
+    String? artist,
+    Uri? artwork,
+  }) async {
+    try {
+      await _methodChannel.invokeMethod('updateSystemMediaControls', {
+        'active': active,
+        'playing': playing,
+        'title': title ?? '',
+        'artist': artist ?? '',
+        'artwork': artwork?.toString() ?? '',
+        'artworkPath': artwork?.scheme == 'file'
+            ? artwork!.toFilePath(windows: true)
+            : '',
+      });
+    } catch (error) {
+      debugPrint('[MediaKeysService] system media card update failed: $error');
+    }
   }
 
   /// Unregisters the hotkeys and stops listening. Call this on app

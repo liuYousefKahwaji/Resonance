@@ -34,4 +34,19 @@ void main() {
     expect(track.thumbnailUrl, 'large.jpg');
     expect(track.formattedDuration, '1:02');
   });
+
+  test('copied YouTube and YouTube Music links produce immediate playable results', () {
+    for (final link in [
+      'https://music.youtube.com/watch?v=dQw4w9WgXcQ&si=shared',
+      'https://youtu.be/dQw4w9WgXcQ?si=shared',
+      'https://www.youtube.com/shorts/dQw4w9WgXcQ',
+    ]) {
+      final track = YoutubeTrack.fromVideoLink(link);
+      expect(track?.videoId, 'dQw4w9WgXcQ');
+      expect(track?.url, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+      expect(track?.thumbnailUrl, contains('dQw4w9WgXcQ'));
+    }
+    expect(YoutubeTrack.fromVideoLink('https://example.com/watch?v=dQw4w9WgXcQ'), isNull);
+    expect(YoutubeTrack.fromVideoLink('https://youtube.com/watch?v=invalid'), isNull);
+  });
 }

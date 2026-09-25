@@ -16,6 +16,7 @@ import 'package:resonance/screens/external_playlist/external_playlist_import_scr
 import 'package:resonance/screens/playlist_transfer/playlist_export_screen.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_import_screen.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
+import 'package:resonance/screens/onboarding/onboarding_screen.dart';
 import 'package:resonance/services/playlist_transfer_codec.dart';
 import 'package:resonance/services/playlist_transfer_export_service.dart';
 import 'package:resonance/services/discord_presence_service.dart';
@@ -196,8 +197,8 @@ Future<void> main() async {
 
   final prefs = await SharedPreferences.getInstance();
   final discordEnabled = prefs.getBool('discord_enabled') ?? true;
-  if (_isDesktop && discordEnabled) {
-    DiscordPresenceService().initialize();
+  if (_isDesktop) {
+    unawaited(DiscordPresenceService().setEnabled(discordEnabled));
   }
 
   runApp(
@@ -226,11 +227,29 @@ Future<void> main() async {
         onNext: () => handler.next(),
         onPrevious: () => handler.previous(),
         onPlayPause: () => handler.playPause(),
+        onPlay: () => handler.play(),
+        onPause: () => handler.pause(),
       ).timeout(const Duration(seconds: 5), onTimeout: () => false),
     );
     unawaited(MediaKeysService.setupTaskbarButtons());
+    void updateSystemCard() {
+      final item = handler.mediaItem.value;
+      unawaited(
+        MediaKeysService.updateSystemMediaControls(
+          active: item != null,
+          playing: handler.playbackVisualNotifier.value.playing,
+          title: item?.title,
+          artist: item?.artist,
+          artwork: item?.artUri,
+        ),
+      );
+    }
+
+    handler.mediaItem.listen((_) => updateSystemCard());
+    updateSystemCard();
     handler.playbackVisualNotifier.addListener(() {
       unawaited(MediaKeysService.updateTaskbarPlaying(handler.playbackVisualNotifier.value.playing));
+      updateSystemCard();
     });
   }
 }
@@ -322,6 +341,7 @@ class _MainAppState extends State<MainApp> {
   // Start behind an opaque launch gate. Preferences decide whether the gate
   // animates or is removed; the library is never painted for a stray frame.
   bool _showIntro = true;
+  bool _showOnboarding = false;
   ja.AudioPlayer? _introPlayer;
   mk.Player? _windowsIntroPlayer;
   Timer? _introTimer;
@@ -374,6 +394,7 @@ class _MainAppState extends State<MainApp> {
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool('intro_enabled') ?? true;
     if (!mounted) return;
+    setState(() => _showOnboarding = prefs.getBool('onboarding_completed') != true);
     if (!enabled) {
       setState(() => _showIntro = false);
       return;
@@ -1128,7 +1149,7 @@ class _MainAppState extends State<MainApp> {
     _handlingAndroidAction = true;
     try {
       final actionKind = action['kind']?.toString();
-      final requiresLibrary = actionKind == 'share' || actionKind == 'recognitionResult';
+      final requiresLibrary = actionKind == 'recognitionResult';
       BuildContext? navigatorContext;
       for (var attempt = 0; attempt < 50 && mounted; attempt++) {
         navigatorContext = _navigatorKey.currentState?.overlay?.context;
@@ -1318,6 +1339,8 @@ class _MainAppState extends State<MainApp> {
             builder: (nestedContext) {
               return _showIntro
                   ? _IntroOverlay(onDismiss: () => unawaited(_dismissIntro()))
+                  : _showOnboarding
+                  ? OnboardingScreen(onFinished: () => setState(() => _showOnboarding = false))
                   : TickerMode(
                       enabled: _uiVisible,
                       child: Scaffold(
@@ -2125,6 +2148,9 @@ class _MainAppState extends State<MainApp> {
       isStandalone: handler.isStandaloneMode,
       trackPath: trackPath,
       revealTrack: _revealCurrentTrack,
+      standaloneRouteBuilder: () => MaterialPageRoute<void>(
+        builder: (_) => StandalonePlayerScreen(onLibraryChanged: () => unawaited(_loadPlaylistFromDisk())),
+      ),
     );
   }
 
@@ -2134,7 +2160,11 @@ class _MainAppState extends State<MainApp> {
     if (navigator == null) return;
 
     if (handler.isStandaloneMode) {
-      await navigator.push<void>(MaterialPageRoute<void>(builder: (_) => const StandalonePlayerScreen()));
+      await navigator.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => StandalonePlayerScreen(onLibraryChanged: () => unawaited(_loadPlaylistFromDisk())),
+        ),
+      );
       return;
     }
 

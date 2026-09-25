@@ -89,6 +89,27 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         self.assertEqual(results[0]["title"], "Quick result")
         self.assertEqual(FakeYoutubeDL.calls, [])
 
+    def test_related_radio_uses_guest_client_and_excludes_seed_and_duplicates(self):
+        fake_ytmusic = types.ModuleType("ytmusicapi")
+
+        class FakeMusic:
+            def __init__(self, language):
+                self.language = language
+
+            def get_watch_playlist(self, **_):
+                return {"tracks": [
+                    {"title": "Seed", "videoId": "dQw4w9WgXcQ"},
+                    {"title": "Next", "videoId": "jNQXAC9IVRw"},
+                    {"title": "Duplicate", "videoId": "jNQXAC9IVRw"},
+                    {"title": "Then", "videoId": "yPYZpwSpKmA"},
+                ]}
+
+        fake_ytmusic.YTMusic = FakeMusic
+        with patch.dict(sys.modules, {"ytmusicapi": fake_ytmusic}):
+            tracks = json.loads(bridge.get_music_related("dQw4w9WgXcQ", 1))["tracks"]
+
+        self.assertEqual([track["title"] for track in tracks], ["Next"])
+
     def test_bundled_quickjs_is_enabled_for_every_yt_dlp_operation(self):
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory) / "libresonance_qjs.so"
@@ -211,7 +232,7 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
             )
 
             self.assertEqual(result, "https://cdn.example/combined.mp4")
-            self.assertEqual(FakeYoutubeDL.calls[0]["cookiefile"], cookie_file)
+            self.assertNotIn("cookiefile", FakeYoutubeDL.calls[0])
             self.assertNotIn("cookiefile", FakeYoutubeDL.calls[1])
             self.assertEqual(
                 FakeYoutubeDL.calls[1]["extractor_args"]["youtube"]["player_client"],
@@ -239,10 +260,11 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
             result = bridge.get_stream_url("https://youtu.be/test", cookie_file)
 
             self.assertEqual(result, "https://cdn.example/embedded.m4a")
-            self.assertEqual(len(FakeYoutubeDL.calls), 3)
+            self.assertEqual(len(FakeYoutubeDL.calls), 4)
             self.assertEqual(FakeYoutubeDL.calls[2]["cookiefile"], cookie_file)
+            self.assertEqual(FakeYoutubeDL.calls[3]["cookiefile"], cookie_file)
             self.assertEqual(
-                FakeYoutubeDL.calls[2]["extractor_args"]["youtube"]["player_client"],
+                FakeYoutubeDL.calls[3]["extractor_args"]["youtube"]["player_client"],
                 ["web_embedded"],
             )
 
@@ -265,6 +287,54 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         self.assertEqual(result["url"], "https://cdn.example/audio.m4a")
         self.assertEqual(result["headers"]["User-Agent"], "fake-agent")
         self.assertEqual(result["headers"]["Cookie"], "scoped=fake")
+
+    def test_stream_data_includes_title_and_artist_without_second_extraction(self):
+        FakeYoutubeDL.responder = lambda *_: {
+            "url": "https://cdn.example/audio.m4a",
+            "title": "Quick title",
+            "uploader": "Quick artist",
+            "thumbnail": "https://img.example/cover.jpg",
+        }
+        result = json.loads(bridge.get_stream_data("https://youtu.be/jNQXAC9IVRw"))
+        self.assertEqual(result["title"], "Quick title")
+        self.assertEqual(result["artist"], "Quick artist")
+        self.assertEqual(result["thumbnail"], "https://img.example/cover.jpg")
+        self.assertEqual(len(FakeYoutubeDL.calls), 1)
+
+    def test_superseded_stream_stops_before_trying_other_player_clients(self):
+        class CancelFlag:
+            def __init__(self):
+                self.value = False
+
+            def get(self):
+                return self.value
+
+        flag = CancelFlag()
+
+        def respond(_ydl, _target, _download):
+            flag.value = True
+            raise RuntimeError("Old request was interrupted")
+
+        FakeYoutubeDL.responder = respond
+        with self.assertRaises(bridge.StreamRequestCancelled):
+            bridge.get_stream_data("https://youtu.be/jNQXAC9IVRw", cancelled=flag)
+        self.assertEqual(len(FakeYoutubeDL.calls), 1)
+
+    def test_authenticated_retry_is_available_after_guest_login_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_file = os.path.join(directory, "cookies.txt")
+            Path(cookie_file).write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+
+            def respond(ydl, _target, _download):
+                if ydl.options.get("cookiefile") == cookie_file:
+                    return {"url": "https://cdn.example/private.m4a"}
+                raise RuntimeError("Sign in to confirm you're not a bot")
+
+            FakeYoutubeDL.responder = respond
+            result = json.loads(bridge.get_stream_data("https://youtu.be/jNQXAC9IVRw", cookie_file))
+            self.assertEqual(result["url"], "https://cdn.example/private.m4a")
+            self.assertNotIn("cookiefile", FakeYoutubeDL.calls[0])
+            self.assertEqual(FakeYoutubeDL.calls[-1]["cookiefile"], cookie_file)
 
     def test_search_uses_default_clients_and_returns_json(self):
         FakeYoutubeDL.responder = lambda *_: {
@@ -373,7 +443,10 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
             bridge.test_access("https://youtu.be/test", cookie_file)
 
             self.assertGreaterEqual(len(FakeYoutubeDL.calls), 6)
-            self.assertTrue(all(call.get("cookiefile") == cookie_file for call in FakeYoutubeDL.calls))
+            self.assertEqual(
+                sum(call.get("cookiefile") == cookie_file for call in FakeYoutubeDL.calls),
+                len(FakeYoutubeDL.calls) - 1,
+            )
 
             FakeYoutubeDL.calls = []
             bridge.search("anonymous", 1)

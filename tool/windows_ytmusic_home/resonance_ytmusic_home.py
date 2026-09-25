@@ -200,7 +200,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser")
     parser.add_argument("--cookies-file")
-    parser.add_argument("--action", choices=("home", "history", "add-history", "search"), default="home")
+    parser.add_argument("--action", choices=("home", "history", "add-history", "search", "related"), default="home")
     parser.add_argument("--video-id")
     parser.add_argument("--query")
     parser.add_argument("--limit", type=int, default=24)
@@ -211,6 +211,22 @@ def main():
         results = YTMusic(language="en").search(args.query, filter="videos", limit=max(1, min(args.limit, 10)))
         tracks = [_track(item) for item in results]
         print(json.dumps([track for track in tracks if track][:args.limit], ensure_ascii=False))
+        return
+    if args.action == "related":
+        video_id = _validated_video_id(args.video_id)
+        tracks = (YTMusic(language="en").get_watch_playlist(
+            videoId=video_id, radio=True, limit=max(1, min(args.limit, 50))
+        ) or {}).get("tracks") or []
+        normalized = []
+        seen = {video_id}
+        for item in tracks:
+            track = _track(item)
+            if track:
+                candidate_id = track["url"].split("v=", 1)[-1]
+                if candidate_id not in seen:
+                    seen.add(candidate_id)
+                    normalized.append(track)
+        print(json.dumps({"tracks": normalized[: max(1, min(args.limit, 50))]}, ensure_ascii=False))
         return
     if not args.browser and not args.cookies_file:
         parser.error("one of --browser or --cookies-file is required")

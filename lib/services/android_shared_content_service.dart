@@ -1,4 +1,5 @@
 import 'package:resonance/services/external_playlist_service.dart';
+import 'package:resonance/models/youtube_track.dart';
 
 enum AndroidSharedContentKind { search, playlist }
 
@@ -31,7 +32,8 @@ class AndroidSharedContentService {
     if (uri == null || uri.host.isEmpty) {
       return AndroidSharedContent(kind: AndroidSharedContentKind.search, value: text);
     }
-    if (_playlists.providers.any((provider) => provider.supports(uri))) {
+    // Watch links may carry a radio `list` parameter; prioritize the song.
+    if (YoutubeTrack.fromVideoLink(link) == null && _playlists.providers.any((provider) => provider.supports(uri))) {
       return AndroidSharedContent(kind: AndroidSharedContentKind.playlist, value: link);
     }
 

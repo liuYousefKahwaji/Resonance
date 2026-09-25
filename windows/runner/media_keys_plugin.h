@@ -1,8 +1,8 @@
 // windows/runner/media_keys_plugin.h
 //
-// A minimal native Windows plugin that registers global hotkeys for the
-// hardware media transport keys (Play/Pause, Next, and Previous) using the
-// raw Win32 RegisterHotKey API directly.
+// Native Windows media transport bridge. It publishes a System Media
+// Transport Controls session for the Windows media card and Bluetooth
+// headsets, and uses raw RegisterHotKey while no session is active.
 //
 // WHY THIS EXISTS:
 // hotkey_manager_windows crashes natively when asked to register
@@ -12,11 +12,10 @@
 // audio_service_win's SMTC integration also has a bug where its
 // Next/Previous buttons only arm after a play/pause transition.
 //
-// This plugin sidesteps both issues by talking to Win32 directly:
-// RegisterHotKey + the VK_MEDIA_* transport keys work fine at the raw Win32
-// level; the bug is specific to hotkey_manager's wrapper, not the underlying
-// OS API. A WM_APPCOMMAND fallback also covers devices that emit the media
-// command message while Resonance is foregrounded.
+// This plugin keeps one transport owner without adding an audio pipeline.
+// RegisterHotKey + the VK_MEDIA_* transport keys work outside an active media
+// session; an SMTC button event owns active playback. WM_APPCOMMAND covers
+// foreground devices when SMTC or global hotkeys are unavailable.
 //
 #ifndef RUNNER_MEDIA_KEYS_PLUGIN_H_
 #define RUNNER_MEDIA_KEYS_PLUGIN_H_
@@ -29,9 +28,11 @@
 #include <flutter/plugin_registrar_windows.h>
 #include <windows.h>
 #include <shobjidl.h>
+#include <winrt/Windows.Media.h>
 
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace resonance {
 
@@ -43,6 +44,7 @@ constexpr int kHotkeyIdPlayPause = 1003;
 constexpr int kTaskbarButtonPrevious = 2001;
 constexpr int kTaskbarButtonPlayPause = 2002;
 constexpr int kTaskbarButtonNext = 2003;
+constexpr UINT kSmtcButtonMessage = WM_APP + 46;
 
 class MediaKeysPlugin : public flutter::Plugin {
  public:
@@ -90,6 +92,8 @@ class MediaKeysPlugin : public flutter::Plugin {
   void UnregisterMediaKeys();
   bool SetupTaskbarButtons(HWND hwnd);
   bool UpdateTaskbarPlayState(bool playing);
+  bool SetupSystemMediaControls(HWND hwnd);
+  bool UpdateSystemMediaControls(const flutter::EncodableMap& data);
 
   flutter::PluginRegistrarWindows* registrar_;
   int window_proc_id_ = -1;
@@ -105,6 +109,13 @@ class MediaKeysPlugin : public flutter::Plugin {
   HWND last_top_level_hwnd_ = nullptr;
   HWND registered_hwnd_ = nullptr;
   ITaskbarList3* taskbar_list_ = nullptr;
+  winrt::Windows::Media::SystemMediaTransportControls smtc_{nullptr};
+  winrt::event_token smtc_button_token_{};
+  bool smtc_active_ = false;
+  std::string smtc_title_;
+  std::string smtc_artist_;
+  std::string smtc_artwork_;
+  std::string smtc_artwork_path_;
 
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> event_sink_;
   std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>> event_channel_;

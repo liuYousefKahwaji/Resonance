@@ -1,5 +1,6 @@
 // windows/runner/media_keys_plugin.cpp
 #include "media_keys_plugin.h"
+#include "resonance_app_identity.h"
 
 #include <flutter/standard_method_codec.h>
 
@@ -9,6 +10,11 @@
 #include <variant>
 #include <vector>
 #include <shellapi.h>
+#include <shcore.h>
+#include <SystemMediaTransportControlsInterop.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.Streams.h>
 
 namespace resonance {
 
@@ -324,12 +330,132 @@ MediaKeysPlugin::MediaKeysPlugin(flutter::PluginRegistrarWindows* registrar) : r
 
 MediaKeysPlugin::~MediaKeysPlugin() {
   UnregisterMediaKeys();
+  if (smtc_) {
+    try {
+      smtc_.IsEnabled(false);
+      smtc_.ButtonPressed(smtc_button_token_);
+    } catch (winrt::hresult_error const&) {
+      // Teardown must not terminate the process if Windows retired the session.
+    }
+  }
   if (taskbar_list_ != nullptr) {
     taskbar_list_->Release();
     taskbar_list_ = nullptr;
   }
   if (window_proc_id_ != -1) {
     registrar_->UnregisterTopLevelWindowProcDelegate(window_proc_id_);
+  }
+}
+
+bool MediaKeysPlugin::SetupSystemMediaControls(HWND hwnd) {
+  if (smtc_) return true;
+  if (hwnd == nullptr) return false;
+  try {
+    auto factory = winrt::get_activation_factory<
+        winrt::Windows::Media::SystemMediaTransportControls,
+        ISystemMediaTransportControlsInterop>();
+    winrt::check_hresult(factory->GetForWindow(
+        hwnd,
+        winrt::guid_of<winrt::Windows::Media::SystemMediaTransportControls>(),
+        winrt::put_abi(smtc_)));
+    smtc_.IsEnabled(false);
+    smtc_.IsPlayEnabled(true);
+    smtc_.IsPauseEnabled(true);
+    smtc_.IsNextEnabled(true);
+    smtc_.IsPreviousEnabled(true);
+    smtc_button_token_ = smtc_.ButtonPressed([hwnd](auto const&, auto const& args) {
+      const auto button = args.Button();
+      WPARAM action = 0;
+      if (button == winrt::Windows::Media::SystemMediaTransportControlsButton::Next) action = 1;
+      else if (button == winrt::Windows::Media::SystemMediaTransportControlsButton::Previous) action = 2;
+      else if (button == winrt::Windows::Media::SystemMediaTransportControlsButton::Play) action = 4;
+      else if (button == winrt::Windows::Media::SystemMediaTransportControlsButton::Pause) action = 5;
+      if (action != 0) PostMessageW(hwnd, kSmtcButtonMessage, action, 0);
+    });
+    return true;
+  } catch (winrt::hresult_error const& error) {
+    OutputDebugStringW((std::wstring(L"[MediaKeysPlugin] SMTC unavailable: ") + error.message().c_str() + L"\n").c_str());
+    smtc_ = nullptr;
+    return false;
+  }
+}
+
+bool MediaKeysPlugin::UpdateSystemMediaControls(const flutter::EncodableMap& data) {
+  if (!SetupSystemMediaControls(last_top_level_hwnd_)) return false;
+  auto string_value = [&data](const char* key) -> std::string {
+    auto it = data.find(flutter::EncodableValue(key));
+    if (it == data.end()) return {};
+    const auto* value = std::get_if<std::string>(&it->second);
+    return value == nullptr ? std::string{} : *value;
+  };
+  auto bool_value = [&data](const char* key) -> bool {
+    auto it = data.find(flutter::EncodableValue(key));
+    if (it == data.end()) return false;
+    const auto* value = std::get_if<bool>(&it->second);
+    return value != nullptr && *value;
+  };
+  try {
+    const bool active = bool_value("active");
+    if (!active) {
+      smtc_.PlaybackStatus(winrt::Windows::Media::MediaPlaybackStatus::Stopped);
+      smtc_.IsEnabled(false);
+      smtc_active_ = false;
+      smtc_title_.clear();
+      smtc_artist_.clear();
+      smtc_artwork_.clear();
+      smtc_artwork_path_.clear();
+      if (registration_requested_ && !registered_) RegisterMediaKeys(last_top_level_hwnd_);
+      return true;
+    }
+    const auto title = string_value("title");
+    const auto artist = string_value("artist");
+    const auto artwork = string_value("artwork");
+    const auto artwork_path = string_value("artworkPath");
+    if (!smtc_active_ || title != smtc_title_ || artist != smtc_artist_ ||
+        artwork != smtc_artwork_ || artwork_path != smtc_artwork_path_) {
+      auto updater = smtc_.DisplayUpdater();
+      updater.ClearAll();
+      updater.AppMediaId(kAppUserModelId);
+      updater.Type(winrt::Windows::Media::MediaPlaybackType::Music);
+      updater.MusicProperties().Title(winrt::to_hstring(title));
+      updater.MusicProperties().Artist(winrt::to_hstring(artist));
+      if (!artwork_path.empty()) {
+        try {
+          winrt::Windows::Storage::Streams::IRandomAccessStream stream{nullptr};
+          winrt::check_hresult(CreateRandomAccessStreamOnFile(
+              winrt::to_hstring(artwork_path).c_str(),
+              static_cast<DWORD>(winrt::Windows::Storage::FileAccessMode::Read),
+              winrt::guid_of<winrt::Windows::Storage::Streams::IRandomAccessStream>(),
+              winrt::put_abi(stream)));
+          updater.Thumbnail(winrt::Windows::Storage::Streams::RandomAccessStreamReference::CreateFromStream(stream));
+        } catch (winrt::hresult_error const&) {
+          // A missing local cover should not hide the media controls.
+        }
+      } else if (!artwork.empty()) {
+        try {
+          updater.Thumbnail(winrt::Windows::Storage::Streams::RandomAccessStreamReference::CreateFromUri(
+              winrt::Windows::Foundation::Uri(winrt::to_hstring(artwork))));
+        } catch (winrt::hresult_error const&) {
+          // A missing local cover or unreachable URL should not hide controls.
+        }
+      }
+      updater.Update();
+      smtc_title_ = title;
+      smtc_artist_ = artist;
+      smtc_artwork_ = artwork;
+      smtc_artwork_path_ = artwork_path;
+    }
+    smtc_.PlaybackStatus(bool_value("playing")
+        ? winrt::Windows::Media::MediaPlaybackStatus::Playing
+        : winrt::Windows::Media::MediaPlaybackStatus::Paused);
+    smtc_.IsEnabled(true);
+    smtc_active_ = true;
+    // Let Windows route keyboard and Bluetooth transport events to this
+    // session. RegisterHotKey would otherwise steal some devices' presses.
+    UnregisterMediaKeys();
+    return true;
+  } catch (winrt::hresult_error const&) {
+    return false;
   }
 }
 
@@ -474,7 +600,7 @@ std::optional<LRESULT> MediaKeysPlugin::HandleWindowProc(HWND hwnd, UINT message
   // this delegate had fired even once (e.g. if "register" arrives
   // before the first window message does - in practice this delegate
   // fires very early/often, but we guard for it anyway).
-  if (registration_requested_ && !registered_) {
+  if (registration_requested_ && !registered_ && !smtc_active_) {
     // One-time diagnostic: compare the hwnd this delegate receives
     // against GetView()->GetNativeWindow(), to definitively confirm
     // or rule out the "two different windows" theory.
@@ -519,19 +645,31 @@ std::optional<LRESULT> MediaKeysPlugin::HandleWindowProc(HWND hwnd, UINT message
     }
   }
 
-  // Some keyboard firmware and media remotes deliver Play/Pause as an
-  // application command instead of a RegisterHotKey message. If the global
-  // registration was unavailable (for example because another process owns
-  // the key), still honor the command while Resonance is the foreground app.
-  // Do not handle it when RegisterHotKey succeeded, otherwise one physical
-  // press could toggle playback twice.
-  if (message == WM_APPCOMMAND && !play_pause_registered_) {
+  if (message == kSmtcButtonMessage) {
+    if (event_sink_) {
+      if (wparam == 1) event_sink_->Success(flutter::EncodableValue(std::string("next")));
+      else if (wparam == 2) event_sink_->Success(flutter::EncodableValue(std::string("previous")));
+      else if (wparam == 3) event_sink_->Success(flutter::EncodableValue(std::string("play_pause")));
+      else if (wparam == 4) event_sink_->Success(flutter::EncodableValue(std::string("play")));
+      else if (wparam == 5) event_sink_->Success(flutter::EncodableValue(std::string("pause")));
+    }
+    return 0;
+  }
+
+  // Some headsets emit WM_APPCOMMAND rather than virtual media keys. When
+  // SMTC is unavailable, honor those commands while Resonance is foreground.
+  // Suppress a command already owned by RegisterHotKey to avoid double skips.
+  if (message == WM_APPCOMMAND && !smtc_active_) {
     const int command = GET_APPCOMMAND_LPARAM(lparam);
-    if (command == APPCOMMAND_MEDIA_PLAY_PAUSE) {
-      if (event_sink_) {
-        event_sink_->Success(flutter::EncodableValue(std::string("play_pause")));
-        return 0;
-      }
+    const char* action = nullptr;
+    if (command == APPCOMMAND_MEDIA_NEXTTRACK && !next_registered_) action = "next";
+    else if (command == APPCOMMAND_MEDIA_PREVIOUSTRACK && !previous_registered_) action = "previous";
+    else if (command == APPCOMMAND_MEDIA_PLAY_PAUSE && !play_pause_registered_) action = "play_pause";
+    else if (command == APPCOMMAND_MEDIA_PLAY && !play_pause_registered_) action = "play";
+    else if (command == APPCOMMAND_MEDIA_PAUSE && !play_pause_registered_) action = "pause";
+    if (action != nullptr && event_sink_) {
+      event_sink_->Success(flutter::EncodableValue(std::string(action)));
+      return 0;
     }
   }
 
@@ -604,6 +742,9 @@ void MediaKeysPlugin::HandleMethodCall(
   } else if (call.method_name() == "updateTaskbarPlaying") {
     const auto* value = std::get_if<bool>(call.arguments());
     result->Success(flutter::EncodableValue(value != nullptr && UpdateTaskbarPlayState(*value)));
+  } else if (call.method_name() == "updateSystemMediaControls") {
+    const auto* data = std::get_if<flutter::EncodableMap>(call.arguments());
+    result->Success(flutter::EncodableValue(data != nullptr && UpdateSystemMediaControls(*data)));
   } else if (call.method_name() == "sendShortcut") {
     const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
     result->Success(flutter::EncodableValue(arguments != nullptr && SendShortcut(*arguments)));

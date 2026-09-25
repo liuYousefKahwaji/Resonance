@@ -33,6 +33,7 @@ import 'package:resonance/services/scroll_effects_preferences.dart';
 import 'package:resonance/services/lyrics_display_preferences.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
 import 'package:resonance/screens/settings/youtube_access_screen.dart';
+import 'package:resonance/screens/onboarding/onboarding_screen.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
@@ -164,12 +165,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _discordEnabled = value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('discord_enabled', value);
-    if (value) {
-      DiscordPresenceService().initialize();
-    } else {
-      await DiscordPresenceService().clearPresence();
-      await DiscordPresenceService().dispose();
-    }
+    await DiscordPresenceService().setEnabled(value);
   }
 
   Future<void> _loadTrayMode() async {
@@ -996,6 +992,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SectionHeader(label: 'About'),
             _SettingsCard(
               children: [
+                _SettingsTile(
+                  icon: Icons.auto_stories_rounded,
+                  title: 'Getting started tour',
+                  subtitle: 'Review the controls and setup choices',
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.push<void>(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (routeContext) => OnboardingScreen(onFinished: () => Navigator.pop(routeContext)),
+                    ),
+                  ),
+                ),
+                _Divider(),
                 _SettingsTile(
                   icon: Icons.music_note_rounded,
                   title: 'Resonance',

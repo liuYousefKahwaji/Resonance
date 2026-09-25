@@ -42,6 +42,27 @@ class WindowsYoutubeMusicHomeTests(unittest.TestCase):
 
         self.assertEqual(json.loads(output.getvalue())[0]["title"], "Quick result")
 
+    def test_related_radio_is_guest_scoped_unique_and_bounded(self):
+        class FakeMusic:
+            def __init__(self, language):
+                self.language = language
+
+            def get_watch_playlist(self, **_):
+                return {"tracks": [
+                    {"title": "Seed", "videoId": "dQw4w9WgXcQ"},
+                    {"title": "Next", "videoId": "jNQXAC9IVRw"},
+                    {"title": "Duplicate", "videoId": "jNQXAC9IVRw"},
+                    {"title": "Then", "videoId": "yPYZpwSpKmA"},
+                ]}
+
+        output = io.StringIO()
+        with patch.object(helper, "YTMusic", FakeMusic), \
+                patch.object(sys, "argv", ["helper", "--action", "related", "--video-id", "dQw4w9WgXcQ", "--limit", "1"]), \
+                redirect_stdout(output):
+            helper.main()
+
+        self.assertEqual([track["title"] for track in json.loads(output.getvalue())["tracks"]], ["Next"])
+
     @staticmethod
     def _cookie(name, value, domain, path="/"):
         return http.cookiejar.Cookie(

@@ -30,6 +30,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
 
@@ -57,6 +58,7 @@ class MainActivity : AudioServiceFragmentActivity() {
     private var activityResumed = false
     private var entrypointDispatchScheduled = false
     private var minimizedTileLaunch = false
+    private val streamRequests = ConcurrentHashMap<Long, AtomicBoolean>()
 
     private data class RecognitionRequest(
         val id: String,
@@ -263,10 +265,14 @@ class MainActivity : AudioServiceFragmentActivity() {
                     // ── getStreamData ─────────────────────────────────────────
                     "getStreamData" -> {
                         val url = call.argument<String>("url") ?: ""
+                        val requestId = call.argument<Number>("requestId")?.toLong() ?: 0L
+                        val forceAuthenticated = call.argument<Boolean>("forceAuthenticated") == true
+                        val cancelled = AtomicBoolean(false)
+                        if (requestId != 0L) streamRequests[requestId] = cancelled
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
                                 val json = withYoutubeCookieCopy { cookiePath ->
-                                    bridge.callAttr("get_stream_data", url, cookiePath).toString()
+                                    bridge.callAttr("get_stream_data", url, cookiePath, forceAuthenticated, cancelled).toString()
                                 }
                                 val payload = JSONObject(json)
                                 val headerObject = payload.optJSONObject("headers") ?: JSONObject()
@@ -275,11 +281,37 @@ class MainActivity : AudioServiceFragmentActivity() {
                                 val streamData = mapOf(
                                     "url" to payload.getString("url"),
                                     "headers" to headers,
+                                    "title" to payload.optString("title"),
+                                    "artist" to payload.optString("artist"),
+                                    "thumbnail" to payload.optString("thumbnail"),
                                 )
                                 withContext(Dispatchers.Main) { result.success(streamData) }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     result.error("STREAM_ERROR", e.message, null)
+                                }
+                            } finally {
+                                if (requestId != 0L) streamRequests.remove(requestId, cancelled)
+                            }
+                        }
+                    }
+
+                    "cancelStreamData" -> {
+                        val requestId = call.argument<Number>("requestId")?.toLong() ?: 0L
+                        streamRequests[requestId]?.set(true)
+                        result.success(null)
+                    }
+
+                    "getMusicRelated" -> {
+                        val videoId = call.argument<String>("videoId") ?: ""
+                        val limit = (call.argument<Int>("limit") ?: 25).coerceIn(1, 50)
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = bridge.callAttr("get_music_related", videoId, limit).toString()
+                                withContext(Dispatchers.Main) { result.success(json) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("MUSIC_RELATED_ERROR", e.message, null)
                                 }
                             }
                         }

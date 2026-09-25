@@ -10,54 +10,84 @@ class DiscordPresenceService {
   DiscordRPC? _discordRPC;
   Timer? _reconnectTimer;
   bool isReady = false;
+  bool _enabled = false;
+  int _generation = 0;
   static const String _discordApplicationId = '1516141935763652618';
 
   // lib/core/services/discord_presence_service.dart
   Future<void> initialize() async {
-    if (!DiscordRPC.isAvailable) {
+    if (!_enabled || _discordRPC != null || !DiscordRPC.isAvailable) {
       return;
     }
 
-    _discordRPC = DiscordRPC();
+    final generation = _generation;
+    final rpc = DiscordRPC();
+    _discordRPC = rpc;
 
-    _discordRPC!.onReady.listen((event) {
+    rpc.onReady.listen((event) {
+      if (!_enabled || generation != _generation || !identical(_discordRPC, rpc)) return;
       isReady = true;
       _reconnectTimer?.cancel();
       _reconnectTimer = null;
     });
 
-    _discordRPC!.onError.listen((event) {
+    rpc.onError.listen((event) {
+      if (!_enabled || generation != _generation || !identical(_discordRPC, rpc)) return;
       isReady = false;
       _attemptReconnection();
     });
 
-    _discordRPC!.onDisconnected.listen((event) {
+    rpc.onDisconnected.listen((event) {
+      if (!_enabled || generation != _generation || !identical(_discordRPC, rpc)) return;
       isReady = false;
       _attemptReconnection();
     });
 
     // Do NOT await – run in background
     unawaited(
-      _discordRPC!.initialize(_discordApplicationId).catchError((e) {
+      rpc.initialize(_discordApplicationId).catchError((e) {
+        if (!identical(_discordRPC, rpc) || generation != _generation) return;
         isReady = false;
         _discordRPC = null;
+        _attemptReconnection();
       }),
     );
   }
 
   void _attemptReconnection() {
+    if (!_enabled) return;
     _reconnectTimer ??= Timer(const Duration(seconds: 5), () async {
       await dispose();
-      await initialize();
+      if (_enabled) await initialize();
     });
+  }
+
+  Future<void> setEnabled(bool enabled) async {
+    if (_enabled == enabled) {
+      if (enabled && _discordRPC == null) await initialize();
+      return;
+    }
+    _enabled = enabled;
+    if (enabled) {
+      await initialize();
+    } else {
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      try {
+        await clearPresence();
+      } finally {
+        await dispose();
+      }
+    }
   }
 
   // Updated method using the new API
   Future<void> updatePresence(String title, String artist) async {
+    if (!_enabled) return;
     if (!isReady && _discordRPC == null) {
       await initialize();
     }
-    if (_discordRPC != null && _discordRPC!.isConnected) {
+    if (_enabled && _discordRPC != null && _discordRPC!.isConnected) {
       await _discordRPC!.setPresence(
         DiscordPresence(
           type: DiscordActivityType.listening,
@@ -71,6 +101,7 @@ class DiscordPresenceService {
 
   // Add this method inside DiscordPresenceService
   Future<void> setIdle() async {
+    if (!_enabled) return;
     if (_discordRPC != null && _discordRPC!.isConnected) {
       await _discordRPC!.setPresence(
         DiscordPresence(type: DiscordActivityType.listening, details: 'Idle', state: 'Nothing playing'),
@@ -86,12 +117,12 @@ class DiscordPresenceService {
   }
 
   Future<void> dispose() async {
+    _generation++;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
-    if (_discordRPC != null && _discordRPC!.isConnected) {
-      await _discordRPC!.dispose();
-      _discordRPC = null;
-    }
+    final rpc = _discordRPC;
+    _discordRPC = null;
     isReady = false;
+    if (rpc != null) await rpc.dispose();
   }
 }

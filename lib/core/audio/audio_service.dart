@@ -27,6 +27,8 @@ import 'package:resonance/services/local_playback_history_coordinator.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
+import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/services/youtube/youtube_music_related_service.dart';
 
 @immutable
 class PlaybackVisualState {
@@ -321,6 +323,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   int? _standalonePlaylistIndex;
   List<StandaloneStreamQueueItem> _standaloneStreamQueue = const [];
   int? _standaloneStreamQueueIndex;
+  bool _standaloneRelatedEnabled = false;
+  int _standaloneRelatedGeneration = 0;
 
   int _loadGeneration = 0;
   int? _activeTrackLoadGeneration;
@@ -364,6 +368,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   bool _currentTrackIsStream = false;
 
   bool get isStandaloneMode => standaloneModeNotifier.value || mediaItem.value?.extras?['resonanceStandalone'] == true;
+  bool get isStandaloneStreamSession =>
+      isStandaloneMode &&
+      _standalonePlaylistNumber == null &&
+      (mediaItem.value?.id.startsWith('http://') == true || mediaItem.value?.id.startsWith('https://') == true);
 
   bool get syncPeerControlled => _syncPeerControlled;
   bool get syncSessionActive => _syncSessionActive;
@@ -468,6 +476,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   // Session-scoped cache: YouTube URL → resolved CDN/HLS URL.
   final Map<String, ({ResolvedYoutubeStream stream, DateTime resolvedAt})> _streamUrlCache = {};
   final Map<String, Future<ResolvedYoutubeStream>> _streamResolutionInFlight = {};
+  final Map<int, String> _androidStreamRequests = {};
+  final Set<int> _cancelledAndroidStreamRequests = {};
+  int _nextAndroidStreamRequestId = 0;
   static const _streamCacheLifetime = Duration(minutes: 30);
   bool _windowsIsBuffering = false;
   bool _windowsIsCompleted = false;
@@ -515,6 +526,19 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   final LocalPlaybackHistoryCoordinator? _localHistoryCoordinator;
   int _youtubeAccessRevision = 0;
   final _forceAuthenticatedStreamIds = <String>{};
+
+  void _cancelSupersededAndroidStreams(String? selectedUrl) {
+    if (!Platform.isAndroid) return;
+    for (final entry in _androidStreamRequests.entries.toList()) {
+      if (entry.value == selectedUrl || !_cancelledAndroidStreamRequests.add(entry.key)) continue;
+      _streamResolutionInFlight.remove(entry.value);
+      unawaited(
+        const MethodChannel(
+          'resonance/android_youtube',
+        ).invokeMethod<void>('cancelStreamData', {'requestId': entry.key}).catchError((Object _) {}),
+      );
+    }
+  }
 
   void _handleYoutubeAccessChanged() {
     final revision = _youtubeAccessService?.revision ?? 0;
@@ -861,11 +885,21 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         uri: Uri.parse(streamUrl),
         headers: Map.unmodifiable(_readWindowsStreamHeaders(selected!, info)),
         accessRevision: accessRevision,
+        title: info['title']?.toString(),
+        artist: (info['uploader'] ?? info['channel'])?.toString(),
+        thumbnailUrl: info['thumbnail']?.toString(),
       );
     } else if (Platform.isAndroid) {
       const channel = MethodChannel('resonance/android_youtube');
+      final requestId = ++_nextAndroidStreamRequestId;
+      _androidStreamRequests[requestId] = url;
       try {
-        final result = await channel.invokeMethod<Object?>('getStreamData', {'url': url});
+        final result = await channel.invokeMethod<Object?>('getStreamData', {
+          'url': url,
+          'requestId': requestId,
+          'forceAuthenticated': _forceAuthenticatedStreamIds.contains(url),
+        });
+        if (_cancelledAndroidStreamRequests.contains(requestId)) throw StateError('Stream request superseded');
         if (result is! Map) throw StateError('Android bridge returned invalid stream data');
         final data = Map<String, Object?>.from(result);
         final streamUrl = data['url']?.toString();
@@ -878,8 +912,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           uri: Uri.parse(streamUrl),
           headers: Map.unmodifiable(headers),
           accessRevision: accessRevision,
+          title: data['title']?.toString(),
+          artist: data['artist']?.toString(),
+          thumbnailUrl: data['thumbnail']?.toString(),
         );
       } catch (error) {
+        if (_cancelledAndroidStreamRequests.contains(requestId)) {
+          throw StateError('Stream request superseded');
+        }
         final failure = YoutubeFailureClassifier.classify(
           error,
           authenticated: _youtubeAccessService?.isConfigured ?? false,
@@ -887,6 +927,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         );
         _youtubeAccessService?.observeFailure(failure);
         throw failure;
+      } finally {
+        _androidStreamRequests.remove(requestId);
+        _cancelledAndroidStreamRequests.remove(requestId);
       }
     } else {
       throw UnsupportedError('Streaming not supported on this platform');
@@ -906,7 +949,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   /// Warms the first likely selections while the user browses. Foreground
   /// playback joins an in-flight resolution for the same URL.
   Future<void> warmStreamCandidates(Iterable<String> urls) async {
-    final candidates = urls.where((url) => url.startsWith('https://') || url.startsWith('http://')).toSet().take(4);
+    final candidates = urls
+        .where((url) => url.startsWith('https://') || url.startsWith('http://'))
+        .toSet()
+        .take(Platform.isAndroid ? 1 : 4);
     await Future.wait(
       candidates.map((url) async {
         try {
@@ -925,7 +971,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     // Resolve the likely next selection first. The previous selection is
     // usually already cached, but warm it as well when a session starts here.
     await Future.wait(
-      [1, -1].map((offset) async {
+      (Platform.isAndroid ? [1] : [1, -1]).map((offset) async {
         if (_loadGeneration != generation) return;
         final target = items[loopingStandaloneQueueIndex(currentIndex: index, offset: offset, length: items.length)];
         if (target.url == mediaItem.value?.id) return;
@@ -1045,7 +1091,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_retryLoadGeneration != generation) {
       if (recoveringStream) {
         _streamUrlCache.remove(current.id);
-        if (Platform.isWindows && _youtubeAccessService?.isConfigured == true) {
+        if (_youtubeAccessService?.isConfigured == true) {
           _forceAuthenticatedStreamIds.add(current.id);
         }
       }
@@ -2315,6 +2361,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _retryLoadGeneration = null;
     _handledFailureGeneration = null;
     _loadGeneration++;
+    _cancelSupersededAndroidStreams(null);
     _crossfadeGeneration++;
     _crossfadeInProgress = false;
     _transitionVolumeMultiplier = 1.0;
@@ -2411,7 +2458,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     bool preserveFailureHistory = false,
   }) async {
     if (_syncControlLocked) return;
+    final interruptAndroidLoad = Platform.isAndroid && _activeTrackLoadGeneration != null;
     final generation = ++_loadGeneration;
+    _cancelSupersededAndroidStreams(filePath);
     _playbackRequested = false;
     _playbackUnavailable = false;
     _playbackHealthTimer?.cancel();
@@ -2423,6 +2472,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _activeTrackLoadGeneration = generation;
     _lastTrackLoadFailure = null;
     try {
+      if (interruptAndroidLoad) {
+        // Stop aborts just_audio's pending ExoPlayer load. The old request's
+        // generation guard then drops its interruption error and result.
+        try {
+          await _player.stop();
+        } catch (_) {}
+        if (_loadGeneration != generation) return;
+      }
       await _loadTrackRequest(
         filePath,
         title,
@@ -2578,10 +2635,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         }
 
         if (_loadGeneration != myGen) return;
-        await _queueBackendLoad(() async {
-          if (_loadGeneration != myGen) return;
-          await _player.setAudioSource(source);
-        });
+        // just_audio interrupts an older load when a newer source is set.
+        // Queuing these calls made a fresh tap wait for the obsolete load.
+        await _player.setAudioSource(source);
         if (_loadGeneration != myGen) return;
       }
 
@@ -2609,19 +2665,42 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _envelopeAnalyzer.cancel();
 
       final dur = _currentDuration;
+      final currentMetadata = mediaItem.value;
+      final currentTitle = currentMetadata?.id == filePath ? currentMetadata!.title : title;
+      final currentArtist = currentMetadata?.id == filePath ? currentMetadata!.artist ?? artist : artist;
+      final currentArtwork = currentMetadata?.id == filePath ? currentMetadata!.artUri ?? artworkUri : artworkUri;
       mediaItem.add(
         MediaItem(
           id: filePath,
-          title: title,
-          artist: artist,
+          title: currentTitle,
+          artist: currentArtist,
           duration: dur,
-          artUri: artworkUri,
+          artUri: currentArtwork,
           // Presentation may have been dismissed while a slow stream was
           // resolving. Never restore the stale standalone flag captured when
           // this load began.
           extras: standalonePresentationExtras(standaloneModeNotifier.value),
         ),
       );
+      if (isStream && (currentTitle == 'YouTube video' || currentArtist == 'Loading details…')) {
+        final resolved = _streamUrlCache[filePath]?.stream;
+        final resolvedTitle = resolved?.title?.trim() ?? '';
+        final resolvedArtist = resolved?.artist?.trim() ?? '';
+        if (resolvedTitle.isNotEmpty && resolvedArtist.isNotEmpty) {
+          unawaited(
+            updateStandaloneStreamMetadata(
+              YoutubeTrack(
+                title: resolvedTitle,
+                artist: resolvedArtist,
+                url: filePath,
+                thumbnailUrl: resolved?.thumbnailUrl?.isNotEmpty == true
+                    ? resolved!.thumbnailUrl
+                    : currentArtwork?.toString(),
+              ),
+            ),
+          );
+        }
+      }
 
       _updatePlaybackState();
       if (isStream && _standaloneStreamQueue.isNotEmpty) {
@@ -2634,9 +2713,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         _finishTrackLoad(
           generation: myGen,
           filePath: filePath,
-          title: title,
-          artist: artist,
-          artworkUri: artworkUri,
+          title: mediaItem.value?.title ?? title,
+          artist: mediaItem.value?.artist ?? artist,
+          artworkUri: mediaItem.value?.artUri ?? artworkUri,
           externalSource: loadedFromOutsidePlaylist,
         ),
       );
@@ -2733,7 +2812,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     String? thumbnailUrl,
     List<StandaloneStreamQueueItem>? queueItems,
     int? queueIndex,
+    bool relatedQueue = true,
   }) async {
+    _standaloneRelatedGeneration++;
+    _standaloneRelatedEnabled = relatedQueue;
     final requestedQueue = queueItems ?? const <StandaloneStreamQueueItem>[];
     final resolvedIndex = queueIndex != null && queueIndex >= 0 && queueIndex < requestedQueue.length
         ? queueIndex
@@ -2742,13 +2824,87 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _standaloneStreamQueueIndex = resolvedIndex >= 0 ? resolvedIndex : null;
     final artworkUri = thumbnailUrl == null || thumbnailUrl.isEmpty ? null : Uri.tryParse(thumbnailUrl);
     unawaited(MetadataCacheService.set(url, title, artist, artworkUrl: thumbnailUrl));
-    await loadTrack(url, title, artist, standalone: true, artworkUri: artworkUri);
+    final playback = loadTrack(url, title, artist, standalone: true, artworkUri: artworkUri);
+    if (relatedQueue) unawaited(_refreshStandaloneRelatedQueue(url, playback));
+    await playback;
     if (!isStandaloneMode ||
         mediaItem.value?.id != url ||
         playbackState.value.processingState == AudioProcessingState.idle) {
       final failure = _lastTrackLoadFailure;
       if (failure != null) throw failure;
       throw StateError('The YouTube stream could not be loaded.');
+    }
+  }
+
+  Future<void> updateStandaloneStreamMetadata(YoutubeTrack track) async {
+    final current = mediaItem.value;
+    if (current == null ||
+        !isStandaloneStreamSession ||
+        YoutubeTrack(title: '', artist: '', url: current.id).videoId != track.videoId) {
+      return;
+    }
+    final artwork = track.thumbnailUrl == null ? current.artUri : Uri.tryParse(track.thumbnailUrl!);
+    await MetadataCacheService.set(current.id, track.title, track.artist, artworkUrl: track.thumbnailUrl);
+    if (mediaItem.value?.id != current.id) return;
+    mediaItem.add(current.copyWith(title: track.title, artist: track.artist, artUri: artwork));
+    _standaloneStreamQueue = [
+      for (final item in _standaloneStreamQueue)
+        if (item.url == current.id)
+          StandaloneStreamQueueItem(
+            url: item.url,
+            title: track.title,
+            artist: track.artist,
+            thumbnailUrl: track.thumbnailUrl,
+          )
+        else
+          item,
+    ];
+  }
+
+  Future<void> _refreshStandaloneRelatedQueue(String seedUrl, Future<void> playback) async {
+    final seedId = YoutubeTrack(title: '', artist: '', url: seedUrl).videoId;
+    if (seedId == null) return;
+    final generation = ++_standaloneRelatedGeneration;
+    try {
+      await playback;
+      if (generation != _standaloneRelatedGeneration || !_standaloneRelatedEnabled) return;
+      final related = await const YoutubeMusicRelatedService().fetch(seedId);
+      if (generation != _standaloneRelatedGeneration ||
+          !_standaloneRelatedEnabled ||
+          !isStandaloneStreamSession ||
+          mediaItem.value?.id != seedUrl ||
+          related.isEmpty) {
+        return;
+      }
+      final currentIndex = _standaloneStreamQueueIndex ?? 0;
+      final history = currentIndex >= 0 && currentIndex < _standaloneStreamQueue.length
+          ? _standaloneStreamQueue.take(currentIndex + 1).toList()
+          : <StandaloneStreamQueueItem>[
+              StandaloneStreamQueueItem(
+                url: seedUrl,
+                title: mediaItem.value?.title ?? 'YouTube video',
+                artist: mediaItem.value?.artist ?? 'YouTube',
+                thumbnailUrl: mediaItem.value?.artUri?.toString(),
+              ),
+            ];
+      final seen = history.map((item) => YoutubeTrack(title: '', artist: '', url: item.url).videoId).toSet();
+      final upcoming = [
+        for (final track in related)
+          if (seen.add(track.videoId))
+            StandaloneStreamQueueItem(
+              url: track.url,
+              title: track.title,
+              artist: track.artist,
+              thumbnailUrl: track.thumbnailUrl,
+            ),
+      ];
+      if (upcoming.isEmpty) return;
+      _standaloneStreamQueue = List.unmodifiable([...history, ...upcoming]);
+      _standaloneStreamQueueIndex = history.length - 1;
+      mediaItem.add(mediaItem.value);
+      unawaited(warmStreamCandidates(upcoming.take(2).map((item) => item.url)));
+    } catch (error) {
+      debugPrint('[PlayerHandler] YouTube Music related queue unavailable: $error');
     }
   }
 
@@ -3091,18 +3247,19 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     // Commit the selection now. Resolution of an uncached YouTube URL can
     // take seconds; later skips should supersede it instead of waiting for
     // that obsolete request to finish.
-    unawaited(
-      loadTrack(
-        target.url,
-        target.title,
-        target.artist,
-        standalone: true,
-        artworkUri: artworkUri,
-        transitionDirection: direction,
-      ).catchError((Object error, StackTrace stackTrace) {
-        debugPrint('[PlayerHandler] Standalone stream load failed: $error\n$stackTrace');
-      }),
-    );
+    final playback =
+        loadTrack(
+          target.url,
+          target.title,
+          target.artist,
+          standalone: true,
+          artworkUri: artworkUri,
+          transitionDirection: direction,
+        ).catchError((Object error, StackTrace stackTrace) {
+          debugPrint('[PlayerHandler] Standalone stream load failed: $error\n$stackTrace');
+        });
+    unawaited(playback);
+    if (_standaloneRelatedEnabled) unawaited(_refreshStandaloneRelatedQueue(target.url, playback));
   }
 
   Future<bool> isPlaying() async => Platform.isWindows ? _isWindowsPlaying : _player.playing;

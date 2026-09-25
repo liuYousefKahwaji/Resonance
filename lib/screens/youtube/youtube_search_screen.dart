@@ -26,6 +26,7 @@ import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:resonance/services/youtube/youtube_music_home_service.dart';
+import 'package:resonance/services/youtube/youtube_link_metadata_service.dart';
 import 'package:resonance/services/youtube_playlist_import_service.dart';
 import 'package:resonance/core/youtube/youtube_music_home_models.dart';
 import 'package:resonance/screens/settings/youtube_access_screen.dart';
@@ -108,6 +109,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   int _statsGeneration = 0;
   Timer? _previewTimer;
   bool _waitingForPreview = false;
+  final Map<String, Future<YoutubeTrack>> _linkLookups = {};
 
   @override
   void initState() {
@@ -349,6 +351,8 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   Future<List<YoutubeTrack>> _search(String input, {int limit = 10}) async {
     final loader = widget.searchLoader;
     if (loader != null) return loader(input, limit);
+    final fastLink = YoutubeTrack.fromVideoLink(input);
+    if (fastLink != null) return [fastLink];
     if (Platform.isWindows) {
       _windows.cancelBackgroundSearches();
       await _windows.initBinaries();
@@ -357,6 +361,54 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       return [await (Platform.isWindows ? _windows.lookup(input) : _android.lookup(input))];
     }
     return Platform.isWindows ? _windows.search(input, limit: limit) : _android.search(input, limit: limit);
+  }
+
+  void _hydrateVideoLink(String input, int generation) {
+    final quick = YoutubeTrack.fromVideoLink(input);
+    if (quick == null || widget.searchLoader != null) return;
+    final handler = context.read<PlayerHandler>();
+    final pending = _linkLookups.putIfAbsent(input, () async {
+      final warmed = handler.warmStreamCandidates([quick.url]);
+      final cached = await MetadataCacheService.get(quick.url);
+      if (cached != null && cached.title != 'YouTube video' && cached.artist != 'Loading details…') {
+        return YoutubeTrack(
+          title: cached.title,
+          artist: cached.artist,
+          url: quick.url,
+          thumbnailUrl: cached.artworkUrl ?? quick.thumbnailUrl,
+        );
+      }
+      final fast = await const YoutubeLinkMetadataService().fetch(quick);
+      if (fast != null) return fast;
+      // A separate full extractor is the fallback for videos whose public
+      // title/author endpoint is unavailable. Let playback resolution finish
+      // first so the fallback does not compete with the user's tap.
+      await warmed.timeout(const Duration(seconds: 8), onTimeout: () {});
+      if (Platform.isWindows) await _windows.initBinaries();
+      return (Platform.isWindows ? _windows.lookup(input) : _android.lookup(input)).timeout(
+        const Duration(seconds: 15),
+      );
+    });
+    unawaited(
+      pending
+          .then((track) async {
+            if (!mounted || generation != _searchGeneration || input != _controller.text.trim()) return;
+            await MetadataCacheService.set(track.url, track.title, track.artist, artworkUrl: track.thumbnailUrl);
+            unawaited(handler.updateStandaloneStreamMetadata(track).catchError((Object _) {}));
+            if (!mounted || generation != _searchGeneration) return;
+            setState(
+              () => _results = [
+                for (final result in _results)
+                  if (result.videoId == track.videoId)
+                    track.copyWith(viewCount: result.viewCount, likeCount: result.likeCount)
+                  else
+                    result,
+              ],
+            );
+          })
+          .catchError((Object _) {})
+          .whenComplete(() => _linkLookups.remove(input)),
+    );
   }
 
   Future<void> _loadPreview(String input, int generation) async {
@@ -368,6 +420,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         _results = results.take(2).toList(growable: false);
         _waitingForPreview = false;
       });
+      _hydrateVideoLink(input, generation);
       if (widget.searchLoader == null) {
         unawaited(context.read<PlayerHandler>().warmStreamCandidates(_results.map((track) => track.url)));
       }
@@ -398,7 +451,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     });
     try {
       final uri = Uri.tryParse(input);
-      if (uri != null && YoutubePlaylistProvider.isPlaylistUri(uri)) {
+      if (uri != null && YoutubeTrack.fromVideoLink(input) == null && YoutubePlaylistProvider.isPlaylistUri(uri)) {
         final imported = await Navigator.push<bool>(
           context,
           MaterialPageRoute(builder: (_) => ExternalPlaylistImportScreen(initialUrl: input, autoFetch: true)),
@@ -420,6 +473,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
           _searchRequestLimit = _searchPageSize;
           _hasMoreSearchResults = !_isLink(input) && results.length >= _searchPageSize;
         });
+        _hydrateVideoLink(input, generation);
         if (widget.searchLoader == null) {
           unawaited(context.read<PlayerHandler>().warmStreamCandidates(_results.map((track) => track.url)));
         }
@@ -520,9 +574,15 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       final byUrl = {for (final track in hydrated) track.url: track};
       setState(() {
         if (suggestions) {
-          _suggestionTracks = [for (final track in _suggestionTracks) byUrl[track.url] ?? track];
+          _suggestionTracks = [
+            for (final track in _suggestionTracks)
+              track.copyWith(viewCount: byUrl[track.url]?.viewCount, likeCount: byUrl[track.url]?.likeCount),
+          ];
         } else {
-          _results = [for (final track in _results) byUrl[track.url] ?? track];
+          _results = [
+            for (final track in _results)
+              track.copyWith(viewCount: byUrl[track.url]?.viewCount, likeCount: byUrl[track.url]?.likeCount),
+          ];
         }
       });
     } catch (error) {
@@ -559,7 +619,11 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     }
   }
 
-  Future<void> _playStandaloneQueue(YoutubeTrack selected, List<YoutubeTrack> source) async {
+  Future<void> _playStandaloneQueue(
+    YoutubeTrack selected,
+    List<YoutubeTrack> source, {
+    bool relatedQueue = true,
+  }) async {
     final queue = <StandaloneStreamQueueItem>[];
     final seen = <String>{};
     for (final item in source) {
@@ -591,13 +655,14 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       thumbnailUrl: selected.thumbnailUrl,
       queueItems: queue,
       queueIndex: queue.indexWhere((item) => item.url == selected.url),
+      relatedQueue: relatedQueue,
     );
     if (!mounted) {
       await playback;
       return;
     }
     final route = PageRouteBuilder<String?>(
-      pageBuilder: (_, __, ___) => const StandalonePlayerScreen(),
+      pageBuilder: (_, __, ___) => StandalonePlayerScreen(onLibraryChanged: widget.onLibraryChanged),
       transitionDuration: const Duration(milliseconds: 420),
       reverseTransitionDuration: const Duration(milliseconds: 420),
       transitionsBuilder: (_, animation, __, child) => FadeTransition(opacity: animation, child: child),
@@ -640,7 +705,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         }),
       );
       if (!mounted) return;
-      await _playStandaloneQueue(tracks.first, tracks);
+      await _playStandaloneQueue(tracks.first, tracks, relatedQueue: false);
     } catch (error) {
       if (mounted) {
         await showYoutubeFailure(context, error, sourceUrl: playlistUrl, actionLabel: 'Could not play collection');

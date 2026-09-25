@@ -9,6 +9,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/core/storage/file_service.dart';
+import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/services/download/download_queue_controller.dart';
+import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 import 'package:resonance/models/lyrics.dart';
 import 'package:resonance/core/lyrics/lyrics_direction.dart';
 import 'package:resonance/providers/theme_provider.dart';
@@ -402,8 +407,9 @@ class _StandalonePlayerGestureSurfaceState extends State<StandalonePlayerGesture
 class StandalonePlayerScreen extends StatefulWidget {
   final bool playlistTrack;
   final bool syncPeer;
+  final VoidCallback? onLibraryChanged;
 
-  const StandalonePlayerScreen({super.key, this.playlistTrack = false, this.syncPeer = false});
+  const StandalonePlayerScreen({super.key, this.playlistTrack = false, this.syncPeer = false, this.onLibraryChanged});
 
   @override
   State<StandalonePlayerScreen> createState() => _StandalonePlayerScreenState();
@@ -414,6 +420,62 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
   bool _queueDrawerOpen = false;
   bool _leavingSync = false;
   bool _popRequested = false;
+  bool _savingStream = false;
+
+  Future<void> _saveStandaloneStream(MediaItem item, {required bool download}) async {
+    if (_savingStream) return;
+    final handler = context.read<PlayerHandler>();
+    if (!handler.isStandaloneStreamSession || YoutubeTrack(title: '', artist: '', url: item.id).videoId == null) return;
+    setState(() => _savingStream = true);
+    try {
+      final playlist = await FileService().getActivePlaylistNumber();
+      final track = YoutubeTrack(
+        title: item.title,
+        artist: item.artist ?? 'YouTube',
+        url: item.id,
+        thumbnailUrl: item.artUri?.toString(),
+        durationSeconds: item.duration?.inSeconds,
+      );
+      if (download) {
+        unawaited(
+          DownloadQueueController.instance
+              .enqueue(track, playlist)
+              .then<void>((_) {
+                widget.onLibraryChanged?.call();
+              })
+              .catchError((Object error) {
+                if (mounted) {
+                  unawaited(showYoutubeFailure(context, error, sourceUrl: item.id, actionLabel: 'Download failed'));
+                }
+              }),
+        );
+      } else {
+        await MetadataCacheService.set(track.url, track.title, track.artist, artworkUrl: track.thumbnailUrl);
+        final added = await FileService().appendTrack(playlist, track.url);
+        widget.onLibraryChanged?.call();
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(added ? 'Stream added to playlist' : 'Already in playlist')));
+        }
+        return;
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Download queued')));
+      }
+    } catch (error) {
+      if (mounted) {
+        await showYoutubeFailure(
+          context,
+          error,
+          sourceUrl: item.id,
+          actionLabel: download ? 'Download failed' : 'Could not add stream',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _savingStream = false);
+    }
+  }
 
   @override
   void initState() {
@@ -519,6 +581,22 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                     ],
                   ),
                   actions: [
+                    if (!widget.playlistTrack &&
+                        !widget.syncPeer &&
+                        item != null &&
+                        handler.isStandaloneStreamSession &&
+                        YoutubeTrack(title: '', artist: '', url: item.id).videoId != null)
+                      PopupMenuButton<bool>(
+                        key: const Key('standalone-stream-actions'),
+                        tooltip: 'Stream actions',
+                        enabled: !_savingStream,
+                        icon: const Icon(Icons.more_horiz_rounded),
+                        onSelected: (download) => unawaited(_saveStandaloneStream(item, download: download)),
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: false, child: Text('Add stream to playlist')),
+                          PopupMenuItem(value: true, child: Text('Download song')),
+                        ],
+                      ),
                     if (Platform.isWindows)
                       IconButton(
                         key: const Key('standalone-queue-toggle'),

@@ -19,6 +19,14 @@ void main() {
     expect(result.value, 'https://youtu.be/dQw4w9WgXcQ');
   });
 
+  test('YouTube Music watch links with a radio list open the song', () async {
+    final result = await AndroidSharedContentService().resolve(
+      'Listen to this: https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=RDAMVMtest',
+    );
+    expect(result.kind, AndroidSharedContentKind.search);
+    expect(result.value, contains('dQw4w9WgXcQ'));
+  });
+
   test('turns shared Spotify tracks into title and artist searches', () async {
     final result = await AndroidSharedContentService(
       trackMetadata: (_) async => const ExternalTrackMetadata(title: 'Judas', artist: 'Lady Gaga'),

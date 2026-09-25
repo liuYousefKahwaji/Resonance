@@ -228,6 +228,26 @@ def _normalize_music_home_item(item):
     }
 
 
+def get_music_related(video_id: str, limit: int = 25) -> str:
+    """Return YouTube Music's actual radio/watch queue for one video."""
+    from ytmusicapi import YTMusic
+
+    validated = _validated_music_video_id(video_id)
+    items = (YTMusic(language="en").get_watch_playlist(
+        videoId=validated, radio=True, limit=max(1, min(int(limit), 50))
+    ) or {}).get("tracks") or []
+    tracks = []
+    seen = {validated}
+    for item in items:
+        track = _normalize_music_item(item)
+        if track:
+            candidate = track["url"].split("v=", 1)[-1]
+            if candidate not in seen:
+                seen.add(candidate)
+                tracks.append(track)
+    return json.dumps({"tracks": tracks[: max(1, min(int(limit), 50))]}, ensure_ascii=False)
+
+
 def get_music_home(limit: int = 24, cookie_file=None) -> str:
     """Return normalized authenticated shelves from YouTube Music home."""
     ytmusic = _build_authenticated_ytmusic(cookie_file)
@@ -381,7 +401,16 @@ def add_music_history(video_id: str, cookie_file=None) -> str:
     return json.dumps({"ok": True, "videoId": video_id, "statusCode": status_code}, ensure_ascii=False)
 
 
-def _make_ydl(extra=None, cookie_file=None, logger=None):
+class StreamRequestCancelled(Exception):
+    pass
+
+
+def _check_cancelled(cancelled):
+    if cancelled is not None and cancelled.get():
+        raise StreamRequestCancelled("Stream request superseded")
+
+
+def _make_ydl(extra=None, cookie_file=None, logger=None, cancelled=None):
     opts = dict(_BASE_OPTS)
     if _QUICKJS_PATH:
         opts["js_runtimes"] = {"quickjs": {"path": _QUICKJS_PATH}}
@@ -393,30 +422,50 @@ def _make_ydl(extra=None, cookie_file=None, logger=None):
         opts["cookiefile"] = cookie_file
     if logger:
         opts["logger"] = logger
-    return yt_dlp.YoutubeDL(opts)
+    ydl = yt_dlp.YoutubeDL(opts)
+    if cancelled is not None and hasattr(ydl, "urlopen"):
+        original_open = ydl.urlopen
+
+        def checked_open(request):
+            _check_cancelled(cancelled)
+            response = original_open(request)
+            if cancelled.get():
+                response.close()
+                raise StreamRequestCancelled("Stream request superseded")
+            return response
+
+        ydl.urlopen = checked_open
+    return ydl
 
 
-def _extract_info(target, extra=None, download=False, cookie_file=None, transform=None):
+def _extract_info(target, extra=None, download=False, cookie_file=None, transform=None,
+                  prefer_guest=False, cancelled=None):
     """Extract with defaults, cookie-free android_vr, then web_embedded."""
     android_vr = dict(extra or {})
     android_vr["extractor_args"] = _ANDROID_VR_EXTRACTOR_ARGS
     web_embedded = dict(extra or {})
     web_embedded["extractor_args"] = _WEB_EMBEDDED_EXTRACTOR_ARGS
-    attempts = [
-        (dict(extra or {}), cookie_file),
-        (android_vr, None),
-        (web_embedded, cookie_file),
-    ]
+    attempts = ([(dict(extra or {}), None), (android_vr, None),
+                 (dict(extra or {}), cookie_file), (web_embedded, cookie_file)]
+                if prefer_guest and cookie_file else
+                [(dict(extra or {}), cookie_file), (android_vr, None),
+                 (web_embedded, cookie_file)])
     last_error = None
     for opts, attempt_cookie_file in attempts:
+        _check_cancelled(cancelled)
         logger = _DiagnosticLogger()
         try:
-            with _make_ydl(opts, cookie_file=attempt_cookie_file, logger=logger) as ydl:
+            with _make_ydl(opts, cookie_file=attempt_cookie_file, logger=logger,
+                           cancelled=cancelled) as ydl:
                 info = ydl.extract_info(target, download=download)
+                _check_cancelled(cancelled)
                 if logger.account_cookies_invalid:
                     raise RuntimeError(logger.summary)
                 return (transform(info, ydl) if transform else info), ydl
+        except StreamRequestCancelled:
+            raise
         except Exception as error:
+            _check_cancelled(cancelled)
             detail = logger.summary
             message = str(error)
             last_error = (
@@ -424,7 +473,13 @@ def _extract_info(target, extra=None, download=False, cookie_file=None, transfor
                 if detail and detail not in message
                 else error
             )
-            if not _should_try_alternate_player(f"{message} | {detail}"):
+            guest_auth_failure = (
+                prefer_guest and cookie_file and attempt_cookie_file is None
+                and any(marker in message.lower() for marker in (
+                    "sign in to confirm", "login required", "private video", "age restricted"
+                ))
+            )
+            if not guest_auth_failure and not _should_try_alternate_player(f"{message} | {detail}"):
                 raise last_error
     raise last_error or RuntimeError(f"Could not extract: {target}")
 
@@ -622,10 +677,17 @@ def _stream_payload(info, ydl):
         cookie_header = cookie_jar.get_cookie_header(stream_url)
         if cookie_header:
             headers["Cookie"] = str(cookie_header)
-    return {"url": stream_url, "headers": headers}
+    thumbnail = info.get("thumbnail") or ""
+    return {
+        "url": stream_url,
+        "headers": headers,
+        "title": info.get("title") or "",
+        "artist": info.get("uploader") or info.get("channel") or "",
+        "thumbnail": thumbnail,
+    }
 
 
-def get_stream_data(url: str, cookie_file=None) -> str:
+def get_stream_data(url: str, cookie_file=None, prefer_authenticated=False, cancelled=None) -> str:
     """
     Return a URL that just_audio (ExoPlayer) can play and seek through.
 
@@ -649,7 +711,10 @@ def get_stream_data(url: str, cookie_file=None) -> str:
         "format": "bestaudio[has_drm!=true]/best[has_drm!=true]/bestaudio/best",
         "no_playlist": True,
     }
-    payload, _ = _extract_info(url, opts, cookie_file=cookie_file, transform=_stream_payload)
+    payload, _ = _extract_info(
+        url, opts, cookie_file=cookie_file, transform=_stream_payload,
+        prefer_guest=not prefer_authenticated, cancelled=cancelled,
+    )
     return json.dumps(payload, ensure_ascii=False)
 
 

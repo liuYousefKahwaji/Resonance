@@ -101,9 +101,19 @@ class YoutubeFailure implements Exception {
 
 @immutable
 class ResolvedYoutubeStream {
-  const ResolvedYoutubeStream({required this.uri, this.headers = const {}, required this.accessRevision});
+  const ResolvedYoutubeStream({
+    required this.uri,
+    this.headers = const {},
+    required this.accessRevision,
+    this.title,
+    this.artist,
+    this.thumbnailUrl,
+  });
 
   final Uri uri;
   final Map<String, String> headers;
   final int accessRevision;
+  final String? title;
+  final String? artist;
+  final String? thumbnailUrl;
 }
