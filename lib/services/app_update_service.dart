@@ -1,11 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:resonance/services/verified_update_downloader.dart';
 
 const latestResonanceReleaseUrl = 'https://api.github.com/repos/liuYousefKahwaji/Resonance/releases/latest';
 
@@ -121,7 +121,11 @@ class AppUpdateService {
     }
   }
 
-  Future<void> install(AvailableUpdate update) async {
+  Future<void> install(
+    AvailableUpdate update, {
+    void Function(UpdateDownloadProgress)? onProgress,
+    UpdateDownloadController? controller,
+  }) async {
     if (Platform.isAndroid) {
       await _androidChannel.invokeMethod<void>('downloadAndInstall', {
         'url': update.asset.url.toString(),
@@ -132,13 +136,6 @@ class AppUpdateService {
       return;
     }
     if (!Platform.isWindows) throw UnsupportedError('Updates are available only on Android and Windows');
-    final staging = await Directory(
-      p.join((await getTemporaryDirectory()).path, 'resonance-update'),
-    ).create(recursive: true);
-    final zip = File(p.join(staging.path, 'resonance-${update.version}-windows.zip'));
-    await _downloadVerified(update.asset, zip);
-    final script = File(p.join(staging.path, 'apply-update.ps1'));
-    await script.writeAsString(await rootBundle.loadString('assets/windows/apply_update.ps1'), flush: true);
     final target = p.dirname(Platform.resolvedExecutable);
     final probe = File(p.join(target, '.resonance-update-${DateTime.now().microsecondsSinceEpoch}.tmp'));
     try {
@@ -146,6 +143,24 @@ class AppUpdateService {
     } finally {
       if (await probe.exists()) await probe.delete();
     }
+    final staging = await Directory(
+      p.join((await getTemporaryDirectory()).path, 'resonance-update'),
+    ).create(recursive: true);
+    final zip = File(
+      p.join(staging.path, 'resonance-${update.version}-${update.asset.sha256.substring(0, 12)}-windows.zip'),
+    );
+    await VerifiedUpdateDownloader().download(
+      url: update.asset.url,
+      size: update.asset.size,
+      sha256Hex: update.asset.sha256,
+      destination: zip,
+      onProgress: onProgress,
+      controller: controller,
+    );
+    if (controller?.isCancelled == true) throw const UpdateDownloadCancelled();
+    final script = File(p.join(staging.path, 'apply-update.ps1'));
+    await script.writeAsString(await rootBundle.loadString('assets/windows/apply_update.ps1'), flush: true);
+    if (controller?.isCancelled == true) throw const UpdateDownloadCancelled();
     final process = await Process.start('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
@@ -161,7 +176,7 @@ class AppUpdateService {
       target,
       '-ParentPid',
       pid.toString(),
-    ], mode: ProcessStartMode.detached);
+    ], mode: ProcessStartMode.normal);
     if (process.pid <= 0) throw ProcessException('powershell.exe', [], 'Could not start updater');
     exit(0);
   }
@@ -173,26 +188,5 @@ class AppUpdateService {
   Future<bool> canInstallAndroidUpdates() async {
     if (!Platform.isAndroid) return false;
     return await _androidChannel.invokeMethod<bool>('canInstallUpdates') ?? false;
-  }
-
-  Future<void> _downloadVerified(UpdateAsset asset, File destination) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
-    final temporary = File('${destination.path}.part');
-    try {
-      final request = await client.getUrl(asset.url);
-      request.headers.set(HttpHeaders.userAgentHeader, 'Resonance-Updater');
-      final response = await request.close();
-      if (response.statusCode != HttpStatus.ok) throw HttpException('Download returned ${response.statusCode}');
-      final sink = temporary.openWrite();
-      await response.pipe(sink);
-      if (await temporary.length() != asset.size) throw const FormatException('Update download size mismatch');
-      final digest = await sha256.bind(temporary.openRead()).first;
-      if (digest.toString() != asset.sha256) throw const FormatException('Update checksum mismatch');
-      if (await destination.exists()) await destination.delete();
-      await temporary.rename(destination.path);
-    } finally {
-      client.close(force: true);
-      if (await temporary.exists()) await temporary.delete();
-    }
   }
 }

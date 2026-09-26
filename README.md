@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-Version **3.4.1** is the current published release. It improves shared YouTube links and stream switching, adds related songs to YouTube Music playback, and introduces a first-run guide and a recognizable Windows playback card.
+Version **3.4.2** is the current published release. It adds update checks and installation from GitHub Releases on Android and Windows, plus a Custom theme style with your choice of main color.
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 
@@ -159,6 +159,7 @@ Architecture and session notes live under `docs/` in development checkouts.
 
 | Release | Highlights |
 | --- | --- |
+| [v3.4.2](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.2) | In-app updates from GitHub Releases and a customizable color theme. |
 | [v3.4.1](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.1) | Faster shared-link details, more dependable stream switching, related-song radio, first-run guide, and Windows playback card. |
 | v3.4.0 | Main-window Discover and listening focus, faster YouTube search and streaming, up to 120 search results loaded as you scroll, more reliable stream switching, Android Discover controls and refresh, and right-to-left lyrics. |
 | v3.3.0 | YouTube Music and local Resonance listening history, background view/like hydration, progressive high-resolution stream artwork, and refreshed documentation. |

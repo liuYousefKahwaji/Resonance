@@ -9,10 +9,12 @@ $stagingRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetDirectoryName(
 $work = Join-Path $stagingRoot 'unpacked'
 $backup = Join-Path $stagingRoot 'backup'
 $log = Join-Path $stagingRoot 'update.log'
+"Updater started at $(Get-Date -Format o)." | Set-Content -LiteralPath $log
 
 try {
   $parent = Get-Process -Id $ParentPid -ErrorAction SilentlyContinue
   if ($null -ne $parent) { $parent | Wait-Process -Timeout 120 }
+  'Resonance exited; unpacking update.' | Add-Content -LiteralPath $log
   Start-Sleep -Milliseconds 600
   foreach ($directory in @($work, $backup)) {
     $resolved = [System.IO.Path]::GetFullPath($directory)
@@ -27,6 +29,7 @@ try {
   [System.IO.Directory]::CreateDirectory($backup) | Out-Null
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $work)
+  'Update archive unpacked.' | Add-Content -LiteralPath $log
   foreach ($required in @('resonance.exe', 'flutter_windows.dll', 'data\app.so')) {
     if (-not (Test-Path -LiteralPath (Join-Path $work $required))) {
       throw "Update archive is missing $required"
@@ -56,8 +59,18 @@ try {
     }
     throw
   }
-  Start-Process -FilePath (Join-Path $Target 'resonance.exe') -WorkingDirectory $Target -WindowStyle Normal
-  'Update installed successfully.' | Set-Content -LiteralPath $log
+  'Update files replaced; reopening Resonance.' | Add-Content -LiteralPath $log
+  $launched = Start-Process -FilePath (Join-Path $Target 'resonance.exe') -WorkingDirectory $Target -WindowStyle Normal -PassThru
+  "Update installed successfully; launched process $($launched.Id)." | Add-Content -LiteralPath $log
 } catch {
-  $_.ToString() | Set-Content -LiteralPath $log
+  "Update failed: $($_.ToString())" | Add-Content -LiteralPath $log
+  if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) -and
+      (Test-Path -LiteralPath (Join-Path $Target 'resonance.exe'))) {
+    try {
+      $restored = Start-Process -FilePath (Join-Path $Target 'resonance.exe') -WorkingDirectory $Target -WindowStyle Normal -PassThru
+      "Reopened existing Resonance as process $($restored.Id)." | Add-Content -LiteralPath $log
+    } catch {
+      "Could not reopen Resonance: $($_.ToString())" | Add-Content -LiteralPath $log
+    }
+  }
 }
