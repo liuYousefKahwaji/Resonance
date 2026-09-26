@@ -36,6 +36,8 @@ import org.json.JSONObject
 
 class MainActivity : AudioServiceFragmentActivity() {
 
+    fun isVisibleForUpdate(): Boolean = activityResumed
+
     companion object {
         private const val METHOD_CHANNEL = "resonance/android_youtube"
         private const val EVENT_CHANNEL  = "resonance/android_youtube/events"
@@ -115,6 +117,7 @@ class MainActivity : AudioServiceFragmentActivity() {
         super.configureFlutterEngine(flutterEngine)
         AndroidBassBoostBridge.register(flutterEngine)
         ResonancePlaybackWidgetBridge.register(flutterEngine, applicationContext)
+        ResonanceUpdateBridge.register(this, flutterEngine)
 
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(this))

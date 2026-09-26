@@ -10,6 +10,7 @@ enum ListeningFocus { local, stream }
 class ThemeProvider extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.system;
   ResonanceThemeStyle _themeStyle = ResonanceThemeStyle.obsidian;
+  Color _customColor = const Color(0xFF00BFA5);
   bool _fullThemePalette = true;
   bool _artworkPlayerColors = false;
   bool _windowsNativeControls = Platform.isWindows;
@@ -22,6 +23,7 @@ class ThemeProvider extends ChangeNotifier {
   ThemeMode get themeMode => _themeMode;
   bool get isDarkMode => _themeMode == ThemeMode.dark;
   ResonanceThemeStyle get themeStyle => _themeStyle;
+  Color get customColor => _customColor;
   bool get fullThemePalette => _fullThemePalette;
   bool get artworkPlayerColors => _artworkPlayerColors;
   bool get windowsNativeControls => _windowsNativeControls;
@@ -37,6 +39,7 @@ class ThemeProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final isDark = prefs.getBool('is_dark_mode') ?? false;
     _themeStyle = ResonanceThemeStyleLabel.fromStorage(prefs.getString('theme_style'));
+    _customColor = Color(prefs.getInt('theme_custom_color') ?? 0xFF00BFA5);
     _fullThemePalette = prefs.getBool('theme_full_palette') ?? true;
     _windowsNativeControls = prefs.getBool('windows_native_controls') ?? Platform.isWindows;
     _listeningFocus = prefs.getString('listening_focus') == ListeningFocus.stream.name
@@ -67,6 +70,15 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('theme_style', style.storageName);
+  }
+
+  Future<void> setCustomColor(Color color) async {
+    final opaque = Color(color.toARGB32() | 0xFF000000);
+    if (_customColor == opaque) return;
+    _customColor = opaque;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('theme_custom_color', opaque.toARGB32());
   }
 
   Future<void> setFullThemePalette(bool enabled) async {

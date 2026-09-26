@@ -38,6 +38,8 @@ import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
+import 'package:resonance/widgets/app_update_prompt.dart';
+import 'package:resonance/services/app_update_service.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -52,6 +54,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   TrayMode _selectedMode = TrayMode.closeToTray;
   bool _discordEnabled = true;
   bool _introEnabled = true;
+  bool _androidAutoUpdates = false;
+  bool _checkingUpdate = false;
   String _downloadDirectory = 'Default App Folder';
   int _seekStepSeconds = 5;
   bool _crossfadeEnabled = false;
@@ -62,6 +66,86 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _coverLookupStatus = '';
   final SettingsService _settingsService = SettingsService();
 
+  Future<void> _pickCustomThemeColor(ThemeProvider provider) async {
+    var selected = HSVColor.fromColor(provider.customColor);
+    final hex = TextEditingController(
+      text: provider.customColor.toARGB32().toRadixString(16).substring(2).toUpperCase(),
+    );
+    try {
+      final result = await showDialog<Color>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, update) => AlertDialog(
+            title: const Text('Custom theme color'),
+            content: SizedBox(
+              width: 340,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: selected.toColor(),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Theme.of(dialogContext).colorScheme.outline),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('Hue'),
+                  Slider(
+                    value: selected.hue,
+                    min: 0,
+                    max: 360,
+                    onChanged: (value) => update(() {
+                      selected = selected.withHue(value);
+                      hex.text = selected.toColor().toARGB32().toRadixString(16).substring(2).toUpperCase();
+                    }),
+                  ),
+                  const Text('Saturation'),
+                  Slider(
+                    value: selected.saturation,
+                    onChanged: (value) => update(() {
+                      selected = selected.withSaturation(value);
+                      hex.text = selected.toColor().toARGB32().toRadixString(16).substring(2).toUpperCase();
+                    }),
+                  ),
+                  TextField(
+                    controller: hex,
+                    maxLength: 7,
+                    decoration: const InputDecoration(labelText: 'Hex color', prefixText: '#', counterText: ''),
+                    onChanged: (value) {
+                      final parsed = int.tryParse(value.replaceFirst('#', ''), radix: 16);
+                      if (parsed != null && value.replaceFirst('#', '').length == 6) {
+                        update(() => selected = HSVColor.fromColor(Color(0xFF000000 | parsed)));
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, selected.toColor()),
+                child: const Text('Apply'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (result != null) {
+        await provider.setCustomColor(result);
+        await provider.setThemeStyle(ResonanceThemeStyle.custom);
+      }
+    } finally {
+      hex.dispose();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -69,6 +153,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadSeekStep();
     _loadPlaybackPreferences();
     _loadIntroPreference();
+    _loadAndroidAutoUpdates();
     unawaited(ScrollEffectsPreferences.instance.initialize());
     if (_isDesktop) {
       _loadTrayMode();
@@ -79,6 +164,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadIntroPreference() async {
     final prefs = await SharedPreferences.getInstance();
     if (mounted) setState(() => _introEnabled = prefs.getBool('intro_enabled') ?? true);
+  }
+
+  Future<void> _loadAndroidAutoUpdates() async {
+    if (!Platform.isAndroid) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) setState(() => _androidAutoUpdates = prefs.getBool('android_auto_updates') ?? false);
+  }
+
+  Future<void> _setAndroidAutoUpdates(bool enabled) async {
+    setState(() => _androidAutoUpdates = enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('android_auto_updates', enabled);
+  }
+
+  Future<void> _checkForUpdates() async {
+    if (_checkingUpdate) return;
+    setState(() => _checkingUpdate = true);
+    try {
+      final update = await AppUpdateService().check();
+      if (!mounted) return;
+      if (update == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Resonance is up to date.')));
+      } else {
+        await showAppUpdatePrompt(context, update);
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not check for updates: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _checkingUpdate = false);
+    }
   }
 
   Future<void> _toggleIntro(bool value) async {
@@ -485,7 +602,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         child: DropdownButton<ResonanceThemeStyle>(
                           value: themeProvider.themeStyle,
                           onChanged: (style) {
-                            if (style != null) themeProvider.setThemeStyle(style);
+                            if (style == null) return;
+                            themeProvider.setThemeStyle(style);
+                            if (style == ResonanceThemeStyle.custom) _pickCustomThemeColor(themeProvider);
                           },
                           items: [
                             for (final style in ResonanceThemeStyle.values)
@@ -493,6 +612,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ],
                         ),
                       ),
+                    );
+                  },
+                ),
+                Consumer<ThemeProvider>(
+                  builder: (context, themeProvider, child) {
+                    if (themeProvider.themeStyle != ResonanceThemeStyle.custom) return const SizedBox.shrink();
+                    return Column(
+                      children: [
+                        _Divider(),
+                        _SettingsTile(
+                          icon: Icons.colorize_rounded,
+                          title: 'Custom color',
+                          subtitle: 'Choose the accent, surfaces, and borders',
+                          trailing: CircleAvatar(backgroundColor: themeProvider.customColor, radius: 15),
+                          onTap: () => _pickCustomThemeColor(themeProvider),
+                        ),
+                      ],
                     );
                   },
                 ),
@@ -1012,6 +1148,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 _Divider(),
                 _SettingsTile(icon: Icons.info_outline_rounded, title: 'Version', trailing: const AppVersionLabel()),
+                _Divider(),
+                _SettingsTile(
+                  icon: Icons.system_update_rounded,
+                  title: 'Check for updates',
+                  subtitle: 'Compare with the latest GitHub release',
+                  trailing: _checkingUpdate
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.chevron_right_rounded),
+                  onTap: _checkingUpdate ? null : _checkForUpdates,
+                ),
+                if (Platform.isAndroid) ...[
+                  _Divider(),
+                  _SettingsTile(
+                    icon: Icons.downloading_rounded,
+                    title: 'Background updates',
+                    subtitle:
+                        'Download newer GitHub releases automatically. Android may ask you to approve installation.',
+                    trailing: Switch(value: _androidAutoUpdates, onChanged: _setAndroidAutoUpdates),
+                  ),
+                ],
               ],
             ),
 

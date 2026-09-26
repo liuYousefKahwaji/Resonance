@@ -1,7 +1,7 @@
 name: resonance
 description: "A local music player with youtube support"
 publish_to: 'none'
-version: 3.4.1+8
+version: 3.4.2+9
 
 environment:
   sdk: ^3.9.2
@@ -56,6 +56,7 @@ flutter:
     - assets/images/tray_icon.ico
     - assets/icon/icon.png
     - assets/audio/intro.mp3
+    - assets/windows/apply_update.ps1
   uses-material-design: true
 
 flutter_launcher_icons:

@@ -86,6 +86,28 @@ void main() {
     }
   });
 
+  test('Custom theme derives its whole palette from the saved main color', () async {
+    SharedPreferences.setMockInitialValues({'theme_style': 'custom', 'theme_custom_color': 0xFFEA479A});
+    final provider = ThemeProvider();
+    await Future<void>.delayed(Duration.zero);
+    expect(provider.themeStyle, ResonanceThemeStyle.custom);
+    expect(provider.customColor, const Color(0xFFEA479A));
+
+    final pink = buildResonanceTheme(ResonanceThemeStyle.custom, Brightness.dark, customColor: provider.customColor);
+    final blue = buildResonanceTheme(ResonanceThemeStyle.custom, Brightness.dark, customColor: const Color(0xFF217BE9));
+    expect(pink.colorScheme.primary, isNot(blue.colorScheme.primary));
+    expect(pink.scaffoldBackgroundColor, isNot(blue.scaffoldBackgroundColor));
+    expect(pink.colorScheme.surface, isNot(blue.colorScheme.surface));
+    expect(pink.colorScheme.outline, isNot(blue.colorScheme.outline));
+
+    final gray = buildResonanceTheme(ResonanceThemeStyle.custom, Brightness.dark, customColor: const Color(0xFF888888));
+    final grayPrimary = HSLColor.fromColor(gray.colorScheme.primary);
+    expect(grayPrimary.saturation, lessThan(0.02));
+
+    await provider.setCustomColor(const Color(0xFF217BE9));
+    expect((await SharedPreferences.getInstance()).getInt('theme_custom_color'), 0xFF217BE9);
+  });
+
   test('theme style loads and persists independently from brightness', () async {
     SharedPreferences.setMockInitialValues({'theme_style': 'magma', 'is_dark_mode': true});
     final provider = ThemeProvider();

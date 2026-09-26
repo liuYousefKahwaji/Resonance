@@ -20,7 +20,7 @@ class ResonancePlatformTheme extends ThemeExtension<ResonancePlatformTheme> {
 bool useWindowsNativeControls(BuildContext context) =>
     Theme.of(context).extension<ResonancePlatformTheme>()?.windowsNativeControls ?? false;
 
-enum ResonanceThemeStyle { obsidian, jade, cobalt, magma, voidTheme, quartz, aurum }
+enum ResonanceThemeStyle { obsidian, jade, cobalt, magma, voidTheme, quartz, aurum, custom }
 
 extension ResonanceThemeStyleLabel on ResonanceThemeStyle {
   String get label => switch (this) {
@@ -31,6 +31,7 @@ extension ResonanceThemeStyleLabel on ResonanceThemeStyle {
     ResonanceThemeStyle.voidTheme => 'Void',
     ResonanceThemeStyle.quartz => 'Quartz',
     ResonanceThemeStyle.aurum => 'Aurum',
+    ResonanceThemeStyle.custom => 'Custom',
   };
 
   // Dart enum values cannot be named `void`, so storage/UI use `void` while
@@ -80,7 +81,33 @@ class _Palette {
   });
 }
 
-_Palette _palette(ResonanceThemeStyle style) => switch (style) {
+Color _customTone(Color color, {required double saturation, required double lightness}) {
+  final hue = HSLColor.fromColor(color).hue;
+  return HSLColor.fromAHSL(1, hue, saturation, lightness).toColor();
+}
+
+_Palette _customPalette(Color color) {
+  final hsl = HSLColor.fromColor(color);
+  final saturation = hsl.saturation.clamp(0.0, 0.85);
+  return _Palette(
+    darkPrimary: _customTone(color, saturation: saturation, lightness: 0.64),
+    darkSecondary: _customTone(color, saturation: saturation * 0.83, lightness: 0.76),
+    lightPrimary: _customTone(color, saturation: saturation, lightness: 0.37),
+    lightSecondary: _customTone(color, saturation: saturation * 0.9, lightness: 0.45),
+    darkBase: _customTone(color, saturation: saturation * 0.3, lightness: 0.055),
+    darkSurface: _customTone(color, saturation: saturation * 0.28, lightness: 0.10),
+    darkElevated: _customTone(color, saturation: saturation * 0.32, lightness: 0.16),
+    darkHighest: _customTone(color, saturation: saturation * 0.32, lightness: 0.22),
+    darkBorder: _customTone(color, saturation: saturation * 0.38, lightness: 0.30),
+    lightBase: _customTone(color, saturation: saturation * 0.28, lightness: 0.97),
+    lightSurface: _customTone(color, saturation: saturation * 0.18, lightness: 0.995),
+    lightElevated: _customTone(color, saturation: saturation * 0.29, lightness: 0.92),
+    lightHighest: _customTone(color, saturation: saturation * 0.32, lightness: 0.86),
+    lightBorder: _customTone(color, saturation: saturation * 0.34, lightness: 0.77),
+  );
+}
+
+_Palette _palette(ResonanceThemeStyle style, Color customColor) => switch (style) {
   ResonanceThemeStyle.obsidian => const _Palette(
     darkPrimary: Color(0xFF7C3AED),
     darkSecondary: Color(0xFFA855F7),
@@ -193,6 +220,7 @@ _Palette _palette(ResonanceThemeStyle style) => switch (style) {
     lightHighest: Color(0xFFEEDCA3),
     lightBorder: Color(0xFFD8BE73),
   ),
+  ResonanceThemeStyle.custom => _customPalette(customColor),
 };
 
 ThemeData buildResonanceTheme(
@@ -200,8 +228,9 @@ ThemeData buildResonanceTheme(
   Brightness brightness, {
   bool fullPalette = true,
   bool windowsNativeControls = false,
+  Color customColor = const Color(0xFF00BFA5),
 }) {
-  final palette = _palette(style);
+  final palette = _palette(style, customColor);
   final dark = brightness == Brightness.dark;
   final primary = dark ? palette.darkPrimary : palette.lightPrimary;
   final secondary = dark ? palette.darkSecondary : palette.lightSecondary;

@@ -3,6 +3,8 @@
     <!-- Downloads must work in release builds too. The debug manifest's
          INTERNET permission is only merged for debug/profile variants. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <!-- ── Storage / Audio permissions ─────────────────────────────────── -->
     <!-- Android 13+ (API 33+): granular audio permission -->
@@ -43,6 +45,15 @@
         android:name="${applicationName}"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
+        <receiver android:name=".ResonanceUpdateReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
+        <receiver android:name=".ResonanceUpdateResultReceiver" android:exported="false" />
+        <service android:name=".ResonanceUpdateJobService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="true" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -12,6 +12,8 @@ import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/platform/android/android_entrypoint_service.dart';
 import 'package:resonance/screens/settings/settings_screen.dart';
+import 'package:resonance/services/app_update_service.dart';
+import 'package:resonance/widgets/app_update_prompt.dart';
 import 'package:resonance/screens/external_playlist/external_playlist_import_screen.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_export_screen.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_import_screen.dart';
@@ -373,11 +375,39 @@ class _MainAppState extends State<MainApp> {
     widget.handler.youtubeFailureNotifier.addListener(_showPlaybackYoutubeFailure);
     widget.handler.outputDeviceErrorNotifier.addListener(_showOutputDeviceError);
     _initIntro();
+    unawaited(_checkStartupUpdate());
     DownloadQueueController.instance.addListener(_refreshCompletedDownloads);
     _loadPlaylistFromDisk();
     if (Platform.isAndroid) unawaited(AndroidEntrypointService.initialize(_handleAndroidAction));
     if (_isDesktop) {
       _initDesktop();
+    }
+  }
+
+  Future<void> _checkStartupUpdate() async {
+    await Future<void>.delayed(const Duration(seconds: 8));
+    if (Platform.isAndroid) {
+      try {
+        await AppUpdateService().resumeAndroidInstall();
+      } catch (_) {}
+    }
+    if (!mounted || _showOnboarding) return;
+    try {
+      final update = await AppUpdateService().check();
+      if (!mounted || update == null) return;
+      if (Platform.isAndroid) {
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.getBool('android_auto_updates') == true && await AppUpdateService().canInstallAndroidUpdates()) {
+          await AppUpdateService().install(update);
+          return;
+        }
+      }
+      final promptContext = _navigatorKey.currentState?.overlay?.context;
+      if (promptContext != null && promptContext.mounted) {
+        await showAppUpdatePrompt(promptContext, update);
+      }
+    } catch (_) {
+      // Update checks are optional; Settings has an explicit retry action.
     }
   }
 
@@ -1324,12 +1354,14 @@ class _MainAppState extends State<MainApp> {
           theme: buildResonanceTheme(
             themeProvider.themeStyle,
             Brightness.light,
+            customColor: themeProvider.customColor,
             fullPalette: themeProvider.fullThemePalette,
             windowsNativeControls: windowsNativeControls,
           ),
           darkTheme: buildResonanceTheme(
             themeProvider.themeStyle,
             Brightness.dark,
+            customColor: themeProvider.customColor,
             fullPalette: themeProvider.fullThemePalette,
             windowsNativeControls: windowsNativeControls,
           ),
