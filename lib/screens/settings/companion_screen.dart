@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -172,7 +173,7 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
                           width: 300,
                           height: 300,
                           padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                          decoration: BoxDecoration(color: Colors.white, borderRadius: resonanceBorderRadius(context, 20)),
                           child: QrImageView(
                             data: payload,
                             version: QrVersions.auto,
@@ -412,7 +413,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
         const SizedBox(height: 12),
         Expanded(
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: resonanceBorderRadius(context, 20),
             child: MobileScanner(
               controller: _scanner,
               onDetect: _onDetect,

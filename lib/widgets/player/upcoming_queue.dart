@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
@@ -79,7 +80,9 @@ class _QueueSurface extends StatelessWidget {
     return Material(
       color: theme.colorScheme.surface,
       elevation: compact ? 12 : 1,
-      borderRadius: compact ? const BorderRadius.vertical(top: Radius.circular(24)) : null,
+      borderRadius: compact
+          ? BorderRadius.vertical(top: Radius.circular(resonanceCornerRadius(context, 24, rounderRadius: 34)))
+          : null,
       child: Column(
         children: [
           if (compact) ...[
@@ -89,7 +92,7 @@ class _QueueSurface extends StatelessWidget {
               height: 4,
               decoration: BoxDecoration(
                 color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.28),
-                borderRadius: BorderRadius.circular(99),
+                borderRadius: resonanceBorderRadius(context, 99),
               ),
             ),
           ],
@@ -201,10 +204,10 @@ class _QueueTrackTile extends StatelessWidget {
     final accent = theme.colorScheme.primary;
     return Material(
       color: current ? accent.withValues(alpha: theme.brightness == Brightness.dark ? 0.16 : 0.09) : Colors.transparent,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: resonanceBorderRadius(context, 12),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: resonanceBorderRadius(context, 12),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           child: Row(
@@ -300,7 +303,7 @@ class _QueueArtworkState extends State<_QueueArtwork> {
       width: widget.current ? 44 : 38,
       height: widget.current ? 44 : 38,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: resonanceBorderRadius(context, 8),
         border: widget.current ? Border.all(color: accent.withValues(alpha: 0.55), width: 1.5) : null,
         boxShadow: widget.current ? [BoxShadow(color: accent.withValues(alpha: .2), blurRadius: 10)] : null,
       ),

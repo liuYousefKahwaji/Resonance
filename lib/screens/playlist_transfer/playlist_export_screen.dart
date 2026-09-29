@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -538,7 +539,7 @@ class _PlaylistQrDisplayScreenState extends State<PlaylistQrDisplayScreen> {
                   const SizedBox(height: 16),
                   Container(
                     padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18)),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: resonanceBorderRadius(context, 18)),
                     child: AspectRatio(
                       aspectRatio: 1,
                       child: QrImageView(

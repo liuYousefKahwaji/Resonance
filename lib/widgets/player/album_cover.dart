@@ -160,7 +160,7 @@ class NowPlayingCard extends StatelessWidget {
       child: InkWell(
         key: nowPlayingCardTapKey,
         onTap: onTap,
-        borderRadius: BorderRadius.circular(cardRadius),
+        borderRadius: resonanceBorderRadius(context, cardRadius),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 400),
           curve: Curves.easeOut,
@@ -177,7 +177,7 @@ class NowPlayingCard extends StatelessWidget {
                     ],
                   )
                 : null,
-            borderRadius: BorderRadius.circular(cardRadius),
+            borderRadius: resonanceBorderRadius(context, cardRadius),
             border: Border.all(color: isActive ? primary.withValues(alpha: 0.4) : border, width: isActive ? 1.5 : 1),
           ),
           child: Row(
@@ -189,7 +189,7 @@ class NowPlayingCard extends StatelessWidget {
                 child: InkWell(
                   key: nowPlayingArtworkTapKey,
                   onTap: onArtworkTap,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: resonanceBorderRadius(context, 10),
                   child: _PocketVinyl(
                     isPlaying: isPlaying && !isLoading,
                     accent: primary,
@@ -336,13 +336,13 @@ class _AlbumIcon extends StatelessWidget {
     final artworkRadius = useWindowsNativeControls(context) ? 4.0 : 10.0;
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(artworkRadius),
+      borderRadius: resonanceBorderRadius(context, artworkRadius),
       child: Container(
         width: 42,
         height: 42,
         decoration: BoxDecoration(
           color: bgColor,
-          borderRadius: BorderRadius.circular(artworkRadius),
+          borderRadius: resonanceBorderRadius(context, artworkRadius),
           border: Border.all(
             color: (isPlaying || isLoading) ? primary.withValues(alpha: 0.3) : Colors.transparent,
             width: 1,
@@ -447,7 +447,7 @@ class _LoadingBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: color.withValues(alpha: isDark ? 0.18 : 0.10),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: resonanceBorderRadius(context, 6),
         border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
       ),
       child: Row(
@@ -474,7 +474,7 @@ class _PlayingBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: primary.withValues(alpha: isDark ? 0.18 : 0.10),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: resonanceBorderRadius(context, 6),
         border: Border.all(color: primary.withValues(alpha: 0.3), width: 1),
       ),
       child: Text(

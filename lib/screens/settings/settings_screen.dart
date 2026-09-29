@@ -1,6 +1,3 @@
-// lib/screens/settings/settings_screen.dart
-// Logic: UNCHANGED. Visual refresh only — new section headers, spacing, icons.
-
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -24,6 +21,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/app/theme.dart';
 import 'package:resonance/screens/settings/app_version_label.dart';
+import 'package:resonance/screens/settings/i_dont_know_page.dart';
 import 'package:resonance/screens/settings/download_history_screen.dart';
 import 'package:resonance/screens/settings/companion_screen.dart';
 import 'package:resonance/screens/settings/equalizer_screen.dart';
@@ -51,6 +49,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  final VersionTapTracker _versionTaps = VersionTapTracker();
   TrayMode _selectedMode = TrayMode.closeToTray;
   bool _discordEnabled = true;
   bool _introEnabled = true;
@@ -67,82 +66,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final SettingsService _settingsService = SettingsService();
 
   Future<void> _pickCustomThemeColor(ThemeProvider provider) async {
-    var selected = HSVColor.fromColor(provider.customColor);
-    final hex = TextEditingController(
-      text: provider.customColor.toARGB32().toRadixString(16).substring(2).toUpperCase(),
+    final result = await showDialog<Color>(
+      context: context,
+      builder: (_) => _CustomColorPicker(initialColor: provider.customColor),
     );
-    try {
-      final result = await showDialog<Color>(
-        context: context,
-        builder: (dialogContext) => StatefulBuilder(
-          builder: (dialogContext, update) => AlertDialog(
-            title: const Text('Custom theme color'),
-            content: SizedBox(
-              width: 340,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        color: selected.toColor(),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Theme.of(dialogContext).colorScheme.outline),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text('Hue'),
-                  Slider(
-                    value: selected.hue,
-                    min: 0,
-                    max: 360,
-                    onChanged: (value) => update(() {
-                      selected = selected.withHue(value);
-                      hex.text = selected.toColor().toARGB32().toRadixString(16).substring(2).toUpperCase();
-                    }),
-                  ),
-                  const Text('Saturation'),
-                  Slider(
-                    value: selected.saturation,
-                    onChanged: (value) => update(() {
-                      selected = selected.withSaturation(value);
-                      hex.text = selected.toColor().toARGB32().toRadixString(16).substring(2).toUpperCase();
-                    }),
-                  ),
-                  TextField(
-                    controller: hex,
-                    maxLength: 7,
-                    decoration: const InputDecoration(labelText: 'Hex color', prefixText: '#', counterText: ''),
-                    onChanged: (value) {
-                      final parsed = int.tryParse(value.replaceFirst('#', ''), radix: 16);
-                      if (parsed != null && value.replaceFirst('#', '').length == 6) {
-                        update(() => selected = HSVColor.fromColor(Color(0xFF000000 | parsed)));
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-              FilledButton(
-                onPressed: () => Navigator.pop(dialogContext, selected.toColor()),
-                child: const Text('Apply'),
-              ),
-            ],
-          ),
-        ),
-      );
-      if (result != null) {
-        await provider.setCustomColor(result);
-        await provider.setThemeStyle(ResonanceThemeStyle.custom);
-      }
-    } finally {
-      hex.dispose();
+    if (result != null) {
+      await provider.setCustomColor(result);
+      await provider.setThemeStyle(ResonanceThemeStyle.custom);
+    }
+  }
+
+  void _handleVersionTap() {
+    if (_versionTaps.registerTap()) {
+      Navigator.of(context).push<void>(MaterialPageRoute(builder: (_) => const IDontKnowPage()));
     }
   }
 
@@ -650,6 +586,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 _Divider(),
                 Consumer<ThemeProvider>(
+                  builder: (context, themeProvider, child) => _SettingsTile(
+                    icon: Icons.rounded_corner_rounded,
+                    title: 'Rounder corners',
+                    subtitle: 'Use softer corners throughout Resonance',
+                    trailing: Switch(value: themeProvider.rounderCorners, onChanged: themeProvider.setRounderCorners),
+                  ),
+                ),
+                _Divider(),
+                Consumer<ThemeProvider>(
                   builder: (context, themeProvider, child) {
                     return _SettingsTile(
                       icon: Icons.color_lens_rounded,
@@ -1147,7 +1092,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: 'A local music player with YouTube support',
                 ),
                 _Divider(),
-                _SettingsTile(icon: Icons.info_outline_rounded, title: 'Version', trailing: const AppVersionLabel()),
+                _SettingsTile(
+                  icon: Icons.info_outline_rounded,
+                  title: 'Version',
+                  trailing: const AppVersionLabel(),
+                  onTap: _handleVersionTap,
+                ),
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.system_update_rounded,
@@ -1204,6 +1154,257 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
+class _CustomColorPicker extends StatefulWidget {
+  final Color initialColor;
+
+  const _CustomColorPicker({required this.initialColor});
+
+  @override
+  State<_CustomColorPicker> createState() => _CustomColorPickerState();
+}
+
+class _CustomColorPickerState extends State<_CustomColorPicker> {
+  late HSVColor _selected = HSVColor.fromColor(widget.initialColor);
+
+  static const _presets = <(String, Color)>[
+    ('Teal', Color(0xFF00BFA5)),
+    ('Purple', Color(0xFF8B5CF6)),
+    ('Blue', Color(0xFF3B82F6)),
+    ('Green', Color(0xFF22C55E)),
+    ('Gold', Color(0xFFF2C14E)),
+    ('Orange', Color(0xFFF97316)),
+    ('Rose', Color(0xFFF43F5E)),
+    ('Pink', Color(0xFFEC4899)),
+    ('Cyan', Color(0xFF06B6D4)),
+    ('Indigo', Color(0xFF6366F1)),
+    ('Red', Color(0xFFEF4444)),
+    ('Slate', Color(0xFF64748B)),
+  ];
+
+  void _pickFromArea(Offset position, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+    setState(() {
+      _selected = _selected
+          .withSaturation((position.dx / size.width).clamp(0.0, 1.0))
+          .withValue((1 - position.dy / size.height).clamp(0.0, 1.0));
+    });
+  }
+
+  void _pickHue(double x, double width) {
+    if (width <= 0) return;
+    setState(() => _selected = _selected.withHue((x / width * 359.9).clamp(0.0, 359.9)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _selected.toColor();
+    final outline = Theme.of(context).colorScheme.outline;
+    final lightness = HSLColor.fromColor(color).lightness.clamp(0.08, 0.92);
+    return AlertDialog(
+      title: const Text('Choose your color'),
+      content: SizedBox(
+        width: 350,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.68),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: double.infinity,
+                  height: 52,
+                  alignment: Alignment.centerLeft,
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.22),
+                    borderRadius: resonanceBorderRadius(context, 15),
+                    border: Border.all(color: color),
+                  ),
+                  child: Row(
+                    children: [
+                      CircleAvatar(backgroundColor: color, radius: 12),
+                      const SizedBox(width: 12),
+                      const Text('Resonance', style: TextStyle(fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text('Quick colors', style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 20,
+                  runSpacing: 8,
+                  children: [
+                    for (final (name, preset) in _presets)
+                      Tooltip(
+                        message: name,
+                        child: Semantics(
+                          label: '$name color',
+                          button: true,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: () => setState(() => _selected = HSVColor.fromColor(preset)),
+                            child: Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: preset,
+                                border: Border.all(
+                                  color: preset == color ? Theme.of(context).colorScheme.onSurface : outline,
+                                  width: preset == color ? 3 : 1,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Text('Fine tune', style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 8),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final size = Size(constraints.maxWidth, 116);
+                    return GestureDetector(
+                      key: const Key('custom-color-area'),
+                      behavior: HitTestBehavior.opaque,
+                      onTapDown: (details) => _pickFromArea(details.localPosition, size),
+                      onPanStart: (details) => _pickFromArea(details.localPosition, size),
+                      onPanUpdate: (details) => _pickFromArea(details.localPosition, size),
+                      child: Container(
+                        height: size.height,
+                        clipBehavior: Clip.antiAlias,
+                        decoration: BoxDecoration(
+                          borderRadius: resonanceBorderRadius(context, 12),
+                          border: Border.all(color: outline),
+                        ),
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [Colors.white, HSVColor.fromAHSV(1, _selected.hue, 1, 1).toColor()],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const Positioned.fill(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [Colors.transparent, Colors.black],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              left: (_selected.saturation * size.width - 9).clamp(0.0, size.width - 18),
+                              top: ((1 - _selected.value) * size.height - 9).clamp(0.0, size.height - 18),
+                              child: Container(
+                                width: 18,
+                                height: 18,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white, width: 2),
+                                  boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 4)],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 8),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final width = constraints.maxWidth;
+                    return GestureDetector(
+                      key: const Key('custom-color-hue'),
+                      behavior: HitTestBehavior.opaque,
+                      onTapDown: (details) => _pickHue(details.localPosition.dx, width),
+                      onPanStart: (details) => _pickHue(details.localPosition.dx, width),
+                      onPanUpdate: (details) => _pickHue(details.localPosition.dx, width),
+                      child: SizedBox(
+                        height: 28,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Container(
+                              height: 16,
+                              decoration: BoxDecoration(
+                                borderRadius: resonanceBorderRadius(context, 99),
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Colors.red,
+                                    Colors.yellow,
+                                    Colors.green,
+                                    Colors.cyan,
+                                    Colors.blue,
+                                    Colors.purple,
+                                    Colors.red,
+                                  ],
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              left: (_selected.hue / 360 * width - 10).clamp(0.0, width - 20),
+                              child: Container(
+                                width: 20,
+                                height: 20,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: HSVColor.fromAHSV(1, _selected.hue, 1, 1).toColor(),
+                                  border: Border.all(color: Colors.white, width: 2),
+                                  boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 4)],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 10),
+                Text('Shade', style: Theme.of(context).textTheme.titleSmall),
+                Row(
+                  children: [
+                    const Text('Darker'),
+                    Expanded(
+                      child: Slider(
+                        key: const Key('custom-color-shade'),
+                        value: lightness,
+                        min: 0.08,
+                        max: 0.92,
+                        onChanged: (value) => setState(() {
+                          _selected = HSVColor.fromColor(HSLColor.fromColor(color).withLightness(value).toColor());
+                        }),
+                      ),
+                    ),
+                    const Text('Lighter'),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(context, color), child: const Text('Use color')),
+      ],
+    );
+  }
+}
+
 class _SettingsCard extends StatelessWidget {
   final List<Widget> children;
 
@@ -1214,7 +1415,7 @@ class _SettingsCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: resonanceBorderRadius(context, 14),
         border: Border.all(color: Theme.of(context).colorScheme.outline, width: 1),
       ),
       child: Column(children: children),
@@ -1274,7 +1475,7 @@ class _SettingsTile extends StatelessWidget {
         height: 36,
         decoration: BoxDecoration(
           color: isDark ? primary.withValues(alpha: 0.12) : primary.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(9),
+          borderRadius: resonanceBorderRadius(context, 9),
         ),
         child: Icon(icon, size: 18, color: primary),
       ),
@@ -1296,7 +1497,7 @@ class _SettingsTile extends StatelessWidget {
           : null,
       trailing: tileTrailing,
       onTap: onTap,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 14)),
     );
   }
 }

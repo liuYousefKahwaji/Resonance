@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -600,7 +601,7 @@ class _AccessCard extends StatelessWidget {
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       border: Border.all(color: Theme.of(context).colorScheme.outline),
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: resonanceBorderRadius(context, 14),
     ),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,

@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -36,7 +37,7 @@ class ArtworkThumbnail extends StatelessWidget {
     return SizedBox.square(
       dimension: size,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(borderRadius),
+        borderRadius: resonanceBorderRadius(context, borderRadius),
         child: Stack(
           fit: StackFit.expand,
           children: [

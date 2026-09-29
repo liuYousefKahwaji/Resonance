@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -293,7 +294,7 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
               height: 34,
               decoration: BoxDecoration(
                 color: Theme.of(context).colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: resonanceBorderRadius(context, 10),
               ),
               child: Icon(Icons.graphic_eq_rounded, size: 21, color: Theme.of(context).colorScheme.onPrimaryContainer),
             ),
@@ -335,7 +336,7 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.errorContainer,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: resonanceBorderRadius(context, 12),
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -480,12 +481,12 @@ class _SourceCard extends StatelessWidget {
       color: colors.surfaceContainerLow,
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: resonanceBorderRadius(context, 14),
         side: BorderSide(color: isDefault ? primary.withValues(alpha: 0.55) : colors.outlineVariant),
       ),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: resonanceBorderRadius(context, 14),
         child: Padding(
           padding: const EdgeInsets.all(11),
           child: Column(
@@ -499,7 +500,7 @@ class _SourceCard extends StatelessWidget {
                     height: 38,
                     decoration: BoxDecoration(
                       color: primary.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: resonanceBorderRadius(context, 10),
                     ),
                     child: Icon(icon, size: 21, color: primary),
                   ),

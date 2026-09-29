@@ -151,7 +151,7 @@ class _TrackListState extends State<TrackList> {
                     fillColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 12),
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(useWindowsNativeControls(context) ? 4 : 12),
+                      borderRadius: resonanceBorderRadius(context, useWindowsNativeControls(context) ? 4 : 12),
                       borderSide: BorderSide.none,
                     ),
                     suffixIcon: Padding(
@@ -256,7 +256,7 @@ class _TrackListState extends State<TrackList> {
             final elevation = (animation.value * 12).clamp(0.0, 12.0);
             return Material(
               elevation: elevation,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: resonanceBorderRadius(context, 12),
               color: Colors.transparent,
               shadowColor: primary.withValues(alpha: 0.25),
               child: child,

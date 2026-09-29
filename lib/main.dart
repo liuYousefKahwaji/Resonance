@@ -31,6 +31,7 @@ import 'package:resonance/widgets/player/player_controls.dart';
 import 'package:resonance/widgets/player/upcoming_queue.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/app/theme.dart';
+import 'package:resonance/app/resonance_motion.dart';
 import 'package:resonance/app/now_playing_navigation.dart';
 import 'package:resonance/screens/youtube/youtube_search_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -150,6 +151,11 @@ Future<void> main() async {
         androidNotificationChannelName: 'Resonance Playback',
         androidNotificationIcon: 'mipmap/ic_launcher',
         androidStopForegroundOnPause: false,
+        androidBrowsableRootExtras: {
+          AndroidContentStyle.supportedKey: true,
+          AndroidContentStyle.browsableHintKey: AndroidContentStyle.listItemHintValue,
+          AndroidContentStyle.playableHintKey: AndroidContentStyle.listItemHintValue,
+        },
       ),
     );
   }
@@ -1356,6 +1362,7 @@ class _MainAppState extends State<MainApp> {
             Brightness.light,
             customColor: themeProvider.customColor,
             fullPalette: themeProvider.fullThemePalette,
+            rounderCorners: themeProvider.rounderCorners,
             windowsNativeControls: windowsNativeControls,
           ),
           darkTheme: buildResonanceTheme(
@@ -1363,6 +1370,7 @@ class _MainAppState extends State<MainApp> {
             Brightness.dark,
             customColor: themeProvider.customColor,
             fullPalette: themeProvider.fullThemePalette,
+            rounderCorners: themeProvider.rounderCorners,
             windowsNativeControls: windowsNativeControls,
           ),
           themeAnimationDuration: const Duration(milliseconds: 360),
@@ -1379,8 +1387,21 @@ class _MainAppState extends State<MainApp> {
                         backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
                         appBar: _buildAppBar(nestedContext),
                         body: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 240),
+                          duration: resonanceDuration(nestedContext, const Duration(milliseconds: 320)),
                           switchInCurve: Curves.easeOutCubic,
+                          transitionBuilder: (child, animation) {
+                            final enteringDiscover = child.key == const ValueKey(ListeningFocus.stream);
+                            return FadeTransition(
+                              opacity: animation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: Offset(enteringDiscover ? 0.04 : -0.04, 0),
+                                  end: Offset.zero,
+                                ).animate(animation),
+                                child: child,
+                              ),
+                            );
+                          },
                           // Drop the outgoing page immediately: the library
                           // owns track GlobalKeys that must never be mounted
                           // twice during rapid focus switches.
@@ -1414,8 +1435,14 @@ class _MainAppState extends State<MainApp> {
       context,
       PageRouteBuilder(
         pageBuilder: (_, __, ___) => const SettingsScreen(),
-        transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
-        transitionDuration: const Duration(milliseconds: 160),
+        transitionsBuilder: (_, anim, __, child) => FadeTransition(
+          opacity: anim,
+          child: SlideTransition(
+            position: Tween<Offset>(begin: const Offset(0, 0.025), end: Offset.zero).animate(anim),
+            child: child,
+          ),
+        ),
+        transitionDuration: resonanceDuration(context, const Duration(milliseconds: 280)),
       ),
     );
     if (mounted) setState(() => _artworkRevision++);
@@ -1429,8 +1456,14 @@ class _MainAppState extends State<MainApp> {
           playlistNumber: activePlaylistNumber,
           playlistName: playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber',
         ),
-        transitionsBuilder: (_, animation, __, child) => FadeTransition(opacity: animation, child: child),
-        transitionDuration: const Duration(milliseconds: 180),
+        transitionsBuilder: (_, animation, __, child) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(begin: const Offset(0, 0.025), end: Offset.zero).animate(animation),
+            child: child,
+          ),
+        ),
+        transitionDuration: resonanceDuration(context, const Duration(milliseconds: 280)),
       ),
     );
     if (mounted) await _loadPlaylistFromDisk();
@@ -1457,7 +1490,14 @@ class _MainAppState extends State<MainApp> {
             child: Row(
               children: [
                 AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
+                  duration: resonanceDuration(context, const Duration(milliseconds: 220)),
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(
+                      position: Tween<Offset>(begin: const Offset(0, 0.16), end: Offset.zero).animate(animation),
+                      child: child,
+                    ),
+                  ),
                   child: Text(
                     isStreamFocus ? 'Discover' : 'Library',
                     key: ValueKey(focus),
@@ -1501,7 +1541,7 @@ class _MainAppState extends State<MainApp> {
       shadowColor: Colors.transparent,
       title: InkWell(
         key: const Key('listening-focus-switcher'),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: resonanceBorderRadius(context, 8),
         onTap: () => context.read<ThemeProvider>().setListeningFocus(
           isStreamFocus ? ListeningFocus.local : ListeningFocus.stream,
         ),
@@ -1525,7 +1565,14 @@ class _MainAppState extends State<MainApp> {
             ),
             const SizedBox(width: 10),
             AnimatedSwitcher(
-              duration: const Duration(milliseconds: 220),
+              duration: resonanceDuration(context, const Duration(milliseconds: 220)),
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: Tween<Offset>(begin: const Offset(0, 0.16), end: Offset.zero).animate(animation),
+                  child: child,
+                ),
+              ),
               child: Text(
                 isStreamFocus ? 'Discover' : 'Resonance',
                 key: ValueKey(focus),
@@ -2400,7 +2447,7 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
                               width: 82,
                               height: 82,
                               decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(22),
+                                borderRadius: resonanceBorderRadius(context, 22),
                                 boxShadow: [
                                   BoxShadow(
                                     color: primary.withValues(alpha: 0.34 * entrance),
@@ -2410,7 +2457,7 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
                                 ],
                               ),
                               child: ClipRRect(
-                                borderRadius: BorderRadius.circular(22),
+                                borderRadius: resonanceBorderRadius(context, 22),
                                 child: Image.asset('assets/icon/icon.png', fit: BoxFit.cover),
                               ),
                             ),

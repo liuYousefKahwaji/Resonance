@@ -108,6 +108,36 @@ void main() {
     expect((await SharedPreferences.getInstance()).getInt('theme_custom_color'), 0xFF217BE9);
   });
 
+  test('Custom theme responds to selected lightness', () {
+    final dim = buildResonanceTheme(
+      ResonanceThemeStyle.custom,
+      Brightness.dark,
+      customColor: const Color(0xFF005044),
+    );
+    final bright = buildResonanceTheme(
+      ResonanceThemeStyle.custom,
+      Brightness.dark,
+      customColor: const Color(0xFF80FFE9),
+    );
+    expect(bright.colorScheme.primary.computeLuminance(), greaterThan(dim.colorScheme.primary.computeLuminance()));
+    expect(bright.colorScheme.surface, isNot(dim.colorScheme.surface));
+  });
+
+  test('Rounder corners persist and change standard surface geometry', () async {
+    SharedPreferences.setMockInitialValues({});
+    final provider = ThemeProvider();
+    await Future<void>.delayed(Duration.zero);
+    expect(provider.rounderCorners, isFalse);
+    await provider.setRounderCorners(true);
+    expect((await SharedPreferences.getInstance()).getBool('rounder_corners'), isTrue);
+    final classic = buildResonanceTheme(ResonanceThemeStyle.obsidian, Brightness.dark);
+    final rounder = buildResonanceTheme(ResonanceThemeStyle.obsidian, Brightness.dark, rounderCorners: true);
+    expect(
+      (rounder.cardTheme.shape as RoundedRectangleBorder).borderRadius,
+      isNot((classic.cardTheme.shape as RoundedRectangleBorder).borderRadius),
+    );
+  });
+
   test('theme style loads and persists independently from brightness', () async {
     SharedPreferences.setMockInitialValues({'theme_style': 'magma', 'is_dark_mode': true});
     final provider = ThemeProvider();

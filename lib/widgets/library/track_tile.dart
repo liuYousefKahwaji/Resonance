@@ -273,7 +273,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                         Row(
                           children: [
                             ClipRRect(
-                              borderRadius: BorderRadius.circular(10),
+                              borderRadius: resonanceBorderRadius(context, 10),
                               child: Container(
                                 width: 58,
                                 height: 58,
@@ -436,7 +436,8 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
-    final tileRadius = useWindowsNativeControls(context) ? 4.0 : 14.0;
+    final windowsNative = useWindowsNativeControls(context);
+    final tileRadius = windowsNative ? 4.0 : 14.0;
     // RepaintBoundary: this tile can redraw (e.g. playing state) without
     // triggering repaints of neighbouring tiles in the list.
     return RepaintBoundary(
@@ -448,7 +449,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
             scale: 1 + wave * 0.012,
             child: DecoratedBox(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(tileRadius),
+                borderRadius: resonanceBorderRadius(context, tileRadius, rounderRadius: windowsNative ? 11 : 23),
                 boxShadow: [
                   if (wave > 0)
                     BoxShadow(
@@ -599,7 +600,7 @@ class _TrackTileContent extends StatelessWidget {
         child: TrackTapRegion(
           onTap: selectionMode && onSelectionToggle != null ? onSelectionToggle! : () {},
           onLongPress: onSelectionToggle,
-          borderRadius: BorderRadius.circular(tileRadius),
+          borderRadius: resonanceBorderRadius(context, tileRadius, rounderRadius: windowsNative ? 11 : 23),
           child: _SkeletonTile(isDark: isDark),
         ),
       );
@@ -626,7 +627,7 @@ class _TrackTileContent extends StatelessWidget {
                   : isCurrentTrack
                   ? (isDark ? primary.withValues(alpha: 0.12) : primary.withValues(alpha: 0.06))
                   : Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(tileRadius),
+              borderRadius: resonanceBorderRadius(context, tileRadius, rounderRadius: windowsNative ? 11 : 23),
               border: Border.all(
                 color: selected || isCurrentTrack
                     ? primary.withValues(alpha: selected ? 0.75 : 0.45)
@@ -650,7 +651,7 @@ class _TrackTileContent extends StatelessWidget {
                     ? onSelectionToggle!
                     : () => unawaited(_activateTrack(handler, resolvedTitle, resolvedArtist)),
                 onLongPress: onSelectionToggle,
-                borderRadius: BorderRadius.circular(tileRadius),
+                borderRadius: resonanceBorderRadius(context, tileRadius, rounderRadius: windowsNative ? 11 : 23),
                 child: Padding(
                   padding: EdgeInsets.symmetric(horizontal: windowsNative ? 10 : 12, vertical: windowsNative ? 8 : 10),
                   child: Row(
@@ -662,7 +663,7 @@ class _TrackTileContent extends StatelessWidget {
                         height: isCurrentTrack ? 32 : 0,
                         decoration: BoxDecoration(
                           color: primary,
-                          borderRadius: BorderRadius.circular(99),
+                          borderRadius: resonanceBorderRadius(context, 99),
                           boxShadow: isCurrentTrack
                               ? [BoxShadow(color: primary.withValues(alpha: .42), blurRadius: 8)]
                               : null,
@@ -759,7 +760,7 @@ class _TrackTileContent extends StatelessWidget {
                             surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
                             shape: WidgetStatePropertyAll(
                               RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(windowsNative ? 4 : 14),
+                                borderRadius: resonanceBorderRadius(context, windowsNative ? 4 : 14),
                                 side: windowsNative
                                     ? BorderSide(color: Theme.of(context).colorScheme.outline)
                                     : BorderSide.none,
@@ -882,7 +883,7 @@ class _SkeletonTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(windowsNative ? 4 : 12),
+        borderRadius: resonanceBorderRadius(context, windowsNative ? 4 : 12, rounderRadius: windowsNative ? 11 : 23),
         border: Border.all(color: Theme.of(context).colorScheme.outline, width: 1),
       ),
       child: Row(
@@ -892,7 +893,7 @@ class _SkeletonTile extends StatelessWidget {
             height: 32,
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: resonanceBorderRadius(context, 8),
             ),
           ),
           const SizedBox(width: 14),
@@ -906,7 +907,7 @@ class _SkeletonTile extends StatelessWidget {
                   width: 140,
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: resonanceBorderRadius(context, 4),
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -915,7 +916,7 @@ class _SkeletonTile extends StatelessWidget {
                   width: 80,
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.surfaceContainerHigh,
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: resonanceBorderRadius(context, 4),
                   ),
                 ),
               ],
@@ -958,7 +959,7 @@ class _TrackIcon extends StatelessWidget {
         color: isActive
             ? primary.withValues(alpha: isDark ? 0.2 : 0.12)
             : Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: resonanceBorderRadius(context, 8),
       ),
       child: AnimatedSwitcher(
         duration: const Duration(milliseconds: 200),
@@ -996,7 +997,7 @@ class _StreamArtworkThumbnail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ClipRRect(
-    borderRadius: BorderRadius.circular(8),
+    borderRadius: resonanceBorderRadius(context, 8),
     child: Stack(
       fit: StackFit.expand,
       children: [
@@ -1016,7 +1017,7 @@ class _StreamArtworkThumbnail extends StatelessWidget {
           child: DecoratedBox(
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.88),
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: resonanceBorderRadius(context, 4),
             ),
             child: Padding(
               padding: const EdgeInsets.all(2),

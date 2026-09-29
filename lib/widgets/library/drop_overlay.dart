@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 // lib/widgets/library/drop_overlay.dart
 // Logic: UNCHANGED. Visual only.
 
@@ -26,7 +27,7 @@ class DropOverlay extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 32),
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF1A1A2A) : Colors.white,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: resonanceBorderRadius(context, 20),
               border: Border.all(
                 color: primary.withValues(alpha: 0.5),
                 width: 1.5,

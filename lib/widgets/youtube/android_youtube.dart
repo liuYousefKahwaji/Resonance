@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 // lib/widgets/youtube/android_youtube.dart
 // Fixes:
 //  1. Stream title: MetadataCacheService.set() is always awaited BEFORE
@@ -506,7 +507,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     final maxW = (screenWidth - 32).clamp(0.0, 480.0);
 
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 16)),
       child: AnimatedSize(
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
@@ -576,7 +577,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
               labelText: 'Video / Playlist URL',
               hintText: 'https://youtu.be/...',
               prefixIcon: const Icon(Icons.link_rounded),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              border: OutlineInputBorder(borderRadius: resonanceBorderRadius(context, 10)),
               filled: true,
             ),
             onSubmitted: (_) {
@@ -593,7 +594,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                 child: OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 10)),
                     side: BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6)),
                     foregroundColor: Theme.of(context).colorScheme.primary,
                   ),
@@ -610,7 +611,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 10)),
                   ),
                   onPressed: () {
                     final url = _urlController.text.trim();
@@ -629,7 +630,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
               labelText: 'Search YouTube',
               hintText: 'Artist, song name...',
               prefixIcon: const Icon(Icons.search_rounded),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              border: OutlineInputBorder(borderRadius: resonanceBorderRadius(context, 10)),
               filled: true,
             ),
             onSubmitted: (_) => _runSearch(),
@@ -643,7 +644,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             children: [
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                style: ElevatedButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 10))),
                 onPressed: _runSearch,
                 icon: const Icon(Icons.search_rounded, size: 18),
                 label: const Text('Search'),
@@ -788,7 +789,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
           Text(_statusMessage, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500)),
           const SizedBox(height: 12),
           ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: resonanceBorderRadius(context, 8),
             child: LinearProgressIndicator(
               value: _downloadPercentage / 100.0,
               minHeight: 10,

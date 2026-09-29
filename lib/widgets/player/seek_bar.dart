@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 // lib/widgets/player/seek_bar.dart
 //
 // Fixes:
@@ -325,7 +326,7 @@ class _SeekBarState extends State<SeekBar> {
                             padding: const EdgeInsets.symmetric(vertical: 4),
                             decoration: BoxDecoration(
                               color: previewBgColor,
-                              borderRadius: BorderRadius.circular(6),
+                              borderRadius: resonanceBorderRadius(context, 6),
                               boxShadow: [
                                 BoxShadow(
                                   color: Colors.black.withValues(alpha: 0.2),

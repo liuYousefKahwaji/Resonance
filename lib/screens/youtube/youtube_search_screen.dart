@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -1565,7 +1566,7 @@ class _MobileSpeedDialShelf extends StatelessWidget {
               final track = shelf.tracks[index];
               final busy = busyUrl == track.url;
               return Material(
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: resonanceBorderRadius(context, 16),
                 clipBehavior: Clip.antiAlias,
                 child: Stack(
                   fit: StackFit.expand,
@@ -1670,7 +1671,7 @@ class _QuickPickShelf extends StatelessWidget {
               final busy = busyUrl == track.url;
               return Material(
                 color: Theme.of(context).colorScheme.surfaceContainerHigh,
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: resonanceBorderRadius(context, 14),
                 clipBehavior: Clip.antiAlias,
                 child: Stack(
                   children: [

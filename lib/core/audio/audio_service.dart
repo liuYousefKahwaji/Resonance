@@ -24,6 +24,7 @@ import 'package:metadata_god/metadata_god.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:resonance/services/youtube/youtube_playback_history_coordinator.dart';
 import 'package:resonance/services/local_playback_history_coordinator.dart';
+import 'package:resonance/services/android_auto_catalog.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
@@ -268,6 +269,7 @@ class _AutomaticTrackTarget {
 }
 
 class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, WidgetsBindingObserver {
+  final AndroidAutoCatalog _androidAutoCatalog = AndroidAutoCatalog();
   late AudioPlayer _player;
   late AndroidLoudnessEnhancer _loudnessEnhancer;
   late AndroidEqualizer _androidEqualizer;
@@ -276,6 +278,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   double savedVolume = 1.0;
 
   final ValueNotifier<double> volumeNotifier = ValueNotifier<double>(1.0);
+  Future<void>? _volumeApplyTask;
+  bool _volumeApplyPending = false;
+  Timer? _volumeSaveTimer;
   final ValueNotifier<double> speedNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<double> pitchNotifier = ValueNotifier<double>(1.0);
   final ValueNotifier<EqualizerSettings> equalizerNotifier = ValueNotifier<EqualizerSettings>(EqualizerSettings.flat);
@@ -1668,7 +1673,27 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         100.0,
   );
 
-  Future<void> _applyOutputVolume() async {
+  Future<void> _applyOutputVolume() {
+    _volumeApplyPending = true;
+    return _volumeApplyTask ??= _drainOutputVolume();
+  }
+
+  Future<void> _drainOutputVolume() async {
+    try {
+      do {
+        _volumeApplyPending = false;
+        try {
+          await _writeOutputVolume().timeout(const Duration(seconds: 2));
+        } on TimeoutException {
+          debugPrint('[PlayerHandler] Output volume write timed out');
+        }
+      } while (_volumeApplyPending);
+    } finally {
+      _volumeApplyTask = null;
+    }
+  }
+
+  Future<void> _writeOutputVolume() async {
     try {
       if (Platform.isWindows) {
         await _setWindowsOutputVolume(
@@ -2993,12 +3018,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> changeVolume(double rawVolume) async {
     final clamped = rawVolume.clamp(0.0, 2.0);
     volumeNotifier.value = clamped;
+    _volumeSaveTimer?.cancel();
+    _volumeSaveTimer = Timer(const Duration(milliseconds: 300), () async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setDouble('last_volume', volumeNotifier.value);
+      } catch (_) {}
+    });
     await _applyOutputVolume();
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setDouble('last_volume', clamped);
-    } catch (_) {}
   }
 
   Future<void> incrementVolume() async => changeVolume(volumeNotifier.value + 0.05);
@@ -3302,6 +3329,30 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     standalone: mediaItem.extras?['resonanceStandalone'] == true,
   );
 
+  @override
+  Future<List<MediaItem>> getChildren(String parentMediaId, [Map<String, dynamic>? options]) =>
+      _androidAutoCatalog.children(parentMediaId);
+
+  @override
+  Future<MediaItem?> getMediaItem(String mediaId) => _androidAutoCatalog.item(mediaId);
+
+  @override
+  Future<void> playFromMediaId(String mediaId, [Map<String, dynamic>? extras]) async {
+    final location = await _androidAutoCatalog.resolve(mediaId);
+    if (location == null) return;
+    final item = await _androidAutoCatalog.track(mediaId);
+    if (item == null) return;
+    await loadTrack(
+      location.path,
+      item.title,
+      item.artist ?? 'Unknown Artist',
+      artworkUri: item.artUri,
+      standalone: true,
+      standalonePlaylistNumber: location.playlist,
+      standalonePlaylistIndex: location.index,
+    );
+  }
+
   Future<void> toggleLoopMode() async {
     if (_syncControlLocked) return;
     if (currentLoopMode == LoopMode.off) {
@@ -3501,6 +3552,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     WidgetsBinding.instance.removeObserver(this);
     _periodicPositionSaveTimer?.cancel();
     _playbackHealthTimer?.cancel();
+    _volumeSaveTimer?.cancel();
     await _seekOperationQueue;
     _loadGeneration++;
     _activeTrackLoadGeneration = null;

@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
@@ -182,7 +183,7 @@ class _HistoryCard extends StatelessWidget {
               height: 40,
               decoration: BoxDecoration(
                 color: statusColor.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: resonanceBorderRadius(context, 10),
               ),
               child: Icon(
                 entry.succeeded ? Icons.download_done_rounded : Icons.error_outline_rounded,
@@ -281,7 +282,7 @@ class _StatusLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-    decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
+    decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: resonanceBorderRadius(context, 20)),
     child: Text(
       label,
       style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700),

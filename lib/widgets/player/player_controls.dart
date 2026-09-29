@@ -7,6 +7,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:resonance/app/theme.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/widgets/player/playback_settings.dart';
 import 'package:resonance/widgets/player/player_modes.dart';
@@ -37,6 +38,9 @@ class PlayerControls extends StatelessWidget {
         return Container(
           decoration: BoxDecoration(
             color: standalone ? Colors.transparent : panelColor,
+            borderRadius: standalone
+                ? null
+                : BorderRadius.vertical(top: Radius.circular(resonanceCornerRadius(context, 0, rounderRadius: 22))),
             border: standalone ? null : Border(top: BorderSide(color: panelBorder, width: 1)),
           ),
           child: screenWidth < 500

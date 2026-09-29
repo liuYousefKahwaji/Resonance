@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -390,7 +391,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
               if (Platform.isAndroid)
                 Expanded(
                   child: ClipRRect(
-                    borderRadius: BorderRadius.circular(18),
+                    borderRadius: resonanceBorderRadius(context, 18),
                     child: MobileScanner(
                       controller: _scannerController,
                       onDetect: _onCameraDetect,

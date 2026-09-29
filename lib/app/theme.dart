@@ -17,6 +17,31 @@ class ResonancePlatformTheme extends ThemeExtension<ResonancePlatformTheme> {
   }
 }
 
+@immutable
+class ResonanceShapeTheme extends ThemeExtension<ResonanceShapeTheme> {
+  final double cornerScale;
+
+  const ResonanceShapeTheme({required this.cornerScale});
+
+  @override
+  ResonanceShapeTheme copyWith({double? cornerScale}) =>
+      ResonanceShapeTheme(cornerScale: cornerScale ?? this.cornerScale);
+
+  @override
+  ResonanceShapeTheme lerp(covariant ResonanceShapeTheme? other, double t) =>
+      ResonanceShapeTheme(cornerScale: cornerScale + ((other?.cornerScale ?? cornerScale) - cornerScale) * t);
+}
+
+double resonanceCornerRadius(BuildContext context, double radius, {double? rounderRadius}) {
+  final scale = Theme.of(context).extension<ResonanceShapeTheme>()?.cornerScale ?? 1;
+  if (rounderRadius == null) return radius * scale;
+  return radius + (rounderRadius - radius) * ((scale - 1) / 0.9).clamp(0.0, 1.0);
+}
+
+BorderRadius resonanceBorderRadius(BuildContext context, double radius, {double? rounderRadius}) {
+  return BorderRadius.circular(resonanceCornerRadius(context, radius, rounderRadius: rounderRadius));
+}
+
 bool useWindowsNativeControls(BuildContext context) =>
     Theme.of(context).extension<ResonancePlatformTheme>()?.windowsNativeControls ?? false;
 
@@ -89,21 +114,25 @@ Color _customTone(Color color, {required double saturation, required double ligh
 _Palette _customPalette(Color color) {
   final hsl = HSLColor.fromColor(color);
   final saturation = hsl.saturation.clamp(0.0, 0.85);
+  // Keep text contrast usable while allowing the chosen color's brightness to
+  // affect both accents and the softly tinted surfaces.
+  final shift = (hsl.lightness - 0.375) * 0.6;
+  double tone(double base, double influence) => (base + shift * influence).clamp(0.025, 0.995);
   return _Palette(
-    darkPrimary: _customTone(color, saturation: saturation, lightness: 0.64),
-    darkSecondary: _customTone(color, saturation: saturation * 0.83, lightness: 0.76),
-    lightPrimary: _customTone(color, saturation: saturation, lightness: 0.37),
-    lightSecondary: _customTone(color, saturation: saturation * 0.9, lightness: 0.45),
-    darkBase: _customTone(color, saturation: saturation * 0.3, lightness: 0.055),
-    darkSurface: _customTone(color, saturation: saturation * 0.28, lightness: 0.10),
-    darkElevated: _customTone(color, saturation: saturation * 0.32, lightness: 0.16),
-    darkHighest: _customTone(color, saturation: saturation * 0.32, lightness: 0.22),
-    darkBorder: _customTone(color, saturation: saturation * 0.38, lightness: 0.30),
-    lightBase: _customTone(color, saturation: saturation * 0.28, lightness: 0.97),
-    lightSurface: _customTone(color, saturation: saturation * 0.18, lightness: 0.995),
-    lightElevated: _customTone(color, saturation: saturation * 0.29, lightness: 0.92),
-    lightHighest: _customTone(color, saturation: saturation * 0.32, lightness: 0.86),
-    lightBorder: _customTone(color, saturation: saturation * 0.34, lightness: 0.77),
+    darkPrimary: _customTone(color, saturation: saturation, lightness: tone(0.64, 0.6)),
+    darkSecondary: _customTone(color, saturation: saturation * 0.83, lightness: tone(0.76, 0.45)),
+    lightPrimary: _customTone(color, saturation: saturation, lightness: tone(0.37, 0.5)),
+    lightSecondary: _customTone(color, saturation: saturation * 0.9, lightness: tone(0.45, 0.5)),
+    darkBase: _customTone(color, saturation: saturation * 0.3, lightness: tone(0.055, 0.06)),
+    darkSurface: _customTone(color, saturation: saturation * 0.28, lightness: tone(0.10, 0.1)),
+    darkElevated: _customTone(color, saturation: saturation * 0.32, lightness: tone(0.16, 0.12)),
+    darkHighest: _customTone(color, saturation: saturation * 0.32, lightness: tone(0.22, 0.15)),
+    darkBorder: _customTone(color, saturation: saturation * 0.38, lightness: tone(0.30, 0.18)),
+    lightBase: _customTone(color, saturation: saturation * 0.28, lightness: tone(0.97, 0.02)),
+    lightSurface: _customTone(color, saturation: saturation * 0.18, lightness: tone(0.995, 0.01)),
+    lightElevated: _customTone(color, saturation: saturation * 0.29, lightness: tone(0.92, 0.05)),
+    lightHighest: _customTone(color, saturation: saturation * 0.32, lightness: tone(0.86, 0.08)),
+    lightBorder: _customTone(color, saturation: saturation * 0.34, lightness: tone(0.77, 0.1)),
   );
 }
 
@@ -228,6 +257,7 @@ ThemeData buildResonanceTheme(
   Brightness brightness, {
   bool fullPalette = true,
   bool windowsNativeControls = false,
+  bool rounderCorners = false,
   Color customColor = const Color(0xFF00BFA5),
 }) {
   final palette = _palette(style, customColor);
@@ -265,8 +295,9 @@ ThemeData buildResonanceTheme(
       : dark
       ? const Color(0xFF30303A)
       : const Color(0xFFD8DCE5);
-  final controlRadius = windowsNativeControls ? 5.0 : 10.0;
-  final surfaceRadius = windowsNativeControls ? 8.0 : 14.0;
+  double corner(double radius) => rounderCorners ? radius * 1.9 : radius;
+  final controlRadius = corner(windowsNativeControls ? 5.0 : 10.0);
+  final surfaceRadius = corner(windowsNativeControls ? 8.0 : 14.0);
   final controlShape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(controlRadius));
   final appBackground = windowsNativeControls
       ? Color.alphaBlend(primary.withValues(alpha: dark ? 0.035 : 0.025), bgBase)
@@ -307,6 +338,7 @@ ThemeData buildResonanceTheme(
     colorScheme: scheme,
     extensions: [
       ResonancePlatformTheme(windowsNativeControls: windowsNativeControls),
+      ResonanceShapeTheme(cornerScale: rounderCorners ? 1.9 : 1),
       const ResonanceMotionTheme(),
     ],
     appBarTheme: AppBarTheme(
@@ -341,7 +373,11 @@ ThemeData buildResonanceTheme(
       dense: windowsNativeControls,
       minVerticalPadding: windowsNativeControls ? 6 : null,
       horizontalTitleGap: windowsNativeControls ? 12 : null,
-      shape: windowsNativeControls ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)) : null,
+      shape: rounderCorners
+          ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(windowsNativeControls ? 10 : 16))
+          : windowsNativeControls
+          ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(4))
+          : null,
       selectedTileColor: primary.withValues(alpha: dark ? 0.16 : 0.09),
     ),
     iconTheme: const IconThemeData(color: textMuted),
@@ -349,7 +385,7 @@ ThemeData buildResonanceTheme(
       backgroundColor: appSurface,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(windowsNativeControls ? 8 : 20),
+        borderRadius: BorderRadius.circular(corner(windowsNativeControls ? 8 : 20)),
         side: BorderSide(color: border),
       ),
     ),
@@ -442,7 +478,7 @@ ThemeData buildResonanceTheme(
     snackBarTheme: SnackBarThemeData(
       backgroundColor: bgElevated,
       contentTextStyle: TextStyle(color: textPrimary),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(corner(12))),
       behavior: SnackBarBehavior.floating,
     ),
     switchTheme: SwitchThemeData(
@@ -456,7 +492,7 @@ ThemeData buildResonanceTheme(
     ),
     scrollbarTheme: ScrollbarThemeData(
       thickness: WidgetStatePropertyAll(windowsNativeControls ? 5 : 7),
-      radius: Radius.circular(windowsNativeControls ? 2 : 8),
+      radius: Radius.circular(corner(windowsNativeControls ? 2 : 8)),
       thumbVisibility: const WidgetStatePropertyAll(false),
     ),
     popupMenuTheme: PopupMenuThemeData(
@@ -464,7 +500,7 @@ ThemeData buildResonanceTheme(
       surfaceTintColor: Colors.transparent,
       elevation: windowsNativeControls ? 8 : null,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(windowsNativeControls ? 4 : 14),
+        borderRadius: BorderRadius.circular(corner(windowsNativeControls ? 4 : 14)),
         side: windowsNativeControls ? BorderSide(color: border) : BorderSide.none,
       ),
       position: windowsNativeControls ? PopupMenuPosition.under : PopupMenuPosition.over,
@@ -476,7 +512,7 @@ ThemeData buildResonanceTheme(
         padding: WidgetStatePropertyAll(windowsNativeControls ? const EdgeInsets.symmetric(vertical: 3) : null),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(windowsNativeControls ? 4 : 14),
+            borderRadius: BorderRadius.circular(corner(windowsNativeControls ? 4 : 14)),
             side: windowsNativeControls ? BorderSide(color: border) : BorderSide.none,
           ),
         ),
@@ -489,7 +525,9 @@ ThemeData buildResonanceTheme(
           windowsNativeControls ? const EdgeInsets.symmetric(horizontal: 10, vertical: 6) : null,
         ),
         shape: WidgetStatePropertyAll(
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(windowsNativeControls ? 3 : controlRadius)),
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(windowsNativeControls ? corner(3) : controlRadius),
+          ),
         ),
         overlayColor: windowsNativeControls
             ? WidgetStateProperty.resolveWith((states) {
@@ -501,7 +539,7 @@ ThemeData buildResonanceTheme(
       ),
     ),
     checkboxTheme: CheckboxThemeData(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(windowsNativeControls ? 2 : 4)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(corner(windowsNativeControls ? 2 : 4))),
       side: BorderSide(color: textMuted, width: 1),
       visualDensity: windowsNativeControls ? VisualDensity.compact : VisualDensity.standard,
     ),
@@ -510,7 +548,7 @@ ThemeData buildResonanceTheme(
       decoration: windowsNativeControls
           ? BoxDecoration(
               color: dark ? const Color(0xFF2C2C2C) : const Color(0xFFF9F9F9),
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(corner(4)),
               border: Border.all(color: border),
               boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.18), blurRadius: 8)],
             )
@@ -521,20 +559,24 @@ ThemeData buildResonanceTheme(
       backgroundColor: appSurface,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(windowsNativeControls ? 8 : 20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(corner(windowsNativeControls ? 8 : 20))),
       ),
     ),
     navigationBarTheme: NavigationBarThemeData(
       height: windowsNativeControls ? 48 : null,
       backgroundColor: appSurface,
       indicatorColor: primary.withValues(alpha: dark ? 0.22 : 0.12),
-      indicatorShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(windowsNativeControls ? 4 : 16)),
+      indicatorShape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(corner(windowsNativeControls ? 4 : 16)),
+      ),
     ),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: appSurface,
       minWidth: windowsNativeControls ? 54 : null,
       indicatorColor: primary.withValues(alpha: dark ? 0.22 : 0.12),
-      indicatorShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(windowsNativeControls ? 4 : 16)),
+      indicatorShape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(corner(windowsNativeControls ? 4 : 16)),
+      ),
     ),
     tabBarTheme: TabBarThemeData(
       dividerColor: border,

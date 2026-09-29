@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -139,7 +140,7 @@ class _HostSessionView extends StatelessWidget {
           if (sync.pairingPayload case final payload?)
             Container(
               padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: resonanceBorderRadius(context, 20)),
               child: QrImageView(data: payload, size: 230, backgroundColor: Colors.white),
             )
           else
@@ -230,7 +231,7 @@ class _SyncJoinScreenState extends State<SyncJoinScreen> {
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: resonanceBorderRadius(context, 24),
               child: MobileScanner(controller: _scanner, onDetect: _detect),
             ),
           ),

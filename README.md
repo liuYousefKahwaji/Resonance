@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-Version **3.4.2** is the current published release. It adds update checks and installation from GitHub Releases on Android and Windows, plus a Custom theme style with your choice of main color.
+The current source version is **3.4.3**. Packaged builds are available on the [GitHub Releases page](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 
@@ -44,6 +44,7 @@ The working tree may contain features intended for the next release. See the rel
 - Crossfade automatic track changes and resume long tracks from their saved position.
 - Select a Windows audio output device; Android continues to use system audio routing.
 - Control playback from Android notifications, widgets, Quick Settings, Windows media keys, taskbar controls, tray controls, hotkeys, and Discord Companion shortcuts.
+- Browse saved playlists and control playback through Android Auto on a connected phone.
 
 ### YouTube and YouTube Music
 
@@ -75,7 +76,9 @@ The working tree may contain features intended for the next release. See the rel
 ### Appearance
 
 - Choose Obsidian, Quartz, Aurum, and other theme styles independently from light/dark mode.
+- Pick a Custom theme color from ready-made choices or a visual color picker, adjust its shade, and optionally use rounder corners throughout the app.
 - Use artwork-derived player colors, reduced motion, optional tracklist motion blur, and Windows native controls.
+- Move between Discover and the library with gentle page transitions.
 - Responsive layouts adapt the library, player, queue, YouTube shelves, and settings to desktop and mobile widths.
 
 ## Listening history

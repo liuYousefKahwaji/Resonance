@@ -45,6 +45,9 @@
         android:name="${applicationName}"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
         <receiver android:name=".ResonanceUpdateReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
@@ -116,6 +119,7 @@
              foregroundServiceType="mediaPlayback" is required on Android 14+. -->
         <service
             android:name="com.ryanheise.audioservice.AudioService"
+            android:label="Resonance"
             android:foregroundServiceType="mediaPlayback"
             android:exported="true">
             <intent-filter>

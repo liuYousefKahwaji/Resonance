@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:async';
 
 import 'dart:convert';
@@ -777,7 +778,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     final theme = Theme.of(context);
 
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 16)),
 
       child: AnimatedSize(
         duration: const Duration(milliseconds: 200),
@@ -860,7 +861,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
               prefixIcon: const Icon(Icons.link_rounded),
 
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              border: OutlineInputBorder(borderRadius: resonanceBorderRadius(context, 10)),
 
               filled: true,
             ),
@@ -885,7 +886,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
               OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 10)),
                   side: BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6)),
                   foregroundColor: Theme.of(context).colorScheme.primary,
                 ),
@@ -903,7 +904,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 10)),
                 ),
                 onPressed: () {
                   final url = _urlController.text.trim();
@@ -927,7 +928,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
               prefixIcon: const Icon(Icons.search_rounded),
 
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              border: OutlineInputBorder(borderRadius: resonanceBorderRadius(context, 10)),
 
               filled: true,
             ),
@@ -948,7 +949,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
 
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 10)),
                 ),
 
                 onPressed: _runSearch,
@@ -1123,7 +1124,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
           const SizedBox(height: 12),
 
           ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: resonanceBorderRadius(context, 8),
 
             child: LinearProgressIndicator(
               value: _downloadPercentage / 100.0,

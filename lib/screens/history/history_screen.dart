@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -445,7 +446,7 @@ class _HistoryArtwork extends StatelessWidget {
       if (file.existsSync()) child = Image.file(file, fit: BoxFit.cover);
     }
     return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: resonanceBorderRadius(context, 8),
       child: SizedBox(
         width: 48,
         height: 48,

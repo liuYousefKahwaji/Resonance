@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/audio/equalizer_settings.dart';
@@ -77,7 +78,7 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
                 color: colors.surface,
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: resonanceBorderRadius(context, 14),
                 border: Border.all(color: colors.outline),
               ),
               child: Row(
@@ -127,7 +128,7 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
               padding: const EdgeInsets.fromLTRB(8, 18, 8, 12),
               decoration: BoxDecoration(
                 color: colors.surface,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: resonanceBorderRadius(context, 16),
                 border: Border.all(color: colors.outline),
               ),
               child: Row(

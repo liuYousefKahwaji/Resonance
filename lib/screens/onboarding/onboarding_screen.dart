@@ -72,7 +72,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                   const SizedBox(height: 22),
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: resonanceBorderRadius(context, 4),
                     child: TweenAnimationBuilder<double>(
                       tween: Tween(begin: 0, end: (_page + 1) / 5),
                       duration: const Duration(milliseconds: 430),
@@ -273,12 +273,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           InkWell(
                             key: const Key('onboarding-cover-demo'),
                             onTap: () => setState(() => _demoOpen = !_demoOpen),
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: resonanceBorderRadius(context, 12),
                             child: Container(
                               width: 66,
                               height: 66,
                               decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(12),
+                                borderRadius: resonanceBorderRadius(context, 12),
                                 gradient: LinearGradient(
                                   colors: [
                                     Theme.of(context).colorScheme.primary,

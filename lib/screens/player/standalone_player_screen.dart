@@ -1,3 +1,4 @@
+import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -1168,7 +1169,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
     return DecoratedBox(
       decoration: BoxDecoration(
         color: theme.colorScheme.surface.withValues(alpha: 0.34),
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: resonanceBorderRadius(context, 28),
         border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.35)),
       ),
       child: Column(
@@ -1240,7 +1241,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
                     textDirection: direction,
                     child: InkWell(
                       key: _lineKeys[index],
-                      borderRadius: BorderRadius.circular(18),
+                      borderRadius: resonanceBorderRadius(context, 18),
                       onTap: line.start == null ? null : () => _seekLine(line),
                       child: AnimatedScale(
                         scale: isActive ? 1.025 : 1,
@@ -1258,7 +1259,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
                             isActive ? 16 : 10,
                           ),
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(18),
+                            borderRadius: resonanceBorderRadius(context, 18),
                             gradient: isActive
                                 ? LinearGradient(
                                     begin: AlignmentDirectional.centerStart,
@@ -1294,7 +1295,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
                                 margin: EdgeInsetsDirectional.only(end: isActive ? 12 : 0, top: 1),
                                 decoration: BoxDecoration(
                                   color: theme.colorScheme.primary,
-                                  borderRadius: BorderRadius.circular(99),
+                                  borderRadius: resonanceBorderRadius(context, 99),
                                   boxShadow: isActive
                                       ? [
                                           BoxShadow(
@@ -1943,8 +1944,8 @@ class _LargeArtwork extends StatelessWidget {
     return AspectRatio(
       aspectRatio: 1,
       child: DecoratedBox(
-        decoration: BoxDecoration(color: primary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(28)),
-        child: ClipRRect(borderRadius: BorderRadius.circular(28), child: image),
+        decoration: BoxDecoration(color: primary.withValues(alpha: 0.12), borderRadius: resonanceBorderRadius(context, 28)),
+        child: ClipRRect(borderRadius: resonanceBorderRadius(context, 28), child: image),
       ),
     );
   }
