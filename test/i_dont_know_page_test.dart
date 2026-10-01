@@ -3,6 +3,44 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/screens/settings/i_dont_know_page.dart';
 
 void main() {
+  testWidgets('the thirteenth ask exits once after three seconds', (tester) async {
+    var exits = 0;
+    await tester.pumpWidget(MaterialApp(home: IDontKnowPage(onExit: () => exits++)));
+    for (var ask = 1; ask <= 13; ask++) {
+      await tester.tap(find.byKey(const Key('secret-record')));
+      await tester.pump();
+      if (ask >= 10) {
+        final answer = [
+          'You should stop now.',
+          'Stop now.',
+          'Do it again, I dare you.',
+          'Okay, you asked for it.',
+        ][ask - 10];
+        expect(find.text(answer), findsOneWidget);
+      }
+      expect(exits, 0);
+    }
+    await tester.tap(find.byKey(const Key('secret-record')));
+    await tester.pump(const Duration(milliseconds: 2999));
+    expect(exits, 0);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(exits, 1);
+    await tester.pump(const Duration(seconds: 5));
+    expect(exits, 1);
+  });
+
+  testWidgets('leaving the secret page cancels its pending exit', (tester) async {
+    var exits = 0;
+    await tester.pumpWidget(MaterialApp(home: IDontKnowPage(onExit: () => exits++)));
+    for (var ask = 0; ask < 13; ask++) {
+      await tester.tap(find.byKey(const Key('secret-record')));
+      await tester.pump();
+    }
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump(const Duration(seconds: 4));
+    expect(exits, 0);
+  });
+
   test('the version shortcut opens on the fifth tap', () {
     final taps = VersionTapTracker();
     for (var index = 0; index < 4; index++) {

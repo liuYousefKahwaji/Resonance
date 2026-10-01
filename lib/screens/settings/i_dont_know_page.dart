@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:resonance/app/resonance_motion.dart';
 
@@ -13,7 +15,9 @@ class VersionTapTracker {
 }
 
 class IDontKnowPage extends StatefulWidget {
-  const IDontKnowPage({super.key});
+  const IDontKnowPage({super.key, this.onExit});
+
+  final VoidCallback? onExit;
 
   @override
   State<IDontKnowPage> createState() => _IDontKnowPageState();
@@ -30,15 +34,34 @@ class _IDontKnowPageState extends State<IDontKnowPage> {
   ];
 
   int _spins = 0;
+  Timer? _exitTimer;
 
-  void _askTheRecord() => setState(() => _spins++);
+  void _askTheRecord() {
+    if (_spins >= 13) return;
+    setState(() => _spins++);
+    if (_spins == 13) {
+      _exitTimer = Timer(const Duration(seconds: 3), () => widget.onExit?.call());
+    }
+  }
+
+  @override
+  void dispose() {
+    _exitTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
     final muted = theme.colorScheme.onSurfaceVariant;
-    final answer = _answers[_spins % _answers.length];
+    final answer = switch (_spins) {
+      10 => 'You should stop now.',
+      11 => 'Stop now.',
+      12 => 'Do it again, I dare you.',
+      13 => 'Okay, you asked for it.',
+      _ => _answers[_spins % _answers.length],
+    };
     final motion = resonanceDuration(context, const Duration(milliseconds: 700));
 
     return Scaffold(

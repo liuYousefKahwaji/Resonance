@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-The current source version is **3.4.3**. Packaged builds are available on the [GitHub Releases page](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
+The current source version is **3.4.4**. Packaged builds are available on the [GitHub Releases page](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 

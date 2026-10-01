@@ -271,14 +271,14 @@ class MainApp extends StatefulWidget {
 }
 
 // ── Desktop window/tray listener ──────────────────────────────────────────────
-class _DesktopWindowHandler with WindowListener, TrayListener {
+class DesktopWindowHandler with WindowListener, TrayListener {
   final VoidCallback onShow;
   final VoidCallback onExit;
   final VoidCallback onSuspend;
   final VoidCallback onResume;
   final TrayMode trayMode;
 
-  _DesktopWindowHandler({
+  DesktopWindowHandler({
     required this.onShow,
     required this.onExit,
     required this.onSuspend,
@@ -315,13 +315,22 @@ class _DesktopWindowHandler with WindowListener, TrayListener {
     onSuspend();
     if (trayMode == TrayMode.minimizeToTray) {
       unawaited(windowManager.hide());
-    } else {
-      unawaited(windowManager.minimize());
     }
   }
 
   @override
   void onWindowRestore() => onResume();
+
+  // Restoring a maximized HWND can emit maximize/focus instead of restore.
+  // Every visible entry path must release the root TickerMode suspension.
+  @override
+  void onWindowMaximize() => onResume();
+
+  @override
+  void onWindowUnmaximize() => onResume();
+
+  @override
+  void onWindowFocus() => onResume();
 
   @override
   void onTrayIconMouseDown() => onShow();
@@ -369,7 +378,7 @@ class _MainAppState extends State<MainApp> {
   bool _streamControlsAutoOpened = false;
 
   final SettingsService _settingsService = SettingsService();
-  _DesktopWindowHandler? _desktopHandler;
+  DesktopWindowHandler? _desktopHandler;
 
   @override
   void initState() {
@@ -495,7 +504,7 @@ class _MainAppState extends State<MainApp> {
   Future<void> _initDesktop() async {
     final mode = await _settingsService.getTrayMode();
     if (!mounted) return;
-    _desktopHandler = _DesktopWindowHandler(
+    _desktopHandler = DesktopWindowHandler(
       onShow: _showWindow,
       onExit: _exitApp,
       onSuspend: _suspendUi,
@@ -1296,7 +1305,7 @@ class _MainAppState extends State<MainApp> {
   Future<void> _completeExit(PlayerHandler handler) async {
     await Future.wait([
       _shutdownStep('essential state save', handler.saveState, const Duration(milliseconds: 220)),
-      _shutdownStep('audio pause', handler.pause, const Duration(milliseconds: 120)),
+      _shutdownStep('audio stop', Platform.isAndroid ? handler.stop : handler.pause, const Duration(milliseconds: 120)),
     ]);
 
     if (Platform.isWindows) {
@@ -1434,7 +1443,7 @@ class _MainAppState extends State<MainApp> {
     await Navigator.push(
       context,
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) => const SettingsScreen(),
+        pageBuilder: (_, __, ___) => SettingsScreen(onExit: _exitApp),
         transitionsBuilder: (_, anim, __, child) => FadeTransition(
           opacity: anim,
           child: SlideTransition(

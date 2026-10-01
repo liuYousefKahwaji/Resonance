@@ -42,7 +42,9 @@ import 'package:resonance/services/app_update_service.dart';
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({super.key, required this.onExit});
+
+  final VoidCallback onExit;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -78,7 +80,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _handleVersionTap() {
     if (_versionTaps.registerTap()) {
-      Navigator.of(context).push<void>(MaterialPageRoute(builder: (_) => const IDontKnowPage()));
+      Navigator.of(context).push<void>(MaterialPageRoute(builder: (_) => IDontKnowPage(onExit: widget.onExit)));
     }
   }
 

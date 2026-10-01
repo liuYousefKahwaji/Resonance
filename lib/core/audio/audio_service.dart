@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:resonance/core/audio/audio_envelope_analyzer.dart';
 import 'package:resonance/core/audio/loudness_normalization.dart';
 import 'package:resonance/core/audio/playback_preferences.dart';
+import 'package:resonance/core/audio/shuffle_order.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/services/discord_presence_service.dart';
@@ -298,7 +299,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   final ValueNotifier<int> seekStepNotifier = ValueNotifier<int>(5);
   LoopMode currentLoopMode = LoopMode.all;
   bool isShuffle = false;
-  List<String> shuffledList = [];
+  final Map<int, PlaylistShuffleOrder> _shuffleOrders = {};
+  final _shuffleOrderForPaths = Expando<PlaylistShuffleOrder>();
+  int _shuffleSelectionGeneration = -1;
+  final _playlistOrderOperations = BackendSourceOperationQueue();
+  StreamSubscription<PlaylistMutation>? _playlistMutationSubscription;
   final ValueNotifier<int> playbackModeRevision = ValueNotifier<int>(0);
   final ValueNotifier<bool> standaloneModeNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<PlaybackVisualState> playbackVisualNotifier = ValueNotifier<PlaybackVisualState>(
@@ -519,6 +524,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _attachJustAudioPlayer(_player);
     }
 
+    _playlistMutationSubscription = FileService.mutations.listen((mutation) {
+      if (mutation.kind == PlaylistMutationKind.deleted) _shuffleOrders.remove(mutation.playlistNumber);
+      // Queue views re-read the file and reconcile before publishing their rows.
+      playbackModeRevision.value++;
+    });
     WidgetsBinding.instance.addObserver(this);
     _periodicPositionSaveTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (_isBackendPlaying) unawaited(saveCurrentPlaybackPosition());
@@ -641,6 +651,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (_loadGeneration != genAtCompletion) return;
       if (currentLoopMode == LoopMode.one) {
         await player.seek(Duration.zero);
+        if (_loadGeneration != genAtCompletion) return;
         await player.play();
       } else if (_loadGeneration == genAtCompletion) {
         await _queueNavigation(_advanceAfterCompletion);
@@ -782,7 +793,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         if (_loadGeneration != genAtCompletion) return;
         if (currentLoopMode == LoopMode.one) {
           await player.seek(Duration.zero);
-          await player.play();
+          if (_loadGeneration != genAtCompletion) return;
+          unawaited(player.play());
         } else if (_loadGeneration == genAtCompletion) {
           await _queueNavigation(_advanceAfterCompletion);
         }
@@ -1071,6 +1083,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (completed || playbackPositionAdvanced(initialPosition, _currentPosition)) {
         _failedTrackIds.clear();
         _retryLoadGeneration = null;
+        if (monitoredStream && !completed) {
+          _armPlaybackHealthCheck(generation, grace: const Duration(seconds: 8));
+        }
         return;
       }
       unawaited(
@@ -1977,6 +1992,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         incomingEqualizerApplied,
         incomingNormalization,
       );
+      if (generation != _crossfadeGeneration || !identical(outgoing, _windowsPlayer)) return;
       await incoming.play();
       final completed = await _runEqualPowerFade(generation, _availableCrossfadeDuration(fade), (
         outgoingVolume,
@@ -2010,14 +2026,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _windowsIsCompleted = incoming.state.completed;
       _equalizerEffectApplied = incomingEqualizerApplied;
       _normalizationMultiplier = incomingNormalization;
-      await _finishAutomaticCrossfade(outgoingItem, target, incomingAdjustments);
+      await _finishAutomaticCrossfade(generation, outgoingItem, target, incomingAdjustments);
       unawaited(outgoing.stop().catchError((_) {}));
       unawaited(outgoing.dispose().catchError((_) {}));
     } finally {
       if (!adopted) {
         await incoming.stop().catchError((_) {});
         await incoming.dispose().catchError((_) {});
-        if (identical(outgoing, _windowsPlayer)) {
+        if (generation == _crossfadeGeneration && identical(outgoing, _windowsPlayer)) {
           _crossfadeInProgress = false;
           await _setWindowsOutputVolume(
             outgoing,
@@ -2069,6 +2085,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         incomingEqualizerApplied,
         incomingNormalization,
       );
+      if (generation != _crossfadeGeneration || !identical(outgoing, _player)) return;
       // just_audio's play Future remains pending until playback is paused,
       // stopped, or completes. Awaiting it would leave the incoming player at
       // zero volume and prevent adoption until the entire next track ended.
@@ -2109,14 +2126,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _equalizerEffectApplied = incomingEqualizerApplied;
       _normalizationMultiplier = incomingNormalization;
       adopted = true;
-      await _finishAutomaticCrossfade(outgoingItem, target, incomingAdjustments);
+      await _finishAutomaticCrossfade(generation, outgoingItem, target, incomingAdjustments);
       unawaited(outgoing.stop().catchError((_) {}));
       unawaited(outgoing.dispose().catchError((_) {}));
     } finally {
       if (!adopted) {
         await incoming.stop().catchError((_) {});
         await incoming.dispose().catchError((_) {});
-        if (identical(outgoing, _player)) {
+        if (generation == _crossfadeGeneration && identical(outgoing, _player)) {
           _crossfadeInProgress = false;
           await _setJustAudioOutputVolume(
             outgoing,
@@ -2132,15 +2149,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> _finishAutomaticCrossfade(
+    int crossfadeGeneration,
     MediaItem outgoingItem,
     _AutomaticTrackTarget target,
     PlaybackAdjustments adjustments,
   ) async {
-    try {
-      await (await _playbackPreferenceStore).clearPosition(outgoingItem.id);
-    } catch (error) {
-      debugPrint('[PlayerHandler] Could not clear completed track position: $error');
-    }
+    if (crossfadeGeneration != _crossfadeGeneration) return;
+    // Commit synchronously; awaiting disk persistence here let an already
+    // adopted crossfade overwrite a subsequent user selection.
+    unawaited(_clearCrossfadedPosition(outgoingItem.id));
     final generation = ++_loadGeneration;
     _crossfadeInProgress = false;
     _transitionVolumeMultiplier = 1.0;
@@ -2174,6 +2191,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _lastPresencePlaying = null;
     unawaited(_updatePresenceForPlaying(true));
     await _applyOutputVolume();
+    if (_loadGeneration != generation) return;
     _updatePlaybackState(force: true);
     unawaited(
       _finishTrackLoad(
@@ -2190,6 +2208,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   // ─── Core playback ────────────────────────────────────────────────
+  Future<void> _clearCrossfadedPosition(String trackId) async {
+    try {
+      await (await _playbackPreferenceStore).clearPosition(trackId);
+    } catch (error) {
+      debugPrint('[PlayerHandler] Could not clear completed track position: $error');
+    }
+  }
+
   @override
   Future<void> play() async {
     if (_syncControlLocked) return;
@@ -2483,10 +2509,20 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     bool preserveFailureHistory = false,
   }) async {
     if (_syncControlLocked) return;
-    final interruptAndroidLoad = Platform.isAndroid && _activeTrackLoadGeneration != null;
+    final interruptSource =
+        _activeTrackLoadGeneration != null ||
+        _currentTrackIsStream ||
+        filePath.startsWith('http://') ||
+        filePath.startsWith('https://');
+    final outgoingPositionSave = saveCurrentPlaybackPosition();
     final generation = ++_loadGeneration;
+    // Invalidate transitions before the first await: a newer selection owns
+    // both the audio source and its presentation immediately.
+    _crossfadeGeneration++;
+    _crossfadeInProgress = false;
+    _pendingStreamSourceGeneration = generation;
     _cancelSupersededAndroidStreams(filePath);
-    _playbackRequested = false;
+    _playbackRequested = true;
     _playbackUnavailable = false;
     _playbackHealthTimer?.cancel();
     _handledFailureGeneration = null;
@@ -2497,14 +2533,26 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _activeTrackLoadGeneration = generation;
     _lastTrackLoadFailure = null;
     try {
-      if (interruptAndroidLoad) {
-        // Stop aborts just_audio's pending ExoPlayer load. The old request's
-        // generation guard then drops its interruption error and result.
+      if (Platform.isAndroid && interruptSource) {
+        // Stop interrupts obsolete preparation and discards its buffered audio.
         try {
           await _player.stop();
         } catch (_) {}
         if (_loadGeneration != generation) return;
       }
+      if (Platform.isWindows && interruptSource) {
+        await _queueBackendLoad(() async {
+          if (_loadGeneration != generation) return;
+          try {
+            await _windowsPlayer!.stop();
+          } catch (error) {
+            // Opening the replacement can recover a failed old source.
+            debugPrint('[PlayerHandler] Could not discard previous source: $error');
+          }
+        });
+      }
+      await outgoingPositionSave;
+      if (_loadGeneration != generation) return;
       await _loadTrackRequest(
         filePath,
         title,
@@ -2547,13 +2595,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _crossfadeInProgress = false;
     _transitionVolumeMultiplier = 1.0;
     await _applyOutputVolume();
-    await saveCurrentPlaybackPosition();
+    if (_loadGeneration != myGen) return;
     _pendingRestoredTrack = null;
     _audioEnvelope = null;
     _audioEnvelopeTrackId = null;
     standaloneModeNotifier.value = standalone;
     _standalonePlaylistNumber = standalone ? standalonePlaylistNumber : null;
-    _standalonePlaylistIndex = standalone ? standalonePlaylistIndex : null;
+    _standalonePlaylistIndex = standalonePlaylistIndex;
     if (!standalone || standalonePlaylistNumber != null) {
       _standaloneStreamQueue = const [];
       _standaloneStreamQueueIndex = null;
@@ -2569,7 +2617,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_loadGeneration != myGen) return;
 
     _currentTrackIsStream = isStream;
-    _pendingStreamSourceGeneration = isStream ? myGen : null;
+    _pendingStreamSourceGeneration = myGen;
     if (isStream) {
       _windowsPosition = Duration.zero;
       _windowsDuration = Duration.zero;
@@ -2598,22 +2646,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       ),
     );
     playbackVisualNotifier.value = PlaybackVisualState(trackId: filePath, loading: isStream);
-    _playbackRequested = true;
-
     try {
-      // Resolving a stream can take time, so silence the previous source while
-      // that network work happens. Local sources are replaced directly by the
-      // backend; an explicit pause only adds avoidable switching latency.
-      if (isStream) {
-        await _queueBackendLoad(() async {
-          if (_loadGeneration != myGen) return;
-          if (Platform.isWindows) {
-            if (_isWindowsPlaying) await _windowsPlayer!.pause();
-          } else if (_player.playing) {
-            await _player.pause();
-          }
-        });
-      }
       if (_loadGeneration != myGen) return;
 
       if (Platform.isWindows) {
@@ -3136,11 +3169,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> _advanceAfterCompletion() async {
+    final generation = _loadGeneration;
     if (isStandaloneMode && _standalonePlaylistNumber == null && _standaloneStreamQueue.isNotEmpty) {
       await _moveStandaloneStreamQueue(1, TrackTransitionDirection.next);
       return;
     }
     final target = await _automaticNextTarget();
+    if (_loadGeneration != generation) return;
     if (target == null) {
       if (currentLoopMode == LoopMode.all) await _nextInternal();
       return;
@@ -3160,6 +3195,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   Future<void> _nextInternal() async {
     if (_syncControlLocked) return;
+    final generation = _loadGeneration;
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
     final standalonePlaylistNumber = _standalonePlaylistNumber;
@@ -3168,12 +3204,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       return;
     }
     final playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber);
-    if (playlist.isEmpty) return;
+    if (_loadGeneration != generation || playlist.isEmpty) return;
     final index = _currentPlaylistIndex(playlist, currentItem.id);
     if (index == -1) return;
     final nextIndex = (index + 1) % playlist.length;
     final nextPath = playlist[nextIndex];
     final meta = await _getTrackMetadata(nextPath);
+    if (_loadGeneration != generation) return;
     await loadTrack(
       nextPath,
       meta.title,
@@ -3192,6 +3229,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   Future<void> _previousInternal({bool restartCurrent = true}) async {
     if (_syncControlLocked) return;
+    final generation = _loadGeneration;
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
     final standalonePlaylistNumber = _standalonePlaylistNumber;
@@ -3204,7 +3242,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       return;
     }
     final playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber);
-    if (playlist.isEmpty) return;
+    if (_loadGeneration != generation || playlist.isEmpty) return;
     final index = _currentPlaylistIndex(playlist, currentItem.id);
     if (index == -1) return;
     if (restartCurrent && _currentPosition > const Duration(seconds: 3)) {
@@ -3213,6 +3251,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     }
     final prevIndex = (index - 1 + playlist.length) % playlist.length;
     final meta = await _getTrackMetadata(playlist[prevIndex]);
+    if (_loadGeneration != generation) return;
     await loadTrack(
       playlist[prevIndex],
       meta.title,
@@ -3240,6 +3279,16 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   int _currentPlaylistIndex(List<String> playlist, String currentTrack) {
+    final shuffle = _shuffleOrderForPaths[playlist];
+    if (isShuffle && shuffle != null) {
+      shuffle.select(
+        currentTrack,
+        preferredIndex: _shuffleSelectionGeneration == _loadGeneration ? null : _standalonePlaylistIndex,
+        same: _sameTrackId,
+      );
+      _shuffleSelectionGeneration = _loadGeneration;
+      return shuffle.index;
+    }
     final rememberedIndex = _standalonePlaylistIndex;
     if (rememberedIndex != null &&
         rememberedIndex >= 0 &&
@@ -3379,7 +3428,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> toggleShuffle() async {
     if (_syncControlLocked) return;
     isShuffle = !isShuffle;
-    if (isShuffle) await shuffleQueue();
+    if (isShuffle) await shuffleQueue(reset: true);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('last_shuffle', isShuffle);
     playbackModeRevision.value++;
@@ -3389,7 +3438,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_syncControlLocked) return;
     if (isShuffle == enabled) return;
     isShuffle = enabled;
-    if (isShuffle) await shuffleQueue();
+    if (isShuffle) await shuffleQueue(reset: true);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('last_shuffle', isShuffle);
     playbackModeRevision.value++;
@@ -3418,46 +3467,39 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     }
   }
 
-  Future<void> shuffleQueue() async {
-    final clean = await _getCleanPlaylist();
-    shuffledList = List.from(clean)..shuffle();
+  Future<void> shuffleQueue({bool reset = false}) async {
+    await _effectivePlaybackOrder(reset: reset);
   }
 
-  Future<List<String>> _effectivePlaybackOrder({int? playlistNumber}) async {
-    final clean = await _getCleanPlaylist(playlistNumber: playlistNumber);
-    if (!isShuffle) return clean;
-    if (!_containsSameTracks(shuffledList, clean)) {
-      shuffledList = List<String>.from(clean)..shuffle();
-    }
-    return List<String>.from(shuffledList);
-  }
-
-  bool _containsSameTracks(List<String> first, List<String> second) {
-    if (first.length != second.length) return false;
-    final matched = List<bool>.filled(second.length, false);
-    for (final track in first) {
-      var found = false;
-      for (var index = 0; index < second.length; index++) {
-        if (!matched[index] && _sameTrackId(track, second[index])) {
-          matched[index] = true;
-          found = true;
-          break;
-        }
+  Future<List<String>> _effectivePlaybackOrder({int? playlistNumber, bool reset = false}) async {
+    var result = <String>[];
+    await _playlistOrderOperations.run(() async {
+      final number = playlistNumber ?? await FileService().getActivePlaylistNumber();
+      final clean = await _getCleanPlaylist(playlistNumber: number);
+      if (!isShuffle) {
+        result = clean;
+        return;
       }
-      if (!found) return false;
-    }
-    return true;
+      final existing = _shuffleOrders[number];
+      final order = existing ?? PlaylistShuffleOrder();
+      if (reset || existing == null) {
+        order.reset(clean, current: mediaItem.value?.id, same: _sameTrackId);
+        // The reset already selected the current occurrence at the front;
+        // its old unshuffled index must not move that cursor again.
+        _shuffleSelectionGeneration = _loadGeneration;
+      } else {
+        order.reconcile(clean, same: _sameTrackId);
+      }
+      _shuffleOrders[number] = order;
+      result = order.paths;
+      _shuffleOrderForPaths[result] = order;
+    });
+    return result;
   }
 
-  /// Removes a playlist entry from the session's already-generated shuffle
-  /// order without reshuffling the remaining tracks.
+  /// FileService mutations are the authority for the order. Reconcile on the
+  /// next read instead of deleting twice when a mutation already arrived.
   void removeTrackFromActivePlaybackOrder(String filePath, {bool allOccurrences = false}) {
-    if (allOccurrences) {
-      shuffledList.removeWhere((path) => _sameTrackId(path, filePath));
-    } else {
-      final index = shuffledList.indexWhere((path) => _sameTrackId(path, filePath));
-      if (index >= 0) shuffledList.removeAt(index);
-    }
     playbackModeRevision.value++;
   }
 
@@ -3548,6 +3590,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    await _playlistMutationSubscription?.cancel();
     _youtubeAccessService?.removeListener(_handleYoutubeAccessChanged);
     WidgetsBinding.instance.removeObserver(this);
     _periodicPositionSaveTimer?.cancel();
