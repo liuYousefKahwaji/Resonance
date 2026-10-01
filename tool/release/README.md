@@ -171,12 +171,55 @@ published in the previous 90 days. Patches at least 70% of full size are omitted
 Older/modified/split installs use the signed full package. Invalid signatures
 or missing signed metadata are rejected rather than bypassed.
 
-Publication refuses an existing version/tag instead of overwriting it. If an
-upload fails the release stays a draft and latest is unchanged. Inspect/delete
-that unpublished draft/tag explicitly before retrying, or bump the version.
+Publication addresses drafts by release ID, because GitHub's lookup by tag can
+return 404 until publication. A retry resumes an existing draft only when its
+source tree and all existing asset names, sizes, and hashes match. Only missing
+files are uploaded; mismatches are left unpublished for inspection. An already
+published release is never overwritten, and an exact retry makes no changes.
 Announcement is invoked directly after publication because release events
 created by `GITHUB_TOKEN` do not trigger the existing release workflow. Do not
 retry publication just to resend a failed announcement.
+
+### Faster builds and publishing
+
+The pipeline caches the pinned Flutter SDK, Dart packages, Python packages,
+Gradle dependencies/build cache, and Cargo dependencies. Android builds and
+Kotlin tests explicitly target ARM64, matching the shipped app, instead of
+compiling discarded ARM32/x64 Rust libraries. Flutter checkout uses the pinned
+release tag and verifies its exact commit.
+
+Before building, CI searches recent main-branch release runs for an unexpired
+verified artifact with the **exact same Git source tree**. All build and prepare
+stages must have succeeded (a later publication failure is allowed), or the
+source run must have successfully verified a reused artifact. It downloads and
+checks the signature, version/build number, notes, and every file hash again.
+Windows/Android builds and preparation are then skipped. This allows an empty
+publishing commit after a dry run to publish the same tested packages. Any
+tracked source/notes/workflow change requires a fresh build. Manual runs remain
+dry runs; select **force_rebuild** to bypass reuse. Caches improve subsequent
+builds; they do not make the first cold build instant.
+
+### Recover a fully uploaded draft without another build
+
+If preparation and uploads succeeded but publication failed, use the run ID
+from that workflow's URL. The helper checks the main-branch source run, signing
+key, source version/notes, and all uploaded GitHub asset digests. It downloads
+only the small JSON/signature, not the APK/ZIP. GitHub CLI authentication needs
+write access to see the draft; expose its token only inside this PowerShell
+block:
+
+```powershell
+$env:GH_TOKEN = & gh auth token
+try {
+  ./build/release-tools-venv/Scripts/python.exe tool/release/ci.py recover-draft --run-id RUN_ID
+} finally {
+  Remove-Item Env:GH_TOKEN
+}
+```
+
+The default is read-only. Once it verifies successfully, repeat with
+`--publish` to publish that exact draft. It never replaces assets or rebuilds.
+This recovery helper does not send a Discord announcement.
 
 Local `release/vVERSION/` binaries remain ignored. Only patchnotes.md is source.
 No app playlists, cookies, logs, private keystores, or seeds are release assets.

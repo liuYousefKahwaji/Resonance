@@ -191,17 +191,44 @@ def keygen(args):
     print(f'Created public trust file {args.public}. Private seed is only at {args.private}. Back it up securely.')
 
 
-def api(path):
+def api(path, method='GET', data=None):
     headers = {'Accept': 'application/vnd.github+json', 'User-Agent': 'Resonance-Release'}
+    headers['X-GitHub-Api-Version'] = '2022-11-28'
+    payload = None
+    if data is not None:
+        payload = json.dumps(data).encode()
+        headers['Content-Type'] = 'application/json'
     if os.getenv('GH_TOKEN'):
         headers['Authorization'] = f"Bearer {os.environ['GH_TOKEN']}"
     try:
-        with urllib.request.urlopen(urllib.request.Request('https://api.github.com/repos/' + REPO + path, headers=headers), timeout=30) as response:
+        with urllib.request.urlopen(urllib.request.Request('https://api.github.com/repos/' + REPO + path,
+                headers=headers, data=payload, method=method), timeout=30) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
-        if error.code == 404:
+        if error.code == 404 and method == 'GET':
             return None
         raise
+
+
+def find_release(tag):
+    # The tag endpoint serves published releases, not our unpublished draft.
+    published = api('/releases/tags/' + tag)
+    if published: return published
+    page = 1
+    while True:
+        releases = api(f'/releases?per_page=100&page={page}') or []
+        matches = [item for item in releases if item['tag_name'] == tag]
+        if len(matches) > 1: raise ValueError('Ambiguous release drafts')
+        if matches: return matches[0]
+        if len(releases) < 100: return None
+        page += 1
+
+
+def commit_tree(ref):
+    if not re.fullmatch('[a-f0-9]{40}', ref): raise ValueError('Expected an exact source commit SHA')
+    value = api('/git/commits/' + ref)
+    if not value: raise ValueError('Release source commit unavailable')
+    return value['tree']['sha']
 
 
 def fetch_asset(entry, directory):
@@ -252,8 +279,10 @@ def detect(args):
         raise ValueError(f'Missing committed patch notes: {notes}')
     if should_build and not args.dry_run:
         tag = subprocess.run(['git', 'ls-remote', '--tags', 'origin', f'refs/tags/v{current}'], check=True, capture_output=True, text=True).stdout.strip()
-        if tag or api(f'/releases/tags/v{current}'):
-            raise ValueError('Version tag/release already exists; use explicit recovery, never overwrite')
+        existing = find_release(f'v{current}')
+        if (existing and not existing['draft']) or (tag and not existing):
+            raise ValueError('Version tag/release already exists; never overwrite a published release or orphan tag')
+        if existing: print('Existing draft will be checked for an exact match before resuming publication.')
     values = dict(version=current, build=str(build), release=str(should_build).lower(), publish=str(not args.dry_run and version(current) > published).lower())
     print(json.dumps(values))
     if os.getenv('GITHUB_OUTPUT'):
@@ -370,32 +399,106 @@ def _deltas(args, semver, apk, root, full_zip, bases, android, windows):
         else: patch.unlink()
 
 
+def publication_metadata(data, signature):
+    verify_signature(data, signature, keys())
+    manifest = json.loads(data)
+    semver, build = pubspec()
+    identity = manifest['release']
+    if (manifest['schemaVersion'] != 1 or identity['version'] != semver or
+            identity['buildNumber'] != build or identity['tag'] != f'v{semver}'):
+        raise ValueError('Publication version/build mismatch')
+    entries = [manifest['android']['full'], manifest['windows']['full'], manifest['windows']['fileManifest'],
+               *manifest['android']['deltas'], *manifest['windows']['deltas']]
+    entries += [dict(name=f'resonance-v{semver}-update.json', size=len(data), sha256=hashlib.sha256(data).hexdigest()),
+                dict(name=f'resonance-v{semver}-update.sig', size=len(signature), sha256=hashlib.sha256(signature).hexdigest())]
+    expected = {}
+    for entry in entries:
+        name = safe_path(entry['name'])
+        if ('/' in name or name in expected or not isinstance(entry['size'], int) or entry['size'] <= 0 or
+                not HEX.fullmatch(entry['sha256'])): raise ValueError('Invalid publication asset metadata')
+        expected[name] = entry
+    return manifest, expected
+
+
+def verify_output(output):
+    semver, _ = pubspec()
+    path = output / f'resonance-v{semver}-update.json'
+    manifest, expected = publication_metadata(path.read_bytes(), path.with_suffix('.sig').read_bytes())
+    if manifest['release']['notes'] != (ROOT / f'release/v{semver}/patchnotes.md').read_text(encoding='utf-8'):
+        raise ValueError('Signed patch notes differ from the committed release notes')
+    if {p.name for p in output.iterdir()} != set(expected):
+        raise ValueError('Publication directory contains unexpected or missing files')
+    for name, entry in expected.items():
+        file = output / name
+        if file.is_symlink() or not file.is_file() or file.stat().st_size != entry['size'] or sha(file) != entry['sha256']:
+            raise ValueError('Publication asset identity mismatch: ' + name)
+    return manifest, expected
+
+
+def checked_remote_assets(remote, expected, complete=True):
+    if not remote or not isinstance(remote.get('assets'), list):
+        raise ValueError('Release metadata unavailable; draft left unpublished')
+    found = {}
+    for entry in remote['assets']:
+        name = entry['name']
+        if name not in expected or name in found: raise ValueError('Unexpected or duplicate draft asset: ' + name)
+        wanted = expected[name]
+        if (entry.get('state') != 'uploaded' or entry.get('size') != wanted['size'] or
+                entry.get('digest') != 'sha256:' + wanted['sha256']):
+            raise ValueError('Uploaded asset identity mismatch; draft left unpublished: ' + name)
+        found[name] = entry
+    if complete and set(found) != set(expected): raise ValueError('Release assets incomplete; draft left unpublished')
+    return found
+
+
+def check_draft_source(remote, source_sha):
+    target = remote.get('target_commitish', '')
+    if target != source_sha and commit_tree(target) != commit_tree(source_sha):
+        raise ValueError('Draft was built from a different source tree; refusing to replace it')
+    if remote.get('prerelease') or remote['tag_name'] != 'v' + pubspec()[0]:
+        raise ValueError('Draft release identity mismatch')
+
+
+def finish_publication(remote, manifest, expected):
+    # Drafts are addressed by ID: the published-tag endpoint can return 404.
+    remote = api(f"/releases/{remote['id']}")
+    checked_remote_assets(remote, expected)
+    if not remote['draft']:
+        print('Exact release already published; no assets changed.')
+        return False
+    latest = api('/releases/latest')
+    if latest and version(latest['tag_name']) >= version(manifest['release']['version']):
+        raise ValueError('A same/newer stable release is already published; draft left unchanged')
+    result = api(f"/releases/{remote['id']}", method='PATCH', data=dict(draft=False, prerelease=False,
+        name=manifest['release']['tag'], body=manifest['release']['notes'], make_latest='true'))
+    if not result or result['draft']: raise ValueError('Release publication not confirmed')
+    print('Published ' + result['html_url'])
+    return True
+
+
 def publish(args):
     if not args.publish: raise ValueError('Publication requires explicit --publish')
-    semver, _ = pubspec(); tag = f'v{semver}'
-    if api(f'/releases/tags/{tag}'): raise ValueError('Release already exists')
-    # Keep incomplete assets invisible to clients. Full assets are uploaded
-    # first so pre-bootstrap clients always choose the correct full package.
-    manifest_path = args.output / f'resonance-v{semver}-update.json'
-    verify_signature(manifest_path.read_bytes(), manifest_path.with_suffix('.sig').read_bytes(), keys())
-    manifest = json.loads(manifest_path.read_bytes())
-    if manifest['release']['version'] != semver: raise ValueError('Publication version mismatch')
-    metadata = [manifest['android']['full'], manifest['windows']['full'], manifest['windows']['fileManifest'],
-                *manifest['android']['deltas'], *manifest['windows']['deltas']]
-    names = {m['name'] for m in metadata} | {manifest_path.name, manifest_path.with_suffix('.sig').name}
-    if {p.name for p in args.output.iterdir()} != names: raise ValueError('Publication directory contains unexpected files')
-    for entry in metadata:
-        path = args.output / safe_path(entry['name'])
-        if path.stat().st_size != entry['size'] or sha(path) != entry['sha256']: raise ValueError('Publication asset identity mismatch')
-    assets = sorted(args.output.iterdir(), key=lambda p: ('.delta.' in p.name or p.suffix == '.xdelta', p.name))
-    subprocess.run(['gh', 'release', 'create', tag, '--draft', '--target', os.environ['GITHUB_SHA'], '--title', tag, '--notes-file', str(ROOT / f'release/{tag}/patchnotes.md')], check=True)
-    for path in assets:
-        subprocess.run(['gh', 'release', 'upload', tag, str(path)], check=True)
-    remote = api(f'/releases/tags/{tag}')
-    by_name = {a['name']: a for a in remote['assets']}
-    for path in assets:
-        if by_name[path.name].get('digest') != 'sha256:' + sha(path): raise ValueError('Uploaded asset digest mismatch; release remains draft')
-    subprocess.run(['gh', 'release', 'edit', tag, '--draft=false', '--latest'], check=True)
+    manifest, expected = verify_output(args.output)
+    tag = manifest['release']['tag']
+    source_sha = os.getenv('RESONANCE_RELEASE_SOURCE_SHA') or os.environ['GITHUB_SHA']
+    if not re.fullmatch('[a-f0-9]{40}', source_sha): raise ValueError('Expected an exact release source SHA')
+    remote = find_release(tag)
+    if remote:
+        check_draft_source(remote, source_sha)
+        uploaded = checked_remote_assets(remote, expected, complete=not remote['draft'])
+    else:
+        if api('/git/ref/tags/' + tag): raise ValueError('Orphan version tag exists; refusing to overwrite it')
+        remote = api('/releases', method='POST', data=dict(tag_name=tag, draft=True, target_commitish=source_sha,
+            name=tag, body=manifest['release']['notes']))
+        if not remote or not remote.get('id') or not remote['draft']: raise ValueError('Draft creation not confirmed')
+        uploaded = {}
+    # Resume matching drafts without clobbering or uploading existing assets.
+    missing = sorted(set(expected) - set(uploaded), key=lambda name: ('.delta.' in name or name.endswith('.xdelta'), name))
+    if missing:
+        subprocess.run(['gh', 'release', 'upload', tag, *[str(args.output / name) for name in missing], '--repo', REPO], check=True)
+    fresh = finish_publication(remote, manifest, expected)
+    if os.getenv('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as stream: stream.write(f'published_new={str(fresh).lower()}\n')
 
 
 def main():
@@ -405,8 +508,10 @@ def main():
     p = commands.add_parser('windows'); p.add_argument('--root', type=Path, required=True); p.add_argument('--output', type=Path, required=True); p.add_argument('--version')
     p = commands.add_parser('prepare'); p.add_argument('--windows', type=Path, required=True); p.add_argument('--apk', type=Path, required=True); p.add_argument('--output', type=Path, required=True); p.add_argument('--xdelta', type=Path, required=True); p.add_argument('--decoder', type=Path, required=True); p.add_argument('--notes', type=Path, required=True); p.add_argument('--bases', type=Path); p.add_argument('--previous', action='store_true'); p.add_argument('--seed', type=Path); p.add_argument('--trust', type=Path); p.add_argument('--version'); p.add_argument('--package', default='com.example.resonance'); p.add_argument('--key-id', default='resonance-2026-01')
     p = commands.add_parser('publish'); p.add_argument('--output', type=Path, required=True); p.add_argument('--publish', action='store_true')
+    p = commands.add_parser('verify-output'); p.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    dict(keygen=keygen, detect=detect, windows=package_windows, prepare=prepare, publish=publish)[args.command](args)
+    dict(keygen=keygen, detect=detect, windows=package_windows, prepare=prepare, publish=publish,
+         **{'verify-output': lambda options: verify_output(options.output)})[args.command](args)
 
 
 if __name__ == '__main__':
