@@ -11,6 +11,10 @@
 namespace resonance {
 
 void RegisterAppIdentity() {
+#ifdef RESONANCE_UPDATE_TEST
+  SetCurrentProcessExplicitAppUserModelID(L"Resonance.UpdateTest");
+  return;  // Test builds must not replace the user's production shortcut.
+#endif
   SetCurrentProcessExplicitAppUserModelID(kAppUserModelId);
 
   PWSTR programs = nullptr;

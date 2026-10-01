@@ -95,6 +95,7 @@ class MainActivity : AudioServiceFragmentActivity() {
     override fun onPostResume() {
         super.onPostResume()
         activityResumed = true
+        ResonanceUpdateBridge.activityResumed(this)
         MusicRecognitionCoordinator.setActivityVisible(true)
         if (minimizedTileLaunch && !MusicRecognitionCoordinator.tileSnapshot(this).active) {
             restoreNormalWindow()

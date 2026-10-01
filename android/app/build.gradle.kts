@@ -1,8 +1,19 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("com.chaquo.python")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+val updateTest = (project.findProperty("dart-defines") as? String).orEmpty().split(",").any {
+    runCatching { String(Base64.getDecoder().decode(it)) == "RESONANCE_UPDATE_TEST=true" }.getOrDefault(false)
+}
+val updateTestX64 = updateTest && System.getenv("RESONANCE_TEST_ABI") == "x86_64"
+val ciSigning = System.getenv("RESONANCE_KEYSTORE_PATH")
+if (System.getenv("RESONANCE_CI_SIGNING_REQUIRED") == "true" && ciSigning.isNullOrEmpty()) {
+    error("CI must restore the exact existing Resonance signing keystore")
 }
 
 android {
@@ -22,6 +33,9 @@ android {
 
     defaultConfig {
         applicationId = "com.example.resonance"
+        if (updateTest) applicationIdSuffix = ".updatertest"
+        buildConfigField("boolean", "RESONANCE_UPDATE_TEST", updateTest.toString())
+        manifestPlaceholders["appLabel"] = if (updateTest) "Resonance Update Test" else "Resonance"
         // Chaquopy 17.0.0 requires minSdk >= 24
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
@@ -31,14 +45,25 @@ android {
         ndk {
             // Resonance's release helper targets arm64, which covers modern
             // Android devices and keeps Flutter, FFmpeg and Python single-ABI.
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += listOf(if (updateTestX64) "x86_64" else "arm64-v8a")
         }
 
     }
 
+    buildFeatures { buildConfig = true }
+    externalNativeBuild { cmake { path = file("../../native/update_patch/CMakeLists.txt"); version = "3.22.1" } }
+    if (!ciSigning.isNullOrEmpty()) {
+        signingConfigs.create("releaseExisting") {
+            storeFile = file(ciSigning)
+            storePassword = System.getenv("RESONANCE_KEYSTORE_PASSWORD") ?: error("Missing signing password")
+            keyAlias = System.getenv("RESONANCE_KEY_ALIAS") ?: error("Missing signing alias")
+            keyPassword = System.getenv("RESONANCE_KEY_PASSWORD") ?: error("Missing key password")
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (ciSigning.isNullOrEmpty()) "debug" else "releaseExisting")
         }
     }
 
@@ -51,7 +76,7 @@ android {
             // Some prebuilt plugins publish every ABI and bypass abiFilters.
             // Resonance's release target is arm64, so discard unreachable
             // FFmpeg/Python binaries from the final package explicitly.
-            excludes += setOf("**/armeabi-v7a/*.so", "**/x86_64/*.so")
+            excludes += setOf("**/armeabi-v7a/*.so", if (updateTestX64) "**/arm64-v8a/*.so" else "**/x86_64/*.so")
         }
     }
 }

@@ -5,6 +5,7 @@
 #include "flutter_window.h"
 #include "resonance_app_identity.h"
 #include "utils.h"
+#include "update_recovery.h"
 
 // ─────────────────────────────────────────────────────────────────────────
 // Single-instance enforcement.
@@ -21,8 +22,13 @@
 // ─────────────────────────────────────────────────────────────────────────
 namespace {
 
+#ifdef RESONANCE_UPDATE_TEST
+constexpr wchar_t kMutexName[] = L"Resonance_UpdateTest_Mutex_8F3D2A1C";
+constexpr wchar_t kWindowTitle[] = L"Resonance Update Test";
+#else
 constexpr wchar_t kMutexName[] = L"Resonance_SingleInstance_Mutex_8F3D2A1C";
 constexpr wchar_t kWindowTitle[] = L"Resonance";
+#endif
 
 // Brings an already-running instance's window to the foreground.
 // Handles the case where it's minimized (restores it first) and the
@@ -64,6 +70,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   if (instance_mutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
     FocusExistingInstance();
     CloseHandle(instance_mutex);
+    return 0;
+  }
+  if (RecoverInterruptedUpdate(GetCommandLineArguments())) {
+    if (instance_mutex != nullptr) CloseHandle(instance_mutex);
     return 0;
   }
 

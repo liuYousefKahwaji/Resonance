@@ -1,0 +1,83 @@
+[
+  {
+    "source": "resonance-v3.4.1.apk",
+    "target": "resonance-v3.4.2.apk",
+    "algorithm": "xdelta3-vcdiff",
+    "fullBytes": 46914229,
+    "patchBytes": 6446435,
+    "encodeSeconds": 2.162,
+    "decodeSeconds": 0.33
+  },
+  {
+    "source": "resonance-v3.4.1.apk",
+    "target": "resonance-v3.4.2.apk",
+    "algorithm": "zstd-patch-from-19",
+    "fullBytes": 46914229,
+    "patchBytes": 6443745,
+    "encodeSeconds": 36.698,
+    "decodeSeconds": 0.232
+  },
+  {
+    "source": "resonance-v3.4.1.apk",
+    "target": "resonance-v3.4.2.apk",
+    "algorithm": "bsdiff",
+    "fullBytes": 46914229,
+    "patchBytes": 6476046,
+    "encodeSeconds": 41.25,
+    "decodeSeconds": 1.102
+  },
+  {
+    "source": "resonance-v3.4.2.apk",
+    "target": "resonance-v3.4.3.apk",
+    "algorithm": "xdelta3-vcdiff",
+    "fullBytes": 46928169,
+    "patchBytes": 4396996,
+    "encodeSeconds": 1.255,
+    "decodeSeconds": 0.16
+  },
+  {
+    "source": "resonance-v3.4.2.apk",
+    "target": "resonance-v3.4.3.apk",
+    "algorithm": "zstd-patch-from-19",
+    "fullBytes": 46928169,
+    "patchBytes": 4373028,
+    "encodeSeconds": 23.248,
+    "decodeSeconds": 0.223
+  },
+  {
+    "source": "resonance-v3.4.2.apk",
+    "target": "resonance-v3.4.3.apk",
+    "algorithm": "bsdiff",
+    "fullBytes": 46928169,
+    "patchBytes": 4384185,
+    "encodeSeconds": 33.422,
+    "decodeSeconds": 0.7
+  },
+  {
+    "source": "resonance-v3.4.3.apk",
+    "target": "resonance-v3.4.4.apk",
+    "algorithm": "xdelta3-vcdiff",
+    "fullBytes": 46934865,
+    "patchBytes": 4354524,
+    "encodeSeconds": 1.312,
+    "decodeSeconds": 0.129
+  },
+  {
+    "source": "resonance-v3.4.3.apk",
+    "target": "resonance-v3.4.4.apk",
+    "algorithm": "zstd-patch-from-19",
+    "fullBytes": 46934865,
+    "patchBytes": 4355936,
+    "encodeSeconds": 20.551,
+    "decodeSeconds": 0.141
+  },
+  {
+    "source": "resonance-v3.4.3.apk",
+    "target": "resonance-v3.4.4.apk",
+    "algorithm": "bsdiff",
+    "fullBytes": 46934865,
+    "patchBytes": 4375296,
+    "encodeSeconds": 35.695,
+    "decodeSeconds": 0.469
+  }
+]

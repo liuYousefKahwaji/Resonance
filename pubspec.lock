@@ -153,6 +153,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.7"
+  cryptography:
+    dependency: "direct main"
+    description:
+      name: cryptography
+      sha256: "3eda3029d34ec9095a27a198ac9785630fe525c0eb6a49f3d575272f8e792ef0"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.9.0"
   dart_discord_presence:
     dependency: "direct main"
     description:
@@ -577,7 +585,7 @@ packages:
     source: hosted
     version: "2.2.1"
   path_provider_platform_interface:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: path_provider_platform_interface
       sha256: "88f5779f72ba699763fa3a3b06aa4bf6de76c8e5de842cf6f29e2e06476c2334"
@@ -793,13 +801,13 @@ packages:
     source: hosted
     version: "2.4.1"
   shared_preferences_platform_interface:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: shared_preferences_platform_interface
-      sha256: "649dc798a33931919ea356c4305c2d1f81619ea6e92244070b520187b5140ef9"
+      sha256: "57cbf196c486bc2cf1f02b85784932c6094376284b3ad5779d1b1c6c6a816b80"
       url: "https://pub.dev"
     source: hosted
-    version: "2.4.2"
+    version: "2.4.1"
   shared_preferences_web:
     dependency: transitive
     description:
@@ -942,7 +950,7 @@ packages:
     source: hosted
     version: "1.4.0"
   uni_platform:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: uni_platform
       sha256: e02213a7ee5352212412ca026afd41d269eb00d982faa552f419ffc2debfad84

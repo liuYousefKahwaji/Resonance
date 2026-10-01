@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:resonance/services/update_manifest.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 typedef AppVersionLoader = Future<String> Function();
@@ -35,7 +36,7 @@ class _AppVersionLabelState extends State<AppVersionLabel> {
       future: _version,
       builder: (context, snapshot) {
         return Text(
-          snapshot.data ?? 'Loading…',
+          '${snapshot.data ?? 'Loading…'}${updateTestMode ? ' · Update test build' : ''}',
           key: const ValueKey('settings-about-version'),
           style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
         );

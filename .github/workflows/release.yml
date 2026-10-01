@@ -1,0 +1,187 @@
+name: Build and release Resonance
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {} # Always a dry run; manual runs cannot publish.
+
+permissions:
+  contents: read
+concurrency:
+  group: resonance-release
+  cancel-in-progress: false
+env:
+  FLUTTER_REVISION: c9a6c484230f8b5e408ec57be1ef71dee1e77020
+  XDELTA_REVISION: 2c36417e6d09bf700d3d1cca44ed3e42101016c3
+
+jobs:
+  detect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.version.outputs.release }}
+      publish: ${{ steps.version.outputs.publish }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with: {python-version: '3.13'}
+      - run: python -m pip install -r tool/release/requirements.txt
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENABLED: ${{ vars.RESONANCE_AUTO_RELEASE_ENABLED }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          args=()
+          if [ "$EVENT" != push ] || [ "$ENABLED" != true ]; then args+=(--dry-run); fi
+          if [ "$EVENT" != push ]; then args+=(--force-build); fi
+          python tool/release/release.py detect "${args[@]}"
+      - run: python -m unittest discover -s tool/release/tests -v
+
+  windows:
+    needs: detect
+    if: needs.detect.outputs.release == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with: {python-version: '3.13'}
+      - name: Install pinned Flutter
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/flutter/flutter.git "$env:RUNNER_TEMP/flutter"
+          git -C "$env:RUNNER_TEMP/flutter" checkout --detach $env:FLUTTER_REVISION
+          "$env:RUNNER_TEMP/flutter/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - run: flutter pub get
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub
+      - run: python -m pip install -r tool/release/requirements.txt
+      - run: python -m unittest discover -s tool/release/tests -v
+      - run: flutter build windows --release --no-pub
+      - run: python tool/release/release.py windows --root build/windows/x64/runner/Release --output build/canonical-windows
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: canonical-windows
+          path: build/canonical-windows/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  android:
+    needs: detect
+    if: needs.detect.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RESONANCE_CI_SIGNING_REQUIRED: 'true'
+      RESONANCE_KEYSTORE_PATH: ${{ github.workspace }}/build/signing/existing.keystore
+      RESONANCE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      RESONANCE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      RESONANCE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with: {distribution: temurin, java-version: '17'}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with: {python-version: '3.10'}
+      - name: Install pinned Flutter and restore existing signing identity
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          git clone --filter=blob:none https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          git -C "$RUNNER_TEMP/flutter" checkout --detach "$FLUTTER_REVISION"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          python - <<'PY'
+          import base64, os
+          from pathlib import Path
+          value = os.environ['KEYSTORE_B64']
+          if not value: raise SystemExit('Missing exact existing Android keystore secret')
+          path = Path(os.environ['RESONANCE_KEYSTORE_PATH']); path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_bytes(base64.b64decode(value, validate=True)); path.chmod(0o600)
+          PY
+      - run: flutter pub get
+      - run: flutter build apk --release --no-pub
+      - name: Kotlin unit tests
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew :app:testReleaseUnitTest
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: canonical-android
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  prepare:
+    needs: [detect, windows, android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with: {python-version: '3.13'}
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with: {distribution: temurin, java-version: '17'}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with: {name: canonical-windows, path: build/canonical-windows}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with: {name: canonical-android, path: build/canonical-android}
+      - run: python -m pip install -r tool/release/requirements.txt
+      - name: Build pinned xdelta CLI and shipped decoder
+        run: |
+          git clone --filter=blob:none https://github.com/jmacd/xdelta.git build/xdelta
+          git -C build/xdelta checkout --detach "$XDELTA_REVISION"
+          cmake -S build/xdelta/xdelta3 -B build/xdelta-host -DXD3_BUILD_TESTS=OFF -DXD3_ARMOR=OFF -DXD3_LZMA_MODE=off -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/xdelta-host -j2
+          cmake -S native/update_patch -B build/decoder -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/decoder -j2
+      - name: Exercise the shipped decoder's corruption and size guards
+        env:
+          RESONANCE_TEST_XDELTA: build/xdelta-host/xdelta3
+          RESONANCE_TEST_DECODER: build/decoder/resonance-patch
+        run: python -m unittest discover -s tool/release/tests -v
+      - name: Verify APK and generate direct deltas and signed metadata
+        env:
+          UPDATE_MANIFEST_SIGNING_KEY_B64: ${{ secrets.UPDATE_MANIFEST_SIGNING_KEY_B64 }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          python tool/release/release.py prepare --windows "build/canonical-windows/resonance-v$VERSION-windows.zip" --apk build/canonical-android/app-release.apk --output build/publish --xdelta build/xdelta-host/xdelta3 --decoder build/decoder/resonance-patch --notes "release/v$VERSION/patchnotes.md" --previous
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: verified-release-${{ needs.detect.outputs.version }}
+          path: build/publish/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    needs: [detect, prepare]
+    if: github.event_name == 'push' && needs.detect.outputs.publish == 'true' && vars.RESONANCE_AUTO_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    environment: release-publishing
+    permissions: {contents: write}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with: {python-version: '3.13'}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with: {name: 'verified-release-${{ needs.detect.outputs.version }}', path: build/publish}
+      - run: python -m pip install -r tool/release/requirements.txt
+      - name: Publish verified assets atomically from a draft
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: python tool/release/release.py publish --output build/publish --publish
+      - name: Announce the published release directly
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ROLE_ID: ${{ vars.DISCORD_RESONANCE_ROLE_ID }}
+        run: python tool/release/announce.py

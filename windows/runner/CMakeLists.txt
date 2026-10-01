@@ -11,6 +11,7 @@ add_executable(${BINARY_NAME} WIN32
   "main.cpp"
   "media_keys_plugin.cpp"
   "resonance_app_identity.cpp"
+  "update_recovery.cpp"
   "music_recognition_plugin.cpp"
   "utils.cpp"
   "win32_window.cpp"
@@ -29,6 +30,13 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MAJOR=${FLUTT
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MINOR=${FLUTTER_VERSION_MINOR}")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_PATCH=${FLUTTER_VERSION_PATCH}")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_BUILD=${FLUTTER_VERSION_BUILD}")
+
+# Flutter passes encoded Dart defines in this generated environment list.
+# Keep the native identity in sync with the compile-time Dart test profile.
+file(READ "${FLUTTER_MANAGED_DIR}/ephemeral/generated_config.cmake" FLUTTER_BUILD_CONFIG)
+if(FLUTTER_BUILD_CONFIG MATCHES "UkVTT05BTkNFX1VQREFURV9URVNUPXRydWU=")
+  target_compile_definitions(${BINARY_NAME} PRIVATE RESONANCE_UPDATE_TEST=1)
+endif()
 
 # Disable Windows macros that collide with C++ standard library functions.
 target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")

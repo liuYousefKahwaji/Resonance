@@ -13,6 +13,7 @@ import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/platform/android/android_entrypoint_service.dart';
 import 'package:resonance/screens/settings/settings_screen.dart';
 import 'package:resonance/services/app_update_service.dart';
+import 'package:resonance/services/update_test_profile.dart';
 import 'package:resonance/widgets/app_update_prompt.dart';
 import 'package:resonance/screens/external_playlist/external_playlist_import_screen.dart';
 import 'package:resonance/screens/playlist_transfer/playlist_export_screen.dart';
@@ -87,8 +88,9 @@ void _shutdownLog(String event) {
   debugPrint('[Resonance shutdown ${DateTime.now().toIso8601String()}] $event');
 }
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initializeUpdateTestProfile();
   if (Platform.isWindows) {
     mk.MediaKit.ensureInitialized();
   }
@@ -166,13 +168,13 @@ Future<void> main() async {
   }
   await ScrollEffectsPreferences.instance.initialize();
   await LyricsDisplayPreferences.instance.initialize();
-  if (Platform.isWindows) {
+  if (Platform.isWindows && !updateTestMode) {
     unawaited(CompanionServerService.instance.initialize(handler));
-  } else if (Platform.isAndroid) {
+  } else if (Platform.isAndroid && !updateTestMode) {
     unawaited(CompanionClientService.instance.initialize());
   }
 
-  if (_isDesktop) {
+  if (_isDesktop && !updateTestMode) {
     await HotkeyService.init({
       'play_pause': handler.playPause,
       'next': handler.next,
@@ -198,14 +200,14 @@ Future<void> main() async {
         _shutdownLog('native close-mode configuration failed: $error');
       }
     }
-    if (trayMode != TrayMode.noTray) {
+    if (trayMode != TrayMode.noTray && !updateTestMode) {
       await TrayService.init();
     }
   }
 
   final prefs = await SharedPreferences.getInstance();
   final discordEnabled = prefs.getBool('discord_enabled') ?? true;
-  if (_isDesktop) {
+  if (_isDesktop && !updateTestMode) {
     unawaited(DiscordPresenceService().setEnabled(discordEnabled));
   }
 
@@ -222,6 +224,10 @@ Future<void> main() async {
       child: MainApp(handler: handler),
     ),
   );
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(acknowledgeUpdateStartup(args));
+    unawaited(runRequestedUpdateLab(args));
+  });
 
   // Start the small first Home page while the launch animation is visible.
   // The Discover screen joins this request or paints the saved shelves.
@@ -229,7 +235,7 @@ Future<void> main() async {
     unawaited(const YoutubeMusicHomeService().fetch(limit: 6).then<void>((_) {}, onError: (Object _) {}));
   }
 
-  if (Platform.isWindows) {
+  if (Platform.isWindows && !updateTestMode) {
     unawaited(
       MediaKeysService.register(
         onNext: () => handler.next(),

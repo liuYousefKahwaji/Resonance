@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.14)
+project(resonance_update_patch LANGUAGES C)
+include(CheckTypeSize)
+check_type_size("size_t" SIZEOF_SIZE_T)
+check_type_size("unsigned int" SIZEOF_UNSIGNED_INT)
+check_type_size("unsigned long" SIZEOF_UNSIGNED_LONG)
+check_type_size("unsigned long long" SIZEOF_UNSIGNED_LONG_LONG)
+set(XDELTA "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/xdelta")
+add_library(patch_core STATIC decoder.c "${XDELTA}/xdelta3.c")
+set_target_properties(patch_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(patch_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" PRIVATE "${XDELTA}")
+target_compile_definitions(patch_core PRIVATE XD3_ENCODER=0 XD3_MAIN=0 SECONDARY_DJW=0 SECONDARY_FGK=0 SECONDARY_LZMA=0
+  XD3_HARDMAXWINSIZE=16777216 HAVE_ALIGNED_ACCESS_REQUIRED=1
+  SIZEOF_SIZE_T=${SIZEOF_SIZE_T} SIZEOF_UNSIGNED_INT=${SIZEOF_UNSIGNED_INT}
+  SIZEOF_UNSIGNED_LONG=${SIZEOF_UNSIGNED_LONG} SIZEOF_UNSIGNED_LONG_LONG=${SIZEOF_UNSIGNED_LONG_LONG})
+if(ANDROID)
+  add_library(resonance_update_patch SHARED jni.c)
+  target_link_libraries(resonance_update_patch patch_core)
+else()
+  add_executable(resonance-patch main.c)
+  target_link_libraries(resonance-patch patch_core)
+endif()

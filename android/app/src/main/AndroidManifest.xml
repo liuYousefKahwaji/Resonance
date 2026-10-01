@@ -41,7 +41,7 @@
     </queries>
 
     <application
-        android:label="Resonance"
+        android:label="${appLabel}"
         android:name="${applicationName}"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">

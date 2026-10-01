@@ -120,7 +120,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_checkingUpdate) return;
     setState(() => _checkingUpdate = true);
     try {
-      final update = await AppUpdateService().check();
+      final update = await AppUpdateService().check(force: true);
       if (!mounted) return;
       if (update == null) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Resonance is up to date.')));
