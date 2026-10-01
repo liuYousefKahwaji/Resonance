@@ -129,7 +129,12 @@ try {
   if ($null -ne $parent) { $parent | Wait-Process -Timeout 120 }
   if ($RecoverOnly) {
     $journal=Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
-    if ($journal.target -ne $targetRoot) { throw 'Recovery target mismatch' }
+    # TEMP on hosted Windows can contain an 8.3 alias (e.g. RUNNER~1).
+    # GetFullPath expands it; normalize the journal path as well before comparing.
+    $savedTarget=[string]$journal.target
+    if (-not $savedTarget -or -not [IO.Path]::IsPathRooted($savedTarget) -or
+        -not [string]::Equals([IO.Path]::GetFullPath($savedTarget).TrimEnd('\'), $targetRoot,
+            [StringComparison]::OrdinalIgnoreCase)) { throw 'Recovery target mismatch' }
     if ($journal.ownerPid -gt 0 -and $journal.ownerPid -ne $PID) {
       $owner=Get-Process -Id $journal.ownerPid -ErrorAction SilentlyContinue
       if ($null -ne $owner) { $owner | Wait-Process -Timeout 120; $journal=Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json }

@@ -132,6 +132,47 @@ class ReleaseTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == 'nt', 'PowerShell installer runs on Windows')
     def test_recovery_restores_interrupted_transaction(self):
+        self.prepare_interrupted_transaction()
+        self.apply('-RecoverOnly')
+        self.assert_recovered_transaction()
+
+    @unittest.skipUnless(os.name == 'nt', 'PowerShell installer runs on Windows')
+    def test_recovery_accepts_short_windows_directory_alias(self):
+        import ctypes
+        from ctypes import wintypes
+        # GitHub's Windows runner uses a short user profile name in TEMP.
+        self.old.rename(self.root / 'old installation with spaces')
+        self.old = self.root / 'old installation with spaces'
+        get_short_path = ctypes.WinDLL('kernel32', use_last_error=True).GetShortPathNameW
+        get_short_path.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        get_short_path.restype = wintypes.DWORD
+        length = get_short_path(str(self.old), None, 0)
+        if not length: raise ctypes.WinError(ctypes.get_last_error())
+        buffer = ctypes.create_unicode_buffer(length)
+        result = get_short_path(str(self.old), buffer, length)
+        if not result or result >= length: raise ctypes.WinError(ctypes.get_last_error())
+        if buffer.value.lower() == str(self.old).lower():
+            self.skipTest('8.3 directory aliases disabled on this volume')
+        self.prepare_interrupted_transaction(buffer.value)
+        self.apply('-RecoverOnly')
+        self.assert_recovered_transaction()
+
+    @unittest.skipUnless(os.name == 'nt', 'PowerShell installer runs on Windows')
+    def test_recovery_accepts_equivalent_path_spelling(self):
+        self.prepare_interrupted_transaction(self.old.as_posix().upper() + '/./')
+        self.apply('-RecoverOnly')
+        self.assert_recovered_transaction()
+
+    @unittest.skipUnless(os.name == 'nt', 'PowerShell installer runs on Windows')
+    def test_recovery_rejects_different_installation_directory(self):
+        self.prepare_interrupted_transaction(str(self.new))
+        self.apply('-RecoverOnly', expected=1)
+        self.assertEqual((self.old/'resonance.exe').read_bytes(), b'new')
+        self.assertEqual((self.old/'user-settings.json').read_bytes(), b'keep')
+        self.assertEqual(json.loads((self.root/'journal.json').read_text())['state'], 'awaiting_health')
+        self.assertTrue((self.old/'.resonance-update-pending').exists())
+
+    def prepare_interrupted_transaction(self, journal_target=None):
         backup = self.root / 'backup'; backup.mkdir()
         replaced = ['resonance.exe', 'obsolete.dll', 'resonance-install.json']
         for name in replaced: shutil.copyfile(self.old/name, backup/name)
@@ -140,10 +181,11 @@ class ReleaseTests(unittest.TestCase):
         (self.old/'obsolete.dll').unlink()
         (self.old/'user-settings.json').write_bytes(b'keep')
         r.write_json(self.old/'resonance-install.json', self.target)
-        r.write_json(self.root/'journal.json', dict(state='awaiting_health', target=str(self.old), source=self.source,
+        r.write_json(self.root/'journal.json', dict(state='awaiting_health', target=journal_target or str(self.old), source=self.source,
             replaced=replaced, added=['added.dll'], ownerPid=0))
         (self.old/'.resonance-update-pending').write_text(str(self.root))
-        self.apply('-RecoverOnly')
+
+    def assert_recovered_transaction(self):
         r.verify_tree(self.old, self.source)
         self.assertEqual((self.old/'user-settings.json').read_bytes(), b'keep')
         self.assertFalse((self.old/'added.dll').exists())
