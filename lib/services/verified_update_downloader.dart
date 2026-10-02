@@ -7,8 +7,9 @@ class UpdateDownloadProgress {
   final int received;
   final int total;
   final bool verifying;
+  final String? message;
 
-  const UpdateDownloadProgress(this.received, this.total, {this.verifying = false});
+  const UpdateDownloadProgress(this.received, this.total, {this.verifying = false, this.message});
 }
 
 class UpdateDownloadCancelled implements Exception {

@@ -279,6 +279,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   double savedVolume = 1.0;
 
   final ValueNotifier<double> volumeNotifier = ValueNotifier<double>(1.0);
+  final ValueNotifier<double> trackVolumePercentNotifier = ValueNotifier<double>(0);
   Future<void>? _volumeApplyTask;
   bool _volumeApplyPending = false;
   Timer? _volumeSaveTimer;
@@ -1392,6 +1393,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         extras: standalonePresentationExtras(restoredFromOutsidePlaylist),
       );
       _pendingRestoredTrack = restored;
+      trackVolumePercentNotifier.value = (await _playbackPreferenceStore).adjustmentsFor(filePath).volumePercent;
       mediaItem.add(restored);
       _updatePlaybackState();
     } catch (e) {
@@ -1448,6 +1450,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (!enabled) await saveCurrentPlaybackPosition();
   }
 
+  Future<void> setTrackVolumePercent(double percent) async {
+    final source = mediaItem.value?.id;
+    if (source == null || !percent.isFinite) return;
+    final value = percent.clamp(-100.0, 100.0);
+    trackVolumePercentNotifier.value = value;
+    await (await _playbackPreferenceStore).saveTrackVolume(source, value);
+    await _applyOutputVolume();
+  }
+
   Future<void> setPlaybackSettingsScope(PlaybackSettingsScope scope) async {
     if (playbackSettingsScopeNotifier.value == scope) return;
     playbackSettingsScopeNotifier.value = scope;
@@ -1455,7 +1466,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     await prefs.setString('playback_settings_scope', scope.name);
     final current = mediaItem.value;
     final adjustments = scope == PlaybackSettingsScope.global
-        ? _globalPlaybackAdjustments
+        ? _globalPlaybackAdjustments.copyWith(volumePercent: trackVolumePercentNotifier.value)
         : current == null
         ? PlaybackAdjustments.neutral
         : (await _playbackPreferenceStore).adjustmentsFor(current.id);
@@ -1507,10 +1518,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<PlaybackAdjustments> _adjustmentsForTrack(String filePath) async {
-    if (playbackSettingsScopeNotifier.value == PlaybackSettingsScope.global) {
-      return _globalPlaybackAdjustments;
-    }
-    return (await _playbackPreferenceStore).adjustmentsFor(filePath);
+    final saved = (await _playbackPreferenceStore).adjustmentsFor(filePath);
+    return playbackSettingsScopeNotifier.value == PlaybackSettingsScope.global
+        ? _globalPlaybackAdjustments.copyWith(volumePercent: saved.volumePercent)
+        : saved;
   }
 
   Future<void> _persistPlaybackAdjustments(
@@ -1519,7 +1530,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     required String? trackId,
   }) async {
     if (scope == PlaybackSettingsScope.global) {
-      _globalPlaybackAdjustments = adjustments;
+      _globalPlaybackAdjustments = adjustments.copyWith(volumePercent: 0);
       final prefs = await SharedPreferences.getInstance();
       await Future.wait([
         prefs.setDouble('last_speed', adjustments.speed),
@@ -1531,18 +1542,23 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       return;
     }
     if (trackId != null) {
-      await (await _playbackPreferenceStore).saveAdjustments(trackId, adjustments);
+      await (await _playbackPreferenceStore).saveAdjustments(trackId, adjustments, preserveVolume: true);
     }
   }
 
-  PlaybackAdjustments get _currentAdjustments =>
-      PlaybackAdjustments(speed: speedNotifier.value, pitch: pitchNotifier.value, equalizer: equalizerNotifier.value);
+  PlaybackAdjustments get _currentAdjustments => PlaybackAdjustments(
+    speed: speedNotifier.value,
+    pitch: pitchNotifier.value,
+    equalizer: equalizerNotifier.value,
+    volumePercent: trackVolumePercentNotifier.value,
+  );
 
   Future<void> _applyPlaybackAdjustments(PlaybackAdjustments adjustments, {required bool persist}) {
     final normalized = PlaybackAdjustments(
       speed: adjustments.speed.clamp(0.5, 2.0),
       pitch: adjustments.pitch.clamp(0.5, 2.0),
       equalizer: adjustments.equalizer,
+      volumePercent: adjustments.volumePercent,
     );
     _requestedPlaybackAdjustments = normalized;
     final persistenceScope = playbackSettingsScopeNotifier.value;
@@ -1550,7 +1566,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (persist && persistenceScope == PlaybackSettingsScope.global) {
       // Keep subsequent track loads on the latest requested global values even
       // while the platform calls are waiting their turn in the queue.
-      _globalPlaybackAdjustments = normalized;
+      _globalPlaybackAdjustments = normalized.copyWith(volumePercent: 0);
     }
 
     final operation = _playbackAdjustmentQueue.then((_) async {
@@ -1587,6 +1603,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     pitchNotifier.value = normalized.pitch;
     equalizerNotifier.value = normalized.equalizer;
     _equalizerEffectApplied = equalizerApplied;
+    if (persist) {
+      normalized = normalized.copyWith(volumePercent: trackVolumePercentNotifier.value);
+    }
     await _applyOutputVolume();
     if (persist) {
       await _persistPlaybackAdjustments(normalized, scope: persistenceScope, trackId: persistenceTrackId);
@@ -1661,8 +1680,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     EqualizerSettings equalizer,
     bool equalizerApplied,
     double normalizationMultiplier,
+    double trackVolumePercent,
   ) async {
-    final raw = volumeNotifier.value * multiplier * normalizationMultiplier;
+    final raw =
+        volumeNotifier.value *
+        multiplier *
+        normalizationMultiplier *
+        trackVolumeMultiplier(trackVolumePercent, volumeNotifier.value);
     final headroom = equalizerOutputHeadroomMultiplier(equalizer, effectApplied: equalizerApplied);
     if (Platform.isAndroid) {
       final effectiveRaw = raw * headroom;
@@ -1680,10 +1704,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     EqualizerSettings equalizer,
     bool equalizerApplied,
     double normalizationMultiplier,
+    double trackVolumePercent,
   ) => player.setVolume(
     volumeNotifier.value *
         multiplier *
         normalizationMultiplier *
+        trackVolumeMultiplier(trackVolumePercent, volumeNotifier.value) *
         equalizerOutputHeadroomMultiplier(equalizer, effectApplied: equalizerApplied) *
         100.0,
   );
@@ -1717,6 +1743,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           equalizerNotifier.value,
           _equalizerEffectApplied,
           _normalizationMultiplier,
+          trackVolumePercentNotifier.value,
         );
       } else {
         await _setJustAudioOutputVolume(
@@ -1726,6 +1753,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           equalizerNotifier.value,
           _equalizerEffectApplied,
           _normalizationMultiplier,
+          trackVolumePercentNotifier.value,
         );
       }
     } catch (error) {
@@ -1991,6 +2019,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         incomingAdjustments.equalizer,
         incomingEqualizerApplied,
         incomingNormalization,
+        incomingAdjustments.volumePercent,
       );
       if (generation != _crossfadeGeneration || !identical(outgoing, _windowsPlayer)) return;
       await incoming.play();
@@ -2005,6 +2034,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             outgoingAdjustments.equalizer,
             outgoingEqualizerApplied,
             outgoingNormalization,
+            outgoingAdjustments.volumePercent,
           ),
           _setWindowsOutputVolume(
             incoming,
@@ -2012,6 +2042,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             incomingAdjustments.equalizer,
             incomingEqualizerApplied,
             incomingNormalization,
+            incomingAdjustments.volumePercent,
           ),
         ]);
       });
@@ -2041,6 +2072,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             outgoingAdjustments.equalizer,
             outgoingEqualizerApplied,
             outgoingNormalization,
+            outgoingAdjustments.volumePercent,
           );
         }
       }
@@ -2084,6 +2116,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         incomingAdjustments.equalizer,
         incomingEqualizerApplied,
         incomingNormalization,
+        incomingAdjustments.volumePercent,
       );
       if (generation != _crossfadeGeneration || !identical(outgoing, _player)) return;
       // just_audio's play Future remains pending until playback is paused,
@@ -2107,6 +2140,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             outgoingAdjustments.equalizer,
             outgoingEqualizerApplied,
             outgoingNormalization,
+            outgoingAdjustments.volumePercent,
           ),
           _setJustAudioOutputVolume(
             incoming,
@@ -2115,6 +2149,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             incomingAdjustments.equalizer,
             incomingEqualizerApplied,
             incomingNormalization,
+            incomingAdjustments.volumePercent,
           ),
         ]);
       });
@@ -2142,6 +2177,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             outgoingAdjustments.equalizer,
             outgoingEqualizerApplied,
             outgoingNormalization,
+            outgoingAdjustments.volumePercent,
           );
         }
       }
@@ -2168,6 +2204,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     standaloneModeNotifier.value = target.standalone;
     _standalonePlaylistNumber = target.playlistNumber;
     _standalonePlaylistIndex = target.playlistIndex;
+    trackVolumePercentNotifier.value = adjustments.volumePercent;
     speedNotifier.value = adjustments.speed;
     pitchNotifier.value = adjustments.pitch;
     equalizerNotifier.value = adjustments.equalizer;
@@ -2626,6 +2663,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _durationController.add(Duration.zero);
     }
     _normalizationMultiplier = _normalizationMultiplierFor(filePath);
+    trackVolumePercentNotifier.value = adjustments.volumePercent;
 
     // Optimistic UI update
     // A deliberate reload of the same local path is a new listening session.
@@ -3461,7 +3499,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final current = mediaItem.value;
     if (current != null) {
       if (playbackSettingsScopeNotifier.value == PlaybackSettingsScope.perTrack) {
-        await (await _playbackPreferenceStore).saveAdjustments(current.id, _currentAdjustments);
+        await (await _playbackPreferenceStore).saveAdjustments(current.id, _currentAdjustments, preserveVolume: true);
       }
       await _saveTrack(current.id, current.title, current.artist ?? 'Unknown Artist');
     }
@@ -3615,6 +3653,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     await _positionController.close();
     await _durationController.close();
     volumeNotifier.dispose();
+    trackVolumePercentNotifier.dispose();
     speedNotifier.dispose();
     pitchNotifier.dispose();
     equalizerNotifier.dispose();

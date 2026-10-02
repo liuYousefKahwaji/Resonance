@@ -667,9 +667,8 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
       );
     }
 
-    final playlistContent = await FileService().readTextFromFile();
-    final updatedContent = '${playlistContent.trim()}\n$url\n';
-    await FileService().writeTextToFile(updatedContent, append: false);
+    final files = FileService();
+    await files.appendTrack(await files.getActivePlaylistNumber(), url);
 
     widget.onFileAdded?.call(url);
 

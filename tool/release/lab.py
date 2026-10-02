@@ -21,13 +21,16 @@ def configure(root, seed, mode, port):
     original = root / '.original-manifest'
     if not original.exists(): shutil.copyfile(manifest_path, original)
     manifest = json.loads(original.read_bytes())
+    platforms = [platform for platform in ['android', 'windows'] if platform in manifest]
+    if not platforms: raise ValueError('Lab feed has no platforms')
     if mode == 'full':
-        for platform in ['android', 'windows']: manifest[platform]['deltaEnabled'] = False
+        for platform in platforms: manifest[platform]['deltaEnabled'] = False
     if mode == 'wrong-source':
         for platform, field in [('android', 'sourceApkSha256'), ('windows', 'sourceTreeSha256')]:
+            if platform not in platforms: continue
             for delta in manifest[platform]['deltas']: delta[field] = '0'*64
     if mode == 'corrupt-patch':
-        for platform in ['android', 'windows']:
+        for platform in platforms:
             for delta in manifest[platform]['deltas']:
                 name = 'corrupt-' + delta['name']
                 file = root / name; file.write_bytes(b'not a patch\n')
@@ -35,8 +38,9 @@ def configure(root, seed, mode, port):
     r.write_json(manifest_path, manifest)
     r.sign_manifest(manifest_path, base64.b64encode(seed.read_bytes()).decode(), 'resonance-test')
     if mode == 'bad-signature': manifest_path.write_bytes(manifest_path.read_bytes() + b' ')
-    names = {manifest_path.name, manifest_path.with_suffix('.sig').name, manifest['windows']['fileManifest']['name']}
-    for platform in ['windows', 'android']:
+    names = {manifest_path.name, manifest_path.with_suffix('.sig').name}
+    if 'windows' in platforms: names.add(manifest['windows']['fileManifest']['name'])
+    for platform in platforms:
         names.add(manifest[platform]['full']['name'])
         names.update(d['name'] for d in manifest[platform]['deltas'])
     assets = [dict(name=name, size=(root/name).stat().st_size, digest='sha256:'+r.sha(root/name),

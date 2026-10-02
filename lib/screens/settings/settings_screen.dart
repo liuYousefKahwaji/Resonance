@@ -17,6 +17,8 @@ import 'package:resonance/platform/desktop/hotkey_settings_tile.dart';
 import 'package:resonance/platform/desktop/tray_settings.dart';
 import 'package:resonance/services/discord_presence_service.dart';
 import 'package:restart_app/restart_app.dart';
+import 'package:resonance/platform/desktop/windows_restart.dart';
+import 'package:resonance/widgets/android_update_status.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/app/theme.dart';
@@ -241,7 +243,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
           content: const Text('Tray mode changes need a restart to take effect.'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Later')),
-            ElevatedButton(onPressed: () => Restart.restartApp(), child: const Text('Restart Now')),
+            ElevatedButton(
+              onPressed: () async {
+                try {
+                  await context.read<PlayerHandler>().saveState();
+                  if (Platform.isWindows) {
+                    await restartWindowsApp();
+                  } else {
+                    await Restart.restartApp();
+                  }
+                } catch (error) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(
+                      this.context,
+                    ).showSnackBar(SnackBar(content: Text('Could not restart: $error')));
+                  }
+                }
+              },
+              child: const Text('Restart Now'),
+            ),
           ],
         ),
       );
@@ -1111,6 +1131,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: _checkingUpdate ? null : _checkForUpdates,
                 ),
                 if (Platform.isAndroid) ...[
+                  const AndroidUpdateStatus(),
                   _Divider(),
                   _SettingsTile(
                     icon: Icons.downloading_rounded,

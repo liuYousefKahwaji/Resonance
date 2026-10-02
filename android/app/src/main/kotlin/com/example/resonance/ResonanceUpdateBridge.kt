@@ -63,6 +63,18 @@ object ResonanceUpdateBridge {
                     }
                 }
                 "canInstallUpdates" -> result.success(canInstall(activity))
+                "pendingUpdateStatus" -> Thread {
+                    try { val status = pendingStatus(activity); main.post { result.success(status) } }
+                    catch (error: Exception) { main.post { result.error("UPDATE_STATUS", error.message, null) } }
+                }.start()
+                "retryPendingInstall" -> Thread {
+                    try {
+                        synchronized(lock) {
+                            preferences(activity).getString("plan", null)?.let { accept(activity, JSONObject(it)) }
+                        }
+                        main.post { result.success(null) }
+                    } catch (error: Exception) { main.post { result.error("UPDATE_ERROR", error.message, null) } }
+                }.start()
                 "installedUpdateIdentity" -> Thread {
                     try {
                         val info = installed(activity)
@@ -93,6 +105,37 @@ object ResonanceUpdateBridge {
     }
 
     private fun preferences(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    // Read the durable snapshot without the worker lock: reconstruction may hold
+    // it for seconds, and showing progress must never wait for that work.
+    private fun pendingStatus(context: Context): Map<String, Any?>? {
+        val prefs = preferences(context)
+        val plan = prefs.getString("plan", null)?.let { JSONObject(it) } ?: return null
+        if (plan.getLong("buildNumber") <= versionCode(installed(context))) return null
+        var state = prefs.getString("state", "downloading") ?: "downloading"
+        val full = prefs.getBoolean("full", false)
+        val asset = if (full) plan.getJSONObject("full") else plan
+        var received = 0L
+        var total = asset.getLong("size")
+        val id = prefs.getLong("download_id", -1)
+        if (id >= 0 && state == "downloading") {
+            downloads(context).query(DownloadManager.Query().setFilterById(id))?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    received = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                    val reportedTotal = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                    if (reportedTotal > 0) total = reportedTotal
+                    state = when (cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))) {
+                        DownloadManager.STATUS_PAUSED, DownloadManager.STATUS_PENDING -> "waiting"
+                        DownloadManager.STATUS_FAILED -> "failed"
+                        DownloadManager.STATUS_SUCCESSFUL -> "verifying"
+                        else -> state
+                    }
+                }
+            }
+        }
+        return mapOf("version" to plan.getString("version"), "state" to state, "received" to received,
+            "total" to total, "full" to full, "retryRequired" to prefs.getBoolean("retry_required", false),
+            "needsPermission" to !canInstall(context))
+    }
     private fun canInstall(context: Context) = Build.VERSION.SDK_INT < 26 || context.packageManager.canRequestPackageInstalls()
     fun activityResumed(context: Context) {
         if (canInstall(context) && preferences(context).contains("plan") && !preferences(context).getBoolean("retry_required", false)) scheduleInstallCheck(context)
@@ -115,6 +158,8 @@ object ResonanceUpdateBridge {
             plan.getString("targetApkSha256") == full.getString("sha256")) { "Invalid update version" }
         val prefs = preferences(context)
         val previous = prefs.getString("plan", null)?.let { JSONObject(it) }
+        val retryFull = previous?.getString("targetApkSha256") == plan.getString("targetApkSha256") &&
+            prefs.getBoolean("full", false) && prefs.getString("state", "") == "failed"
         if (previous?.getString("targetApkSha256") == plan.getString("targetApkSha256")) {
             val id = prefs.getLong("download_id", -1)
             if (id >= 0 && downloadStatus(context, id) != DownloadManager.STATUS_FAILED) { scheduleInstallCheck(context); return }
@@ -128,7 +173,7 @@ object ResonanceUpdateBridge {
         val oldSession = prefs.getInt("session_id", -1)
         if (oldSession >= 0) runCatching { context.packageManager.packageInstaller.abandonSession(oldSession) }
         prefs.edit().clear().putString("plan", plan.toString()).putString("generation", UUID.randomUUID().toString()).commit()
-        enqueue(context, plan, full = plan.isNull("algorithm"))
+        enqueue(context, plan, full = plan.isNull("algorithm") || retryFull)
     }
     private fun downloads(context: Context) = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     private fun enqueue(context: Context, plan: JSONObject, full: Boolean) {
@@ -199,7 +244,7 @@ object ResonanceUpdateBridge {
         }
         if (state == "failed") return@synchronized
         var apk: File
-        if (state == "downloading" || state == "reconstructing") {
+        if (state == "downloading" || state == "verifying" || state == "reconstructing") {
             val id = prefs.getLong("download_id", -1)
             val status = if (id >= 0) downloadStatus(context, id) else null
             if (status == DownloadManager.STATUS_PENDING || status == DownloadManager.STATUS_RUNNING || status == DownloadManager.STATUS_PAUSED) return@synchronized
@@ -207,6 +252,7 @@ object ResonanceUpdateBridge {
             val asset = if (prefs.getBoolean("full", false)) plan.getJSONObject("full") else plan
             val payload = File(prefs.getString("download_path", "")!!)
             try {
+                prefs.edit().putString("state", "verifying").commit()
                 check(payload.isFile && payload.length() == asset.getLong("size") && hash(payload) == asset.getString("sha256")) { "Download checksum mismatch" }
                 if (prefs.getBoolean("full", false)) {
                     val root = File(context.noBackupFilesDir, "update").apply { mkdirs() }

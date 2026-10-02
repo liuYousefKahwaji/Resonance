@@ -7,6 +7,9 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:resonance/services/app_update_service.dart';
 import 'package:resonance/services/verified_update_downloader.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:resonance/widgets/android_update_status.dart';
+import 'package:provider/provider.dart';
+import 'package:resonance/core/audio/audio_service.dart';
 
 Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) async {
   final accept = await showDialog<bool>(
@@ -18,16 +21,47 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
         child: ConstrainedBox(
           constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.55),
           child: SingleChildScrollView(
-            child: MarkdownBody(
-              data: update.notes.trim().isEmpty ? 'A new version is ready to install.' : update.notes.trim(),
-              shrinkWrap: true,
-              selectable: true,
-              onTapLink: (_, href, __) {
-                final uri = href == null ? null : Uri.tryParse(href);
-                if (uri != null && (uri.scheme == 'https' || uri.scheme == 'http')) {
-                  unawaited(launchUrl(uri, mode: LaunchMode.externalApplication));
-                }
-              },
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Download: ${formatUpdateBytes(update.asset.size)}',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                if (update.savedDownloadBytes > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      '${update.downloadSavingsPercent}% smaller than the full ${formatUpdateBytes(update.fullDownloadBytes)} download.',
+                    ),
+                  ),
+                const SizedBox(height: 6),
+                Text(
+                  Platform.isAndroid
+                      ? 'Downloads in the background. Android may ask you to approve installation. Follow progress in Settings.'
+                      : 'Resonance will close briefly and reopen after installation. Your library and settings are kept.',
+                ),
+                if (update.delta != null)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 4),
+                    child: Text(
+                      'If the smaller update cannot be applied, the full package will be downloaded instead.',
+                    ),
+                  ),
+                const Divider(height: 28),
+                MarkdownBody(
+                  data: update.notes.trim().isEmpty ? 'A new version is ready to install.' : update.notes.trim(),
+                  shrinkWrap: true,
+                  selectable: true,
+                  onTapLink: (_, href, __) {
+                    final uri = href == null ? null : Uri.tryParse(href);
+                    if (uri != null && (uri.scheme == 'https' || uri.scheme == 'http')) {
+                      unawaited(launchUrl(uri, mode: LaunchMode.externalApplication));
+                    }
+                  },
+                ),
+              ],
             ),
           ),
         ),
@@ -67,7 +101,10 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(value.verifying ? 'Verifying the download…' : 'Downloading $downloadedMb of $totalMb MB'),
+                      Text(
+                        value.message ??
+                            (value.verifying ? 'Verifying the download…' : 'Downloading $downloadedMb of $totalMb MB'),
+                      ),
                       const SizedBox(height: 12),
                       LinearProgressIndicator(value: value.verifying ? null : fraction),
                       if (!value.verifying) ...[
@@ -101,6 +138,7 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
         if (progressShown) progress?.value = value;
       },
       controller: controller,
+      beforeRestart: () => context.read<PlayerHandler>().saveState(),
     );
     if (context.mounted && Platform.isAndroid) {
       ScaffoldMessenger.of(context).showSnackBar(

@@ -4,7 +4,8 @@ param(
   [Parameter(Mandatory=$true)][int]$ParentPid,
   [Parameter(Mandatory=$true)][string]$Transaction,
   [switch]$ApplyOnly, [switch]$RecoverOnly, [switch]$PreflightOnly,
-  [int]$FailAfterCopy=-1, [int]$HealthTimeout=60
+  [int]$FailAfterCopy=-1, [int]$HealthTimeout=60,
+  [string]$ReadyFile=''
 )
 $ErrorActionPreference='Stop'
 $targetRoot=[IO.Path]::GetFullPath($Target).TrimEnd('\')
@@ -126,6 +127,7 @@ try {
   Log 'Updater started.'
   $parent=$null
   if ($ParentPid -gt 0 -and -not $PreflightOnly) { $parent=Get-Process -Id $ParentPid -ErrorAction SilentlyContinue }
+  if ($ReadyFile -and -not $PreflightOnly) { [IO.File]::WriteAllText($ReadyFile, [string]$PID) }
   if ($null -ne $parent) { $parent | Wait-Process -Timeout 120 }
   if ($RecoverOnly) {
     $journal=Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
@@ -222,13 +224,14 @@ try {
   if (-not $ApplyOnly) {
     $arguments=@(('"--resonance-update-health='+$health+'"'),('--resonance-update-token='+$token))
     $launched=Start-Process -FilePath (Join-Path $targetRoot 'resonance.exe') -WorkingDirectory $targetRoot -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    Log "Launched updated Resonance, PID $($launched.Id); waiting for its first frame."
     $deadline=[DateTime]::UtcNow.AddSeconds($HealthTimeout); $healthy=$false
     while ([DateTime]::UtcNow -lt $deadline) {
       if (Test-Path -LiteralPath $health) {
         try { $ack=Get-Content -LiteralPath $health -Raw | ConvertFrom-Json; $healthy=$ack.token -eq $token -and $ack.pid -eq $launched.Id } catch { }
         if ($healthy) { break }
       }
-      if ($launched.HasExited) { break }
+      if ($launched.HasExited) { Log "Updated process exited early, code $($launched.ExitCode)."; break }
       Start-Sleep -Milliseconds 250
     }
     if (-not $healthy) { throw 'Startup health check failed' }

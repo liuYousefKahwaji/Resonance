@@ -10,6 +10,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:resonance/services/verified_update_downloader.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:resonance/platform/desktop/windows_restart.dart';
+import 'package:flutter/foundation.dart';
 
 export 'package:resonance/services/update_manifest.dart';
 
@@ -23,6 +25,10 @@ class AvailableUpdate {
   final UpdateDelta? delta;
 
   const AvailableUpdate({required this.version, required this.notes, required this.asset, this.manifest, this.delta});
+
+  int get fullDownloadBytes => manifest?.full.size ?? asset.size;
+  int get savedDownloadBytes => (fullDownloadBytes - asset.size).clamp(0, fullDownloadBytes);
+  int get downloadSavingsPercent => fullDownloadBytes > 0 ? (100 * savedDownloadBytes / fullDownloadBytes).round() : 0;
 
   static AvailableUpdate? fromReleaseJson(Map<String, dynamic> release, AppVersion installed, {required bool android}) {
     final tag = release['tag_name'];
@@ -60,6 +66,7 @@ class AvailableUpdate {
 }
 
 class AppUpdateService {
+  static final androidUpdateRevision = ValueNotifier<int>(0);
   static const _androidChannel = MethodChannel('resonance/app_update');
 
   Future<AvailableUpdate?> check({bool force = false}) async {
@@ -118,8 +125,7 @@ class AppUpdateService {
         assets: assets,
         android: Platform.isAndroid,
       );
-      if (manifest.version.compareTo(latest) != 0 ||
-          manifest.buildNumber <= (int.tryParse(package.buildNumber) ?? 0)) {
+      if (manifest.version.compareTo(latest) != 0 || manifest.buildNumber <= (int.tryParse(package.buildNumber) ?? 0)) {
         throw const FormatException('Signed release version does not match this update');
       }
       UpdateDelta? selected;
@@ -193,6 +199,7 @@ class AppUpdateService {
     AvailableUpdate update, {
     void Function(UpdateDownloadProgress)? onProgress,
     UpdateDownloadController? controller,
+    Future<void> Function()? beforeRestart,
   }) async {
     final manifest = update.manifest;
     if (manifest == null) throw const FormatException('Signed update metadata is required');
@@ -210,6 +217,7 @@ class AppUpdateService {
         'signingCertSha256': update.manifest?.signingCert,
         'buildNumber': update.manifest?.buildNumber,
       });
+      androidUpdateRevision.value++;
       return;
     }
     if (!Platform.isWindows) throw UnsupportedError('Updates are available only on Android and Windows');
@@ -222,21 +230,26 @@ class AppUpdateService {
     }
     final temporary = (await getTemporaryDirectory()).path;
     final staging = await Directory(
-      p.join(
-        temporary,
-        'resonance-update',
-        '${update.version}-${DateTime.now().microsecondsSinceEpoch}',
-      ),
+      p.join(temporary, 'resonance-update', '${update.version}-${DateTime.now().microsecondsSinceEpoch}'),
     ).create(recursive: true);
     var payload = update.asset;
     var delta = update.delta;
     Future<File> downloadPayload(UpdateAsset asset) async {
-      final cache = await Directory(p.join(temporary, 'resonance-update', 'download-${update.version}-${asset.sha256}')).create(recursive: true);
+      final cache = await Directory(
+        p.join(temporary, 'resonance-update', 'download-${update.version}-${asset.sha256}'),
+      ).create(recursive: true);
       final destination = File(p.join(cache.path, 'payload.zip'));
-      await VerifiedUpdateDownloader().download(url: asset.url, size: asset.size, sha256Hex: asset.sha256,
-          destination: destination, onProgress: onProgress, controller: controller);
+      await VerifiedUpdateDownloader().download(
+        url: asset.url,
+        size: asset.size,
+        sha256Hex: asset.sha256,
+        destination: destination,
+        onProgress: onProgress,
+        controller: controller,
+      );
       return destination;
     }
+
     File downloaded;
     try {
       downloaded = await downloadPayload(payload);
@@ -266,16 +279,20 @@ class AppUpdateService {
     }
     final transaction = File(p.join(staging.path, 'transaction.json'));
     Future<void> writeTransaction() async {
-      await transaction.writeAsString(jsonEncode({
-        'schemaVersion': 1,
-        'mode': delta == null ? 'full' : 'delta',
-        'target': jsonDecode(await files.readAsString()),
-        'sourceTreeSha256': delta?.sourceHash,
-        'payloadSha256': payload.sha256,
-        'full': manifest.full.toChannel(),
-        'testMode': updateTestMode,
-      }), flush: true);
+      await transaction.writeAsString(
+        jsonEncode({
+          'schemaVersion': 1,
+          'mode': delta == null ? 'full' : 'delta',
+          'target': jsonDecode(await files.readAsString()),
+          'sourceTreeSha256': delta?.sourceHash,
+          'payloadSha256': payload.sha256,
+          'full': manifest.full.toChannel(),
+          'testMode': updateTestMode,
+        }),
+        flush: true,
+      );
     }
+
     await writeTransaction();
     final script = File(p.join(staging.path, 'apply-update.ps1'));
     await script.writeAsString(await rootBundle.loadString('assets/windows/apply_update_transaction.ps1'), flush: true);
@@ -299,11 +316,14 @@ class AppUpdateService {
       transaction.path,
     ];
     Future<int> preflight() async {
-      onProgress?.call(UpdateDownloadProgress(payload.size, payload.size, verifying: true));
+      onProgress?.call(
+        UpdateDownloadProgress(payload.size, payload.size, verifying: true, message: 'Preparing to restart…'),
+      );
       final result = await Process.run('powershell.exe', [...arguments, '-PreflightOnly']);
       if (controller?.isCancelled == true) throw const UpdateDownloadCancelled();
       return result.exitCode;
     }
+
     var checked = await preflight();
     if (checked == 10 && delta != null) {
       payload = manifest.full;
@@ -314,13 +334,33 @@ class AppUpdateService {
       checked = await preflight();
     }
     if (checked != 0) throw FileSystemException('Update preflight failed; see update.log', staging.path);
-    final process = await Process.start('powershell.exe', arguments, mode: ProcessStartMode.normal);
-    if (process.pid <= 0) throw ProcessException('powershell.exe', [], 'Could not start updater');
+    await beforeRestart?.call();
+    if (controller?.isCancelled == true) throw const UpdateDownloadCancelled();
+    // The helper must acknowledge startup before Resonance gives up its mutex.
+    final process = await startWindowsHandoff(
+      script,
+      arguments.skip(8).toList(),
+      File(p.join(staging.path, 'helper-ready')),
+    );
+    if (controller?.isCancelled == true) {
+      process.kill();
+      throw const UpdateDownloadCancelled();
+    }
     exit(0);
   }
 
   Future<void> resumeAndroidInstall() async {
     if (Platform.isAndroid) await _androidChannel.invokeMethod<void>('resumePendingInstall');
+  }
+
+  Future<Map<String, dynamic>?> androidUpdateStatus() async {
+    if (!Platform.isAndroid) return null;
+    final raw = await _androidChannel.invokeMapMethod<String, dynamic>('pendingUpdateStatus');
+    return raw == null ? null : Map<String, dynamic>.from(raw);
+  }
+
+  Future<void> retryAndroidInstall() async {
+    if (Platform.isAndroid) await _androidChannel.invokeMethod<void>('retryPendingInstall');
   }
 
   Future<bool> canInstallAndroidUpdates() async {

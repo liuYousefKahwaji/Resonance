@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:resonance/widgets/library/playlist_sort_dialog.dart';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -355,6 +356,9 @@ class DesktopWindowHandler with WindowListener, TrayListener {
 }
 
 class _MainAppState extends State<MainApp> {
+  StreamSubscription<PlaylistMutation>? _playlistMutationSubscription;
+  Timer? _playlistRefreshTimer;
+  int _playlistLoadGeneration = 0;
   List<String> playlist = [];
   List<int> playlistNumbers = [FileService.defaultPlaylistNumber];
   Map<int, String> playlistNames = {FileService.defaultPlaylistNumber: 'Playlist 1'};
@@ -399,6 +403,11 @@ class _MainAppState extends State<MainApp> {
     unawaited(_checkStartupUpdate());
     DownloadQueueController.instance.addListener(_refreshCompletedDownloads);
     _loadPlaylistFromDisk();
+    _playlistMutationSubscription = FileService.mutations.listen((mutation) {
+      if (mutation.playlistNumber != activePlaylistNumber || !mounted) return;
+      _playlistRefreshTimer?.cancel();
+      _playlistRefreshTimer = Timer(const Duration(milliseconds: 30), () => unawaited(_loadPlaylistFromDisk()));
+    });
     if (Platform.isAndroid) unawaited(AndroidEntrypointService.initialize(_handleAndroidAction));
     if (_isDesktop) {
       _initDesktop();
@@ -525,6 +534,8 @@ class _MainAppState extends State<MainApp> {
   @override
   void dispose() {
     if (Platform.isAndroid) widget.handler.playbackVisualNotifier.removeListener(_openStreamControlsOnFirstPlay);
+    _playlistMutationSubscription?.cancel();
+    _playlistRefreshTimer?.cancel();
     widget.handler.youtubeFailureNotifier.removeListener(_showPlaybackYoutubeFailure);
     widget.handler.outputDeviceErrorNotifier.removeListener(_showOutputDeviceError);
     _introTimer?.cancel();
@@ -557,12 +568,13 @@ class _MainAppState extends State<MainApp> {
   }
 
   Future<void> _loadPlaylistFromDisk() async {
+    final generation = ++_playlistLoadGeneration;
     final service = FileService();
     final numbers = await service.listPlaylistNumbers();
     final active = await service.getActivePlaylistNumber();
     final fileData = await service.readTextFromFile();
     final names = await service.getPlaylistNames();
-    if (mounted) {
+    if (mounted && generation == _playlistLoadGeneration) {
       _trackItemKeys.clear();
       setState(() {
         playlistNumbers = numbers;
@@ -826,6 +838,7 @@ class _MainAppState extends State<MainApp> {
       case null:
       case _PlaylistActionType.select:
       case _PlaylistActionType.create:
+      case _PlaylistActionType.sort:
         return;
     }
   }
@@ -965,7 +978,7 @@ class _MainAppState extends State<MainApp> {
       }
       if (move) {
         final remaining = tracksWithoutSelection(playlist, indices);
-        await service.reorderPlaylist(remaining);
+        await service.replacePlaylistTracks(activePlaylistNumber, remaining, kind: PlaylistMutationKind.removed);
         for (final track in tracks) {
           widget.handler.removeTrackFromActivePlaybackOrder(track);
         }
@@ -1016,7 +1029,7 @@ class _MainAppState extends State<MainApp> {
     if (confirmed != true || !mounted) return;
     final tracks = selectedTracks(playlist, _selectedTrackIndices);
     final remaining = tracksWithoutSelection(playlist, _selectedTrackIndices);
-    await FileService().reorderPlaylist(remaining);
+    await FileService().replacePlaylistTracks(activePlaylistNumber, remaining, kind: PlaylistMutationKind.removed);
     for (final track in tracks) {
       widget.handler.removeTrackFromActivePlaybackOrder(track);
     }
@@ -2317,6 +2330,8 @@ class _MainAppState extends State<MainApp> {
           unawaited(_renameActivePlaylist());
         case _PlaylistActionType.delete:
           unawaited(_deleteActivePlaylist());
+        case _PlaylistActionType.sort:
+          unawaited(_sortActivePlaylist());
       }
     },
     itemBuilder: (menuContext) => [
@@ -2344,6 +2359,11 @@ class _MainAppState extends State<MainApp> {
           ),
         ),
       const PopupMenuDivider(),
+      PopupMenuItem(
+        enabled: playlist.isNotEmpty,
+        value: const _PlaylistMenuAction(_PlaylistActionType.sort),
+        child: const _ToolbarMenuLabel(icon: Icons.sort_rounded, label: 'Sort tracks'),
+      ),
       const PopupMenuItem(
         value: _PlaylistMenuAction(_PlaylistActionType.create),
         child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: 'New playlist'),
@@ -2359,6 +2379,19 @@ class _MainAppState extends State<MainApp> {
       ),
     ],
   );
+
+  Future<void> _sortActivePlaylist() async {
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) return;
+    try {
+      if (await showPlaylistSortDialog(navigator, activePlaylistNumber) && mounted) await _loadPlaylistFromDisk();
+    } catch (error) {
+      final promptContext = navigator.overlay?.context;
+      if (mounted && promptContext != null && promptContext.mounted) {
+        ScaffoldMessenger.maybeOf(promptContext)?.showSnackBar(SnackBar(content: Text('Could not sort tracks: $error')));
+      }
+    }
+  }
 }
 
 enum _ToolbarAction { refresh, transfer, importTransfer, importExternal, importLocal, sync }
@@ -2382,7 +2415,7 @@ class _ToolbarMenuLabel extends StatelessWidget {
   );
 }
 
-enum _PlaylistActionType { select, create, rename, delete }
+enum _PlaylistActionType { select, create, rename, delete, sort }
 
 enum _SelectionAction { copy, move, remove, delete }
 

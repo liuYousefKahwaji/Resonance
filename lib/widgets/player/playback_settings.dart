@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:audio_service/audio_service.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/audio/playback_preferences.dart';
@@ -161,6 +162,64 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
                 ],
               ),
               const SizedBox(height: 20),
+              StreamBuilder<MediaItem?>(
+                stream: widget.handler.mediaItem,
+                initialData: widget.handler.mediaItem.value,
+                builder: (context, trackSnapshot) => AnimatedBuilder(
+                  animation: Listenable.merge([
+                    widget.handler.volumeNotifier,
+                    widget.handler.trackVolumePercentNotifier,
+                  ]),
+                  builder: (context, _) {
+                    final track = trackSnapshot.data;
+                    final percent = widget.handler.trackVolumePercentNotifier.value;
+                    final boosted = widget.handler.volumeNotifier.value > 1;
+                    final label = '${percent > 0 ? '+' : ''}${percent.round()}%';
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Expanded(
+                              child: Text('This track’s volume', style: TextStyle(fontWeight: FontWeight.bold)),
+                            ),
+                            Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+                            IconButton(
+                              tooltip: 'Reset track volume',
+                              onPressed: track == null || percent == 0
+                                  ? null
+                                  : () => widget.handler.setTrackVolumePercent(0),
+                              icon: const Icon(Icons.restart_alt_rounded, size: 18),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          track?.title ?? 'Play a track to adjust its volume.',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        Slider(
+                          key: const Key('track-volume-slider'),
+                          value: percent,
+                          min: -100,
+                          max: 100,
+                          divisions: 200,
+                          label: label,
+                          onChanged: track == null ? null : (value) => widget.handler.setTrackVolumePercent(value),
+                        ),
+                        Text(
+                          boosted
+                              ? 'Main volume boost is active. Positive track boosts are paused; reductions still apply.'
+                              : 'Saved for this song only. −100% mutes it; +100% matches the maximum volume boost.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                    );
+                  },
+                ),
+              ),
               ValueListenableBuilder<EqualizerSettings>(
                 valueListenable: widget.handler.equalizerNotifier,
                 builder: (context, equalizer, _) => Semantics(
@@ -198,6 +257,7 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
               pitch = 1.0;
             });
             await widget.handler.resetPlaybackAdjustments();
+            await widget.handler.setTrackVolumePercent(0);
           },
           child: const Text('Reset'),
         ),

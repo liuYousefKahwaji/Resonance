@@ -403,9 +403,8 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
       );
     }
 
-    final playlistContent = await FileService().readTextFromFile();
-    final updatedContent = '${playlistContent.trim()}\n$url\n';
-    await FileService().writeTextToFile(updatedContent, append: false);
+    final files = FileService();
+    await files.appendTrack(await files.getActivePlaylistNumber(), url);
 
     widget.onFileAdded?.call(url);
 
@@ -644,7 +643,9 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             children: [
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 10))),
+                style: ElevatedButton.styleFrom(
+                  shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 10)),
+                ),
                 onPressed: _runSearch,
                 icon: const Icon(Icons.search_rounded, size: 18),
                 label: const Text('Search'),

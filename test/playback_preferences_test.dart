@@ -7,6 +7,37 @@ void main() {
 
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  test('track volume survives reload, URL variants, and concurrent effect saves', () async {
+    var store = await PlaybackPreferenceStore.load();
+    await Future.wait([
+      store.saveTrackVolume('https://youtu.be/volume1', 65),
+      store.saveAdjustments(
+        'https://www.youtube.com/watch?v=volume1',
+        PlaybackAdjustments(speed: 1.3),
+        preserveVolume: true,
+      ),
+      store.saveTrackVolume('https://youtu.be/volume2', -40),
+    ]);
+    store = await PlaybackPreferenceStore.load();
+    expect(store.adjustmentsFor('https://youtu.be/volume1').volumePercent, 65);
+    expect(store.adjustmentsFor('https://youtu.be/volume1').speed, 1.3);
+    expect(store.adjustmentsFor('https://youtu.be/volume2').volumePercent, -40);
+    expect(store.adjustmentsFor('other').volumePercent, 0);
+    await store.saveTrackVolume('https://youtu.be/volume1', 0);
+    expect(store.adjustmentsFor('https://youtu.be/volume1').speed, 1.3);
+    expect(PlaybackAdjustments.fromJson({'volumePercent': 999}).volumePercent, 100);
+    expect(PlaybackAdjustments.fromJson({'volumePercent': double.nan}).volumePercent, 0);
+  });
+
+  test('track volume matches booster strength without stacking positive boosts', () {
+    expect(trackVolumeMultiplier(-100, 1), 0);
+    expect(trackVolumeMultiplier(0, 1), 1);
+    expect(trackVolumeMultiplier(100, 1), 2);
+    expect(trackVolumeMultiplier(50, .8), 1.5);
+    expect(trackVolumeMultiplier(100, 1.5), 1);
+    expect(trackVolumeMultiplier(-50, 1.5), .5);
+  });
+
   test('stable identity normalizes Windows paths and YouTube URL variants', () {
     expect(
       playbackTrackIdentity(r'C:\Music\Album\..\Track.mp3', isWindowsOverride: true),
