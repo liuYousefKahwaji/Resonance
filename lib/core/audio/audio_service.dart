@@ -165,6 +165,56 @@ bool playbackPositionAdvanced(Duration initial, Duration current) =>
 @visibleForTesting
 bool supportsPlaybackHealthMonitoring({required bool isWindows, required bool isStream}) => true;
 
+/// Samples progress within one uninterrupted playback window. Seeking cancels
+/// that window so a backward jump cannot be mistaken for a stalled source.
+class PlaybackProgressWatchdog {
+  Timer? _timer;
+
+  void cancel() => _timer?.cancel();
+
+  void start({
+    required Duration grace,
+    required Duration Function() position,
+    Duration? initialPosition,
+    required bool Function() shouldMonitor,
+    required bool Function() isCompleted,
+    required void Function() onProgress,
+    required void Function() onStalled,
+  }) {
+    cancel();
+    final baseline = initialPosition ?? position();
+    _timer = Timer(grace, () {
+      if (!shouldMonitor()) return;
+      if (isCompleted() || playbackPositionAdvanced(baseline, position())) {
+        onProgress();
+      } else {
+        onStalled();
+      }
+    });
+  }
+}
+
+/// Native seeks stay serialized, but only the latest waiting target is applied.
+/// Source replacement invalidates pending requests without touching its player.
+class LatestSeekOperationQueue {
+  Future<void> _tail = Future<void>.value();
+  int _revision = 0;
+
+  Future<void> get idle => _tail;
+
+  void cancelPending() => _revision++;
+
+  Future<void> run(Future<void> Function() operation, {required bool Function() isSourceCurrent}) {
+    final revision = ++_revision;
+    final current = _tail.then((_) async {
+      if (revision != _revision || !isSourceCurrent()) return;
+      await operation();
+    });
+    _tail = current.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return current;
+  }
+}
+
 /// Keeps pause/open/source replacement commands from crossing on the native
 /// player. A failed command still releases the queue for the next selection.
 @visibleForTesting
@@ -342,7 +392,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   int? _pendingStreamSourceGeneration;
   int _seekGeneration = 0;
   int? _activeSeekGeneration;
-  Future<void> _seekOperationQueue = Future<void>.value();
+  final _seekOperations = LatestSeekOperationQueue();
   int _crossfadeGeneration = 0;
   bool _crossfadeInProgress = false;
   bool _syncSessionActive = false;
@@ -363,7 +413,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> _playbackAdjustmentQueue = Future<void>.value();
   final _backendSourceOperations = BackendSourceOperationQueue();
   Timer? _periodicPositionSaveTimer;
-  Timer? _playbackHealthTimer;
+  final _playbackHealthWatchdog = PlaybackProgressWatchdog();
   bool? _lastPresencePlaying;
   bool _playbackRequested = false;
   bool _playbackUnavailable = false;
@@ -1057,47 +1107,55 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     return Platform.isWindows ? normalized.toLowerCase() : normalized;
   }
 
-  void _armPlaybackHealthCheck(int generation, {Duration grace = const Duration(seconds: 5), Object? reason}) {
-    _playbackHealthTimer?.cancel();
+  void _armPlaybackHealthCheck(
+    int generation, {
+    Duration grace = const Duration(seconds: 5),
+    Object? reason,
+    Duration? initialPosition,
+  }) {
+    _playbackHealthWatchdog.cancel();
     final monitoredStream = _currentTrackIsStream;
     if (!supportsPlaybackHealthMonitoring(isWindows: Platform.isWindows, isStream: monitoredStream) ||
         !_playbackRequested ||
-        _playbackUnavailable) {
+        _playbackUnavailable ||
+        _activeSeekGeneration != null) {
       return;
     }
-    final initialPosition = _currentPosition;
+    final seekGeneration = _seekGeneration;
     final windowsPlayer = Platform.isWindows ? _windowsPlayer : null;
     final justAudioPlayer = Platform.isWindows ? null : _player;
-    _playbackHealthTimer = Timer(grace, () {
-      if (_loadGeneration != generation ||
-          !_playbackRequested ||
-          _playbackUnavailable ||
-          _currentTrackIsStream != monitoredStream) {
-        return;
-      }
-      if (Platform.isWindows) {
-        if (!identical(windowsPlayer, _windowsPlayer)) return;
-      } else if (!identical(justAudioPlayer, _player)) {
-        return;
-      }
-      final completed = Platform.isWindows ? _windowsIsCompleted : _player.processingState == ProcessingState.completed;
-      if (completed || playbackPositionAdvanced(initialPosition, _currentPosition)) {
+    bool isCompleted() =>
+        Platform.isWindows ? _windowsIsCompleted : _player.processingState == ProcessingState.completed;
+    _playbackHealthWatchdog.start(
+      grace: grace,
+      position: () => _currentPosition,
+      initialPosition: initialPosition,
+      shouldMonitor: () =>
+          _loadGeneration == generation &&
+          _seekGeneration == seekGeneration &&
+          _activeSeekGeneration == null &&
+          _playbackRequested &&
+          !_playbackUnavailable &&
+          _currentTrackIsStream == monitoredStream &&
+          (Platform.isWindows ? identical(windowsPlayer, _windowsPlayer) : identical(justAudioPlayer, _player)),
+      isCompleted: isCompleted,
+      onProgress: () {
         _failedTrackIds.clear();
         _retryLoadGeneration = null;
-        if (monitoredStream && !completed) {
+        if (monitoredStream && !isCompleted()) {
           _armPlaybackHealthCheck(generation, grace: const Duration(seconds: 8));
         }
-        return;
-      }
-      unawaited(
+      },
+      onStalled: () => unawaited(
         _handlePlaybackFailure(generation, reason ?? 'playback made no progress', allowStreamRecovery: monitoredStream),
-      );
-    });
+      ),
+    );
   }
 
   Future<void> _handlePlaybackFailure(int generation, Object reason, {bool allowStreamRecovery = false}) async {
     final recoveringStream = _currentTrackIsStream && allowStreamRecovery;
     if (_loadGeneration != generation ||
+        _activeSeekGeneration != null ||
         _handledFailureGeneration == generation ||
         !_playbackRequested ||
         (_currentTrackIsStream && !recoveringStream)) {
@@ -1106,7 +1164,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final current = mediaItem.value;
     if (current == null) return;
     _handledFailureGeneration = generation;
-    _playbackHealthTimer?.cancel();
+    _playbackHealthWatchdog.cancel();
     debugPrint('[PlayerHandler] Playback failed for "${current.id}" (generation $generation): $reason');
 
     if (_retryLoadGeneration != generation) {
@@ -2317,7 +2375,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> pause() async {
     if (_syncControlLocked) return;
     _playbackRequested = false;
-    _playbackHealthTimer?.cancel();
+    _playbackHealthWatchdog.cancel();
     if (_pendingStreamSourceGeneration == _loadGeneration) {
       await _queueBackendLoad(() async {
         if (_playbackRequested) return;
@@ -2343,16 +2401,37 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   @override
   Future<void> seek(Duration position) async {
-    if (_syncControlLocked) return;
+    if (_syncControlLocked || _pendingStreamSourceGeneration == _loadGeneration) return;
     final generation = ++_seekGeneration;
+    final sourceGeneration = _loadGeneration;
+    final duration = _currentDuration;
+    final target = position < Duration.zero
+        ? Duration.zero
+        : duration != null && duration > Duration.zero && position > duration
+        ? duration
+        : position;
     _activeSeekGeneration = generation;
-    final operation = _seekOperationQueue.then((_) => _seekBackend(position));
-    _seekOperationQueue = operation.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    _playbackHealthWatchdog.cancel();
+    final operation = _seekOperations.run(
+      () => _seekBackend(target, sourceGeneration),
+      isSourceCurrent: () => _loadGeneration == sourceGeneration,
+    );
+    var applied = false;
     try {
       await operation;
+      applied = true;
     } finally {
       if (_activeSeekGeneration == generation) {
         _activeSeekGeneration = null;
+        if (_loadGeneration == sourceGeneration) {
+          // Start from the new position, never from the pre-seek timestamp.
+          _armPlaybackHealthCheck(
+            sourceGeneration,
+            grace: _currentTrackIsStream ? _streamStartupGrace : const Duration(seconds: 5),
+            // Native position events can lag behind the seek command.
+            initialPosition: applied ? target : null,
+          );
+        }
         // Position events are ignored while the backend seek is unresolved.
         // Re-evaluate immediately afterward so seeking near the end can still
         // begin the configured automatic crossfade.
@@ -2361,48 +2440,37 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     }
   }
 
-  Future<void> _seekBackend(Duration position) async {
+  void _cancelPendingSeeks() {
+    _seekGeneration++;
+    _activeSeekGeneration = null;
+    _seekOperations.cancelPending();
+  }
+
+  Future<void> _seekBackend(Duration position, int sourceGeneration) async {
     if (_crossfadeInProgress) {
       _crossfadeGeneration++;
       _crossfadeInProgress = false;
       _transitionVolumeMultiplier = 1.0;
       await _applyOutputVolume();
     }
+    if (_loadGeneration != sourceGeneration) return;
     if (Platform.isWindows) {
-      // For local files on Windows: seek directly without pause/play cycle.
-      // media_kit handles buffering internally; forcing pause/play causes
-      // the play button to get stuck in the wrong state.
-      if (!_currentTrackIsStream) {
-        _windowsPosition = position;
-        await _windowsPlayer!.seek(position);
-        _updatePlaybackState();
-        return;
-      }
-
-      // For streams: signal buffering, seek, then restore play state.
-      final wasPlaying = _isWindowsPlaying;
+      // Both backends preserve play/pause during seek. Use native buffering
+      // state; a synthetic true value can stick when no false event follows.
       final player = _windowsPlayer!;
-      _windowsIsBuffering = true;
       _windowsPosition = position;
       _updatePlaybackState();
       await player.seek(position);
-      if (wasPlaying) await player.play();
+      if (_loadGeneration != sourceGeneration || !identical(player, _windowsPlayer)) return;
+      _windowsIsBuffering = player.state.buffering;
+      _windowsIsCompleted = player.state.completed;
       _updatePlaybackState();
       return;
     }
 
-    // Android / other: just_audio handles seek internally for local files.
-    // Only show a buffering state for streamed tracks.
-    if (_currentTrackIsStream) {
-      playbackState.add(
-        playbackState.value.copyWith(
-          processingState: AudioProcessingState.buffering,
-          playing: _player.playing,
-          updatePosition: position,
-        ),
-      );
-    }
-    await _player.seek(position);
+    final player = _player;
+    await player.seek(position);
+    if (_loadGeneration != sourceGeneration || !identical(player, _player)) return;
     _updatePlaybackState();
   }
 
@@ -2439,12 +2507,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   @override
   Future<void> stop() async {
-    await _seekOperationQueue;
+    _playbackRequested = false;
+    _playbackHealthWatchdog.cancel();
+    _cancelPendingSeeks();
+    await _seekOperations.idle;
     await saveCurrentPlaybackPosition();
     _pendingRestoredTrack = null;
-    _playbackRequested = false;
     _playbackUnavailable = false;
-    _playbackHealthTimer?.cancel();
     _failedTrackIds.clear();
     _retryLoadGeneration = null;
     _handledFailureGeneration = null;
@@ -2553,6 +2622,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         filePath.startsWith('https://');
     final outgoingPositionSave = saveCurrentPlaybackPosition();
     final generation = ++_loadGeneration;
+    _cancelPendingSeeks();
     // Invalidate transitions before the first await: a newer selection owns
     // both the audio source and its presentation immediately.
     _crossfadeGeneration++;
@@ -2561,7 +2631,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _cancelSupersededAndroidStreams(filePath);
     _playbackRequested = true;
     _playbackUnavailable = false;
-    _playbackHealthTimer?.cancel();
+    _playbackHealthWatchdog.cancel();
     _handledFailureGeneration = null;
     if (!preserveFailureHistory) {
       _failedTrackIds.clear();
@@ -2626,7 +2696,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     required TrackTransitionDirection transitionDirection,
   }) async {
     final myGen = generation;
-    await _seekOperationQueue;
+    await _seekOperations.idle;
     if (_loadGeneration != myGen) return;
     _crossfadeGeneration++;
     _crossfadeInProgress = false;
@@ -3628,13 +3698,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    _playbackRequested = false;
+    _cancelPendingSeeks();
     await _playlistMutationSubscription?.cancel();
     _youtubeAccessService?.removeListener(_handleYoutubeAccessChanged);
     WidgetsBinding.instance.removeObserver(this);
     _periodicPositionSaveTimer?.cancel();
-    _playbackHealthTimer?.cancel();
+    _playbackHealthWatchdog.cancel();
     _volumeSaveTimer?.cancel();
-    await _seekOperationQueue;
+    await _seekOperations.idle;
     _loadGeneration++;
     _activeTrackLoadGeneration = null;
     await _backendSourceOperations.idle;

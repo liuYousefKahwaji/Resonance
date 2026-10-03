@@ -4,9 +4,8 @@ import 'package:resonance/app/theme.dart';
 // Fixes:
 //  1. Duration format: H:MM:SS only when track >= 1 hour.
 //  2. Loading indicator: only shown while audio is genuinely loading a new
-//     track (AudioProcessingState.loading). Buffering state (which fires
-//     during seeks on streamed tracks) shows a dimmed seek bar but NOT
-//     the spinner, so local-file seeks feel instant.
+//     track (AudioProcessingState.loading). Seeks and stream buffering
+//     keep the normal color and stay interactive.
 //  3. Pending seek position: after the user releases the thumb the bar
 //     shows the chosen position immediately instead of snapping back.
 //     _pendingSeekPosition is cleared as soon as the player's reported
@@ -37,15 +36,12 @@ class _SeekBarState extends State<SeekBar> {
   // Only true while a brand-new track is loading (not during seeks).
   bool _isLoadingNewTrack = false;
 
-  // True while the player is buffering (stream re-buffers after seek, etc.)
-  // Does NOT block interaction — the seek bar stays interactive.
-  bool _isBuffering = false;
-
   // Whether the current track is a stream URL.
   bool _currentTrackIsStream = false;
 
   // After a seek, hold the target position until the player catches up.
   Duration? _pendingSeekPosition;
+  int _seekRequestRevision = 0;
   int _seekStepSeconds = 5;
 
   double _hoverX = 0.0;
@@ -130,12 +126,9 @@ class _SeekBarState extends State<SeekBar> {
       _currentTrackIsStream = currentId.startsWith('http://') || currentId.startsWith('https://');
 
       final isLoading = state.processingState == AudioProcessingState.loading;
-      final isBuffering = state.processingState == AudioProcessingState.buffering;
       final isIdle = state.processingState == AudioProcessingState.idle;
 
       _isLoadingNewTrack = isLoading;
-      // Only show buffering indicator for streamed tracks.
-      _isBuffering = isBuffering && _currentTrackIsStream;
 
       if (isIdle) {
         _pendingSeekPosition = null;
@@ -203,6 +196,22 @@ class _SeekBarState extends State<SeekBar> {
     return _sliderValue.clamp(0.0, 1.0);
   }
 
+  Future<void> _seekTo(PlayerHandler handler, Duration position) async {
+    final revision = ++_seekRequestRevision;
+    final trackId = handler.mediaItem.value?.id;
+    try {
+      await handler.seek(position);
+    } catch (error) {
+      debugPrint('[SeekBar] Seek failed: $error');
+      if (!mounted || revision != _seekRequestRevision || handler.mediaItem.value?.id != trackId) return;
+      setState(() {
+        _pendingSeekPosition = null;
+        _position = handler.currentPosition;
+        _sliderValue = _duration.inMilliseconds > 0 ? _position.inMilliseconds / _duration.inMilliseconds : 0;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
@@ -221,9 +230,9 @@ class _SeekBarState extends State<SeekBar> {
       color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
     );
 
-    // Dim the track while loading a new track OR while a stream is buffering
-    // after a seek. Local-file seeks never dim the bar.
-    final isDimmed = _isLoadingNewTrack || _isBuffering;
+    // Only a new source loading dims the bar. Buffering is transient and
+    // should not make an already playable stream look disabled.
+    final isDimmed = _isLoadingNewTrack;
     final activeTrackColor = isDimmed ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8)) : primary;
 
     // Slider is disabled only while a NEW track is loading (not during seeks).
@@ -306,7 +315,7 @@ class _SeekBarState extends State<SeekBar> {
                                   _pendingSeekPosition = newPosition;
                                   _isScrubbing = false;
                                 });
-                                handler.seek(newPosition);
+                                unawaited(_seekTo(handler, newPosition));
                               },
                       ),
                     ),
