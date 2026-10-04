@@ -34,6 +34,7 @@ import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/widgets/common/artwork_thumbnail.dart';
 import 'package:resonance/widgets/common/progressive_network_artwork.dart';
 import 'package:metadata_god/metadata_god.dart';
+import 'package:resonance/services/favorites_repository.dart';
 
 class TrackTile extends StatefulWidget {
   final String trackPath;
@@ -502,6 +503,7 @@ class TrackTapRegion extends StatelessWidget {
   final VoidCallback? onLongPress;
   final BorderRadius borderRadius;
   final Widget child;
+  final bool showHighlight;
 
   const TrackTapRegion({
     super.key,
@@ -509,11 +511,19 @@ class TrackTapRegion extends StatelessWidget {
     required this.onLongPress,
     required this.borderRadius,
     required this.child,
+    this.showHighlight = true,
   });
 
   @override
-  Widget build(BuildContext context) =>
-      InkWell(onTap: onTap, onLongPress: onLongPress, borderRadius: borderRadius, child: child);
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    onLongPress: onLongPress,
+    borderRadius: borderRadius,
+    hoverColor: showHighlight ? null : Colors.transparent,
+    focusColor: showHighlight ? null : Colors.transparent,
+    highlightColor: showHighlight ? null : Colors.transparent,
+    child: child,
+  );
 }
 
 // Separated into its own widget so StreamBuilder rebuilds are contained
@@ -588,6 +598,8 @@ class _TrackTileContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context, listen: false);
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final favorites = context.watch<FavoritesRepository?>();
+    final isFavorite = favorites?.isFavorite(trackPath) ?? false;
     final primary = Theme.of(context).colorScheme.primary;
     final windowsNative = useWindowsNativeControls(context);
     final tileRadius = windowsNative ? 4.0 : 12.0;
@@ -647,6 +659,7 @@ class _TrackTileContent extends StatelessWidget {
             child: Material(
               type: MaterialType.transparency,
               child: TrackTapRegion(
+                showHighlight: !isFavorite,
                 onTap: selectionMode && onSelectionToggle != null
                     ? onSelectionToggle!
                     : () => unawaited(_activateTrack(handler, resolvedTitle, resolvedArtist)),
@@ -662,10 +675,15 @@ class _TrackTileContent extends StatelessWidget {
                         width: isCurrentTrack ? 3 : 0,
                         height: isCurrentTrack ? 32 : 0,
                         decoration: BoxDecoration(
-                          color: primary,
+                          color: isFavorite ? FavoritesRepository.gold : primary,
                           borderRadius: resonanceBorderRadius(context, 99),
                           boxShadow: isCurrentTrack
-                              ? [BoxShadow(color: primary.withValues(alpha: .42), blurRadius: 8)]
+                              ? [
+                                  BoxShadow(
+                                    color: (isFavorite ? FavoritesRepository.gold : primary).withValues(alpha: .42),
+                                    blurRadius: 8,
+                                  ),
+                                ]
                               : null,
                         ),
                       ),
@@ -683,7 +701,11 @@ class _TrackTileContent extends StatelessWidget {
                                 visualDensity: VisualDensity.compact,
                               )
                             : !allowReorder
-                            ? const Icon(Icons.music_note_rounded, size: 18)
+                            ? Icon(
+                                isFavorite ? Icons.star_rounded : Icons.music_note_rounded,
+                                size: 18,
+                                color: isFavorite ? FavoritesRepository.gold : null,
+                              )
                             : ReorderableDragStartListener(
                                 index: index,
                                 child: ValueListenableBuilder<int>(
@@ -693,10 +715,16 @@ class _TrackTileContent extends StatelessWidget {
                                     return AnimatedSwitcher(
                                       duration: const Duration(milliseconds: 180),
                                       child: Icon(
-                                        shuffle ? Icons.shuffle_rounded : Icons.drag_handle_rounded,
-                                        key: ValueKey(shuffle),
+                                        shuffle
+                                            ? Icons.shuffle_rounded
+                                            : isFavorite
+                                            ? Icons.star_rounded
+                                            : Icons.drag_handle_rounded,
+                                        key: ValueKey((shuffle, isFavorite)),
                                         size: 18,
-                                        color: shuffle
+                                        color: isFavorite
+                                            ? FavoritesRepository.gold
+                                            : shuffle
                                             ? primary.withValues(alpha: isCurrentTrack ? 0.85 : 0.55)
                                             : isCurrentTrack
                                             ? primary.withValues(alpha: 0.5)
@@ -769,6 +797,26 @@ class _TrackTileContent extends StatelessWidget {
                             padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: windowsNative ? 3 : 6)),
                           ),
                           menuChildren: [
+                            if (favorites != null)
+                              MenuItemButton(
+                                leadingIcon: Icon(
+                                  isFavorite ? Icons.star_rounded : Icons.star_outline_rounded,
+                                  size: 19,
+                                  color: FavoritesRepository.gold,
+                                ),
+                                onPressed: () async {
+                                  try {
+                                    await favorites.toggle(trackPath);
+                                  } catch (error) {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(SnackBar(content: Text('Could not change favorite: $error')));
+                                    }
+                                  }
+                                },
+                                child: Text(isFavorite ? 'Remove from favorites' : 'Add to favorites'),
+                              ),
                             MenuItemButton(
                               leadingIcon: const Icon(Icons.open_in_new_rounded, size: 19),
                               onPressed: () =>

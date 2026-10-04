@@ -248,6 +248,30 @@ def get_music_related(video_id: str, limit: int = 25) -> str:
     return json.dumps({"tracks": tracks[: max(1, min(int(limit), 50))]}, ensure_ascii=False)
 
 
+def get_music_library(cookie_file=None) -> str:
+    """Read all saved playlists separately, without delaying the Home feed."""
+    ytmusic = _build_authenticated_ytmusic(cookie_file)
+    items = []
+    seen = set()
+    for playlist in ytmusic.get_library_playlists(limit=None) or []:
+        if not isinstance(playlist, dict):
+            continue
+        playlist_id = str(playlist.get("playlistId") or "").strip()
+        title = str(playlist.get("title") or "").strip()
+        if not playlist_id or not title or playlist_id in seen:
+            continue
+        seen.add(playlist_id)
+        count = playlist.get("count")
+        items.append({
+            "title": title,
+            "subtitle": f"{count} songs" if count is not None and str(count).strip() else "Playlist",
+            "thumbnail": _normalize_music_thumbnail(playlist),
+            "kind": "playlist",
+            "playlistId": playlist_id,
+        })
+    return json.dumps({"shelves": [{"title": "Playlist Library", "tracks": [], "items": items}]}, ensure_ascii=False)
+
+
 def get_music_home(limit: int = 24, cookie_file=None) -> str:
     """Return normalized authenticated shelves from YouTube Music home."""
     ytmusic = _build_authenticated_ytmusic(cookie_file)

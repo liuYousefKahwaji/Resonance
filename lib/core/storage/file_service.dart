@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:audio_metadata_extractor/audio_metadata_extractor.dart';
+import 'package:resonance/services/track_source_repository.dart';
 import 'playlist_sort.dart';
 export 'playlist_sort.dart';
 
@@ -24,10 +25,13 @@ class FileService {
   static const String _playlistNamesKey = 'resonance_playlist_names';
   static const int maxPlaylistNameLength = 25;
   static const int defaultPlaylistNumber = 1;
+  static const int favoritesPlaylistNumber = 0;
+  static bool isFavoritesPlaylist(int number) => number == favoritesPlaylistNumber;
   final String? _documentsPathOverride;
   final bool? _isWindowsOverride;
   static final StreamController<PlaylistMutation> _mutations = StreamController<PlaylistMutation>.broadcast(sync: true);
   static final Map<String, Future<void>> _writeTails = {};
+  static final Map<String, Future<File>> _initializingFiles = {};
   static final Map<String, int> _revisions = {};
 
   static Stream<PlaylistMutation> get mutations => _mutations.stream;
@@ -49,10 +53,24 @@ class FileService {
   }
 
   Future<File> _ensurePlaylistFile(int number) async {
-    final safeNumber = number < 1 ? defaultPlaylistNumber : number;
+    final safeNumber = number < 0 ? defaultPlaylistNumber : number;
     final file = await _playlistFile(safeNumber);
-    if (!await file.exists()) await file.writeAsString('#\n');
-    return file;
+    final pending = _initializingFiles.putIfAbsent(file.path, () async {
+      if (!await file.exists()) {
+        final legacy = safeNumber == defaultPlaylistNumber ? await _legacyFile : null;
+        if (legacy != null && await legacy.exists()) {
+          await legacy.rename(file.path);
+        } else {
+          await file.writeAsString('#\n');
+        }
+      }
+      return file;
+    });
+    try {
+      return await pending;
+    } finally {
+      if (identical(_initializingFiles[file.path], pending)) _initializingFiles.remove(file.path);
+    }
   }
 
   Future<File> get _legacyFile async {
@@ -66,17 +84,15 @@ class FileService {
   }
 
   Future<void> setActivePlaylistNumber(int number) async {
-    final safeNumber = number < 1 ? defaultPlaylistNumber : number;
+    final safeNumber = number < 0 ? defaultPlaylistNumber : number;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_activePlaylistKey, safeNumber);
-    final file = await _playlistFile(safeNumber);
-    if (!await file.exists()) {
-      await file.writeAsString("#\n");
-    }
+    await _ensurePlaylistFile(safeNumber);
   }
 
   Future<List<int>> listPlaylistNumbers() async {
     await _ensureDefaultPlaylist();
+    await _ensurePlaylistFile(favoritesPlaylistNumber);
     final path = await _localPath;
     final dir = Directory(path);
     final numbers = <int>{};
@@ -135,10 +151,12 @@ class FileService {
     for (final number in numbers) {
       names.putIfAbsent(number, () => 'Playlist $number');
     }
+    names[favoritesPlaylistNumber] = 'Favorites';
     return names;
   }
 
   Future<void> renamePlaylist(int number, String name) async {
+    if (isFavoritesPlaylist(number)) return;
     final cleanName = _normalizePlaylistName(name);
     if (cleanName.isEmpty) return;
     final names = await getPlaylistNames();
@@ -172,7 +190,9 @@ class FileService {
   /// Returns the playlist which should become active.
   Future<int> deletePlaylist(int number) async {
     final numbers = await listPlaylistNumbers();
-    if (numbers.length <= 1 || !numbers.contains(number)) {
+    if (isFavoritesPlaylist(number) ||
+        numbers.where((value) => !isFavoritesPlaylist(value)).length <= 1 ||
+        !numbers.contains(number)) {
       return getActivePlaylistNumber();
     }
     final names = await getPlaylistNames();
@@ -183,7 +203,7 @@ class FileService {
     if (await sortFile.exists()) await sortFile.delete();
     names.remove(number);
 
-    final remaining = numbers.where((value) => value != number).toList()..sort();
+    final remaining = numbers.where((value) => value != number && !isFavoritesPlaylist(value)).toList()..sort();
     var nextActive = active == number ? remaining.first : active;
     if (number == defaultPlaylistNumber) {
       final promotedNumber = remaining.first;
@@ -250,6 +270,55 @@ class FileService {
     return tracks.indexWhere((candidate) => sameTrackPath(candidate, trackPath));
   }
 
+  Future<Map<String, String>> favoriteSourceIds() =>
+      TrackSourceRepository(isWindowsOverride: _isWindowsOverride).youtubeIdsByLocalPath();
+
+  String favoriteIdentity(String track, {Map<String, String> sourceIds = const {}}) {
+    if (track.startsWith('http://') || track.startsWith('https://')) {
+      final videoId = TrackSourceRepository.videoIdFromUrlOrId(track);
+      return videoId == null ? 'url:$track' : 'youtube:$videoId';
+    }
+    final normalized = p.normalize(p.absolute(track));
+    final key = (_isWindowsOverride ?? Platform.isWindows) ? normalized.toLowerCase() : normalized;
+    final mapped = sourceIds[key];
+    return mapped == null ? 'file:$key' : 'youtube:$mapped';
+  }
+
+  Future<void> setTrackFavorite(String track, bool favorite) => _updateTrackFavorite(track, favorite);
+
+  Future<void> toggleTrackFavorite(String track) => _updateTrackFavorite(track, null);
+
+  Future<void> _updateTrackFavorite(String track, bool? requested) => _serialize(favoritesPlaylistNumber, () async {
+    final sourceIds = await favoriteSourceIds();
+    final identity = favoriteIdentity(track, sourceIds: sourceIds);
+    final tracks = await readPlaylistTracks(favoritesPlaylistNumber);
+    final exists = tracks.any((entry) => favoriteIdentity(entry, sourceIds: sourceIds) == identity);
+    final favorite = requested ?? !exists;
+    if (exists == favorite) return;
+    final updated = favorite
+        ? [...tracks, track]
+        : tracks.where((entry) => favoriteIdentity(entry, sourceIds: sourceIds) != identity).toList();
+    await _writeTracks(favoritesPlaylistNumber, await _ensurePlaylistFile(favoritesPlaylistNumber), updated);
+    await _publish(favoritesPlaylistNumber, favorite ? PlaylistMutationKind.appended : PlaylistMutationKind.removed);
+  });
+
+  Future<void> favoriteTracks(Iterable<String> tracks) => setTracksFavorite(tracks, true);
+
+  Future<void> setTracksFavorite(Iterable<String> tracks, bool favorite) {
+    final selected = tracks.toList(growable: false);
+    if (selected.isEmpty) return Future<void>.value();
+    return _serialize(favoritesPlaylistNumber, () async {
+      final current = await readPlaylistTracks(favoritesPlaylistNumber);
+      final sources = await favoriteSourceIds();
+      final identities = selected.map((track) => favoriteIdentity(track, sourceIds: sources)).toSet();
+      final updated = favorite
+          ? [...current, ...selected]
+          : current.where((track) => !identities.contains(favoriteIdentity(track, sourceIds: sources))).toList();
+      await _writeTracks(favoritesPlaylistNumber, await _ensurePlaylistFile(favoritesPlaylistNumber), updated);
+      await _publish(favoritesPlaylistNumber, favorite ? PlaylistMutationKind.appended : PlaylistMutationKind.removed);
+    });
+  }
+
   Future<void> _savePlaylistNames(Map<int, String> names) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
@@ -264,15 +333,7 @@ class FileService {
   }
 
   Future<void> _ensureDefaultPlaylist() async {
-    final defaultFile = await _playlistFile(defaultPlaylistNumber);
-    if (await defaultFile.exists()) return;
-
-    final legacy = await _legacyFile;
-    if (await legacy.exists()) {
-      await legacy.rename(defaultFile.path);
-    } else {
-      await defaultFile.writeAsString("#\n");
-    }
+    await _ensurePlaylistFile(defaultPlaylistNumber);
   }
 
   // 3. Write data to the file (with optional append flag)
@@ -320,23 +381,31 @@ class FileService {
 
   /// Replace surviving stream references atomically, preserving playlist order.
   /// A track removed while downloading must not be added back.
-  Future<void> replaceStreamWithDownload(int playlistNumber, String stream, String localPath) =>
-      _serialize(playlistNumber, () async {
-        final tracks = await readPlaylistTracks(playlistNumber);
-        if (!tracks.contains(stream)) return;
-        final updated = tracks.map((track) => track == stream ? localPath : track).toList();
-        final file = await _ensurePlaylistFile(playlistNumber);
-        final state = await playlistSortState(playlistNumber);
-        await _writeTracks(
-          playlistNumber,
-          file,
-          updated,
-          state: state.copyWith(
-            addedOrder: state.addedOrder.map((entry) => entry == stream ? localPath : entry).toList(),
-          ),
-        );
-        await _publish(playlistNumber, PlaylistMutationKind.replaced);
-      });
+  Future<void> replaceStreamWithDownload(int playlistNumber, String stream, String localPath) async {
+    await _serialize(playlistNumber, () async {
+      final tracks = await readPlaylistTracks(playlistNumber);
+      final sources = isFavoritesPlaylist(playlistNumber) ? await favoriteSourceIds() : const <String, String>{};
+      bool matches(String track) => isFavoritesPlaylist(playlistNumber)
+          ? favoriteIdentity(track, sourceIds: sources) == favoriteIdentity(stream, sourceIds: sources)
+          : track == stream;
+      if (!tracks.any(matches)) return;
+      final updated = tracks.map((track) => matches(track) ? localPath : track).toList();
+      final file = await _ensurePlaylistFile(playlistNumber);
+      final state = await playlistSortState(playlistNumber);
+      await _writeTracks(
+        playlistNumber,
+        file,
+        updated,
+        state: state.copyWith(addedOrder: state.addedOrder.map((entry) => matches(entry) ? localPath : entry).toList()),
+      );
+      await _publish(playlistNumber, PlaylistMutationKind.replaced);
+    });
+    // Release the normal playlist's lock before updating global membership.
+    // Favorite changes may re-sort that normal playlist again.
+    if (!isFavoritesPlaylist(playlistNumber)) {
+      await replaceStreamWithDownload(favoritesPlaylistNumber, stream, localPath);
+    }
+  }
 
   Future<bool> appendTrack(int playlistNumber, String trackPath) async {
     var changed = false;
@@ -392,22 +461,23 @@ class FileService {
     return PlaylistSortState(addedOrder: await readPlaylistTracks(number));
   }
 
-  Future<void> sortPlaylist(int number, PlaylistSortMode mode, {bool descending = false, bool reroll = false}) =>
-      _serialize(number, () async {
-        final current = await playlistSortState(number);
-        final selected = current.copyWith(
-          mode: mode,
-          descending: descending,
-          seed: reroll || current.seed == 0 ? PlaylistSortState.newSeed() : current.seed,
-        );
-        await _writeTracks(
-          number,
-          await _ensurePlaylistFile(number),
-          await readPlaylistTracks(number),
-          state: selected,
-        );
-        await _publish(number, PlaylistMutationKind.reordered);
-      });
+  Future<void> sortPlaylist(
+    int number,
+    PlaylistSortMode mode, {
+    bool descending = false,
+    bool reroll = false,
+    bool? favoritesFirst,
+  }) => _serialize(number, () async {
+    final current = await playlistSortState(number);
+    final selected = current.copyWith(
+      mode: mode,
+      descending: descending,
+      favoritesFirst: favoritesFirst,
+      seed: reroll || current.seed == 0 ? PlaylistSortState.newSeed() : current.seed,
+    );
+    await _writeTracks(number, await _ensurePlaylistFile(number), await readPlaylistTracks(number), state: selected);
+    await _publish(number, PlaylistMutationKind.reordered);
+  });
 
   Future<void> _writeTracks(
     int number,
@@ -416,7 +486,14 @@ class FileService {
     bool manual = false,
     PlaylistSortState? state,
   }) async {
+    Map<String, String> sourceIds = const {};
     var selected = (state ?? await playlistSortState(number)).reconcile(tracks);
+    if (isFavoritesPlaylist(number) || selected.favoritesFirst) sourceIds = await favoriteSourceIds();
+    if (isFavoritesPlaylist(number)) {
+      final identities = <String>{};
+      tracks = tracks.where((track) => identities.add(favoriteIdentity(track, sourceIds: sourceIds))).toList();
+      selected = selected.reconcile(tracks);
+    }
     if (manual) selected = selected.copyWith(mode: PlaylistSortMode.custom, descending: false);
     final titles = <String, String>{};
     if (selected.mode == PlaylistSortMode.title) {
@@ -439,9 +516,20 @@ class FileService {
     }
     // Unsorted playlists must keep the producer's supplied order (notably live
     // Sync queues). Choosing a sort initializes the seed and enables sorting.
-    final ordered = selected.mode == PlaylistSortMode.dateAdded && selected.seed == 0
+    final favoriteKeys = selected.favoritesFirst && isFavoritesPlaylist(number)
+        ? tracks.map((track) => favoriteIdentity(track, sourceIds: sourceIds)).toSet()
+        : selected.favoritesFirst
+        ? (await readPlaylistTracks(
+            favoritesPlaylistNumber,
+          )).map((track) => favoriteIdentity(track, sourceIds: sourceIds)).toSet()
+        : const <String>{};
+    final favorites = {
+      for (final track in tracks)
+        if (favoriteKeys.contains(favoriteIdentity(track, sourceIds: sourceIds))) track,
+    };
+    final ordered = selected.mode == PlaylistSortMode.dateAdded && selected.seed == 0 && !selected.favoritesFirst
         ? tracks
-        : selected.sorted(tracks, titles: titles);
+        : selected.sorted(tracks, titles: titles, favorites: favorites);
     // The numbered playlist stays authoritative for Next/Previous. The sidecar
     // remembers insertion order even after sorting or manual rearrangement.
     final sidecar = File('${file.path}.sort.json');
@@ -470,6 +558,15 @@ class FileService {
     final revision = (_revisions[key] ?? 0) + 1;
     _revisions[key] = revision;
     _mutations.add(PlaylistMutation(playlistNumber, revision, kind));
+    if (isFavoritesPlaylist(playlistNumber) && kind != PlaylistMutationKind.reordered) {
+      for (final number in await listPlaylistNumbers()) {
+        if (isFavoritesPlaylist(number) || !(await playlistSortState(number)).favoritesFirst) continue;
+        await _serialize(number, () async {
+          await _writeTracks(number, await _ensurePlaylistFile(number), await readPlaylistTracks(number));
+          await _publish(number, PlaylistMutationKind.reordered);
+        });
+      }
+    }
   }
 
   Future<String> readTextFromPlaylist(int playlistNumber) async {

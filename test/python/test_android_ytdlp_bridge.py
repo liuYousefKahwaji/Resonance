@@ -64,6 +64,29 @@ class EventSink:
 
 
 class AndroidYtdlpBridgeTests(unittest.TestCase):
+    def test_playlist_library_reads_all_saved_playlists_independently_of_home(self):
+        class FakeMusic:
+            def get_library_playlists(self, limit):
+                self_limit.append(limit)
+                return [
+                    *[{"playlistId": f"PL{i}", "title": f"Playlist {i}", "count": i,
+                       "thumbnails": [{"url": "small"}, {"url": "large"}]} for i in range(60)],
+                    {"playlistId": "PL1", "title": "Duplicate"}, {"title": "Unplayable"}, None,
+                ]
+
+            def get_home(self, **_):
+                raise AssertionError("Library must not wait for Home")
+
+        self_limit = []
+        with patch.object(bridge, "_build_authenticated_ytmusic", return_value=FakeMusic()) as builder:
+            shelf = json.loads(bridge.get_music_library("private-cookie-copy"))["shelves"][0]
+        builder.assert_called_once_with("private-cookie-copy")
+        self.assertEqual(self_limit, [None])
+        self.assertEqual(shelf["title"], "Playlist Library")
+        self.assertEqual(len(shelf["items"]), 60)
+        self.assertEqual(shelf["items"][0]["thumbnail"], "large")
+        self.assertNotIn("private-cookie-copy", json.dumps(shelf))
+
     def setUp(self):
         FakeYoutubeDL.calls = []
         FakeCookieJar.header = None

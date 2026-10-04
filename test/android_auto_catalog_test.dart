@@ -19,10 +19,12 @@ void main() {
     final catalog = AndroidAutoCatalog(files: files);
 
     final root = await catalog.children(AudioService.browsableRootId);
-    expect(root, hasLength(1));
-    expect(root.single.playable, isFalse);
-    expect((await catalog.item(root.single.id))?.title, root.single.title);
-    final tracks = await catalog.children(root.single.id);
+    expect(root, hasLength(2));
+    expect(root.first.title, 'Favorites');
+    final ordinary = root.last;
+    expect(ordinary.playable, isFalse);
+    expect((await catalog.item(ordinary.id))?.title, ordinary.title);
+    final tracks = await catalog.children(ordinary.id);
     expect(tracks, hasLength(1));
     expect(tracks.single.title, 'Song');
     expect((await catalog.item(tracks.single.id))?.title, 'Song');
@@ -33,7 +35,7 @@ void main() {
     expect((await catalog.resolve(tracks.single.id))?.index, 1);
 
     await files.reorderPlaylistNumber(1, [audio.path, other.path, audio.path]);
-    final duplicateRows = await catalog.children(root.single.id);
+    final duplicateRows = await catalog.children(ordinary.id);
     expect(duplicateRows[0].id, isNot(duplicateRows[2].id));
     expect((await catalog.resolve(duplicateRows[2].id))?.index, 2);
 
@@ -43,8 +45,16 @@ void main() {
 
   test('car media IDs reject malformed locations', () {
     final valid = AndroidAutoCatalog.trackId(1, 'https://example.com/song?a=1');
-    expect(AndroidAutoCatalog.parseTrackId(valid), (playlist: 1, source: 'https://example.com/song?a=1', occurrence: 0));
-    expect(AndroidAutoCatalog.parseTrackId(valid.replaceFirst('track:1:', 'track:0:')), isNull);
+    expect(AndroidAutoCatalog.parseTrackId(valid), (
+      playlist: 1,
+      source: 'https://example.com/song?a=1',
+      occurrence: 0,
+    ));
+    expect(
+      AndroidAutoCatalog.parseTrackId(valid.replaceFirst('track:1:', 'track:0:'))?.playlist,
+      FileService.favoritesPlaylistNumber,
+    );
+    expect(AndroidAutoCatalog.parseTrackId(valid.replaceFirst('track:1:', 'track:-1:')), isNull);
     expect(AndroidAutoCatalog.parseTrackId('resonance:track:1:-1'), isNull);
     expect(AndroidAutoCatalog.parseTrackId('$valid:extra'), isNull);
   });

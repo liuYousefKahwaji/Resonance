@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
@@ -166,7 +165,6 @@ class YoutubeMusicHomeService {
     );
   }
 
-  @visibleForTesting
   YoutubeMusicHome decodeResponse(String raw) {
     final decoded = jsonDecode(raw);
     if (decoded is! Map) throw const FormatException('Invalid YouTube Music home response.');

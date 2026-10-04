@@ -26,6 +26,36 @@ finally:
 
 
 class WindowsYoutubeMusicHomeTests(unittest.TestCase):
+    def test_playlist_library_fetches_all_pages_and_returns_only_unique_valid_cards(self):
+        class FakeMusic:
+            def get_account_info(self):
+                return {"accountName": "Test"}
+
+            def get_library_playlists(self, limit):
+                self_limit.append(limit)
+                return [
+                    *[{"playlistId": f"PL{i}", "title": f"Playlist {i}", "count": i,
+                       "thumbnails": [{"url": "small"}, {"url": "large"}]} for i in range(60)],
+                    {"playlistId": "PL1", "title": "Duplicate"}, {"title": "Unplayable"}, None,
+                ]
+
+            def get_home(self, **_):
+                raise AssertionError("Library must not wait for Home")
+
+        self_limit = []
+        output = io.StringIO()
+        with patch.object(helper, "_build_authenticated_ytmusic", return_value=FakeMusic()), \
+                patch.object(sys, "argv", ["helper", "--browser", "firefox", "--action", "library"]), \
+                redirect_stdout(output):
+            helper.main()
+        shelf = json.loads(output.getvalue())["shelves"][0]
+        self.assertEqual(self_limit, [None])
+        self.assertEqual(shelf["title"], "Playlist Library")
+        self.assertEqual(len(shelf["items"]), 60)
+        self.assertEqual(shelf["items"][0]["thumbnail"], "large")
+        self.assertEqual(shelf["items"][0]["subtitle"], "0 songs")
+        self.assertNotIn("cookies", output.getvalue().lower())
+
     def test_guest_search_requires_no_browser_cookies(self):
         class FakeMusic:
             def __init__(self, language):

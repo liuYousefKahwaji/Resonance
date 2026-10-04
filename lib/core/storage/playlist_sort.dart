@@ -7,27 +7,41 @@ enum PlaylistSortMode { dateAdded, title, random, custom }
 class PlaylistSortState {
   final PlaylistSortMode mode;
   final bool descending;
+  final bool favoritesFirst;
   final int seed;
   final List<String> addedOrder;
 
   const PlaylistSortState({
     this.mode = PlaylistSortMode.dateAdded,
     this.descending = false,
+    this.favoritesFirst = false,
     this.seed = 0,
     this.addedOrder = const [],
   });
 
-  PlaylistSortState copyWith({PlaylistSortMode? mode, bool? descending, int? seed, List<String>? addedOrder}) =>
-      PlaylistSortState(
-        mode: mode ?? this.mode,
-        descending: descending ?? this.descending,
-        seed: seed ?? this.seed,
-        addedOrder: addedOrder ?? this.addedOrder,
-      );
+  PlaylistSortState copyWith({
+    PlaylistSortMode? mode,
+    bool? descending,
+    bool? favoritesFirst,
+    int? seed,
+    List<String>? addedOrder,
+  }) => PlaylistSortState(
+    mode: mode ?? this.mode,
+    descending: descending ?? this.descending,
+    favoritesFirst: favoritesFirst ?? this.favoritesFirst,
+    seed: seed ?? this.seed,
+    addedOrder: addedOrder ?? this.addedOrder,
+  );
 
   static int newSeed() => Random.secure().nextInt(0x7fffffff);
 
-  Map<String, Object> toJson() => {'mode': mode.name, 'descending': descending, 'seed': seed, 'addedOrder': addedOrder};
+  Map<String, Object> toJson() => {
+    'mode': mode.name,
+    'descending': descending,
+    'favoritesFirst': favoritesFirst,
+    'seed': seed,
+    'addedOrder': addedOrder,
+  };
 
   factory PlaylistSortState.fromJson(Map<String, dynamic> json) => PlaylistSortState(
     mode: PlaylistSortMode.values.firstWhere(
@@ -35,6 +49,7 @@ class PlaylistSortState {
       orElse: () => PlaylistSortMode.dateAdded,
     ),
     descending: json['descending'] == true,
+    favoritesFirst: json['favoritesFirst'] == true,
     seed: json['seed'] is int ? json['seed'] as int : 0,
     addedOrder: json['addedOrder'] is List ? (json['addedOrder'] as List).whereType<String>().toList() : [],
   );
@@ -62,8 +77,7 @@ class PlaylistSortState {
     return copyWith(addedOrder: added);
   }
 
-  List<String> sorted(List<String> tracks, {Map<String, String> titles = const {}}) {
-    if (mode == PlaylistSortMode.custom) return List.of(tracks);
+  List<String> sorted(List<String> tracks, {Map<String, String> titles = const {}, Set<String> favorites = const {}}) {
     final indices = List.generate(tracks.length, (i) => i);
     final slots = <String, List<int>>{};
     for (var i = 0; i < addedOrder.length; i++) {
@@ -77,6 +91,11 @@ class PlaylistSortState {
     String randomRank(String track) =>
         randomRanks.putIfAbsent(track, () => sha256.convert(utf8.encode('$seed\u0000$track')).toString());
     indices.sort((a, b) {
+      if (favoritesFirst) {
+        final favoriteOrder = (favorites.contains(tracks[b]) ? 1 : 0) - (favorites.contains(tracks[a]) ? 1 : 0);
+        if (favoriteOrder != 0) return favoriteOrder;
+      }
+      if (mode == PlaylistSortMode.custom) return a.compareTo(b);
       var result = switch (mode) {
         PlaylistSortMode.title => compareAlphanumeric(titles[tracks[a]] ?? tracks[a], titles[tracks[b]] ?? tracks[b]),
         PlaylistSortMode.random => randomRank(tracks[a]).compareTo(randomRank(tracks[b])),

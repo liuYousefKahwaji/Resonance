@@ -196,11 +196,33 @@ def _history(ytmusic, limit):
     return {"tracks": tracks}
 
 
+def _playlist_library(ytmusic):
+    items = []
+    seen = set()
+    for playlist in ytmusic.get_library_playlists(limit=None) or []:
+        if not isinstance(playlist, dict):
+            continue
+        playlist_id = str(playlist.get("playlistId") or "").strip()
+        title = str(playlist.get("title") or "").strip()
+        if not playlist_id or not title or playlist_id in seen:
+            continue
+        seen.add(playlist_id)
+        count = playlist.get("count")
+        items.append({
+            "title": title,
+            "subtitle": f"{count} songs" if count is not None and str(count).strip() else "Playlist",
+            "thumbnail": _thumbnail(playlist),
+            "kind": "playlist",
+            "playlistId": playlist_id,
+        })
+    return {"shelves": [{"title": "Playlist Library", "tracks": [], "items": items}]}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser")
     parser.add_argument("--cookies-file")
-    parser.add_argument("--action", choices=("home", "history", "add-history", "search", "related"), default="home")
+    parser.add_argument("--action", choices=("home", "library", "history", "add-history", "search", "related"), default="home")
     parser.add_argument("--video-id")
     parser.add_argument("--query")
     parser.add_argument("--limit", type=int, default=24)
@@ -246,6 +268,9 @@ def main():
         raise RuntimeError("The selected browser profile is not signed in to YouTube Music")
     if args.action == "history":
         print(json.dumps(_history(ytmusic, args.limit), ensure_ascii=False))
+        return
+    if args.action == "library":
+        print(json.dumps(_playlist_library(ytmusic), ensure_ascii=False))
         return
     home = ytmusic.get_home(limit=max(1, min(args.limit, 80))) or []
     shelves = []

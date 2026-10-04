@@ -26,7 +26,7 @@ class AndroidAutoCatalog {
     if (match == null) return null;
     final playlist = int.tryParse(match[1]!);
     final occurrence = int.tryParse(match[3]!);
-    if (playlist == null || playlist < 1 || occurrence == null) return null;
+    if (playlist == null || playlist < 0 || occurrence == null) return null;
     try {
       final source = utf8.decode(base64Url.decode(base64Url.normalize(match[2]!)));
       if (source.isEmpty) return null;
@@ -51,7 +51,7 @@ class AndroidAutoCatalog {
     }
     if (!parentId.startsWith(playlistPrefix)) return const [];
     final number = int.tryParse(parentId.substring(playlistPrefix.length));
-    if (number == null || number < 1 || !(await files.listPlaylistNumbers()).contains(number)) return const [];
+    if (number == null || number < 0 || !(await files.listPlaylistNumbers()).contains(number)) return const [];
     final tracks = await files.readPlaylistTracks(number);
     final occurrences = <String, int>{};
     final items = <Future<MediaItem>>[];

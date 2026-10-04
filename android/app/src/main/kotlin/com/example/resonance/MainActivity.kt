@@ -338,6 +338,21 @@ class MainActivity : AudioServiceFragmentActivity() {
                         }
                     }
 
+                    "getMusicLibrary" -> {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr("get_music_library", cookiePath).toString()
+                                }
+                                withContext(Dispatchers.Main) { result.success(json) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("MUSIC_LIBRARY_ERROR", e.message, null)
+                                }
+                            }
+                        }
+                    }
+
                     // ── getMusicHistory ───────────────────────────────────
                     "getMusicHistory" -> {
                         val limit = (call.argument<Int>("limit") ?: 100).coerceIn(1, 100)

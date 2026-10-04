@@ -11,6 +11,59 @@ import 'package:resonance/services/suggested_music_service.dart';
 import 'package:resonance/services/download/download_queue_controller.dart';
 
 void main() {
+  testWidgets('playlist library appears above Quick picks without blocking Home', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final library = Completer<YoutubeMusicHomeShelf>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: YoutubeSearchScreen(
+          playlistNumber: 1,
+          playlistName: 'Playlist 1',
+          embedded: true,
+          startOnMusicHome: true,
+          playlistLibraryLoader: () => library.future,
+          youtubeMusicHomeLoader: () async => const YoutubeMusicHome(
+            shelves: [
+              YoutubeMusicHomeShelf(
+                title: 'Quick picks',
+                tracks: [
+                  YoutubeTrack(
+                    title: 'Ready song',
+                    artist: 'Artist',
+                    url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pump();
+    expect(find.text('Ready song'), findsOneWidget);
+    expect(find.text('Playlist Library'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Playlist Library')).dy,
+      lessThan(tester.getTopLeft(find.text('Quick picks')).dy),
+    );
+    library.complete(
+      const YoutubeMusicHomeShelf(
+        title: 'Playlist Library',
+        tracks: [],
+        items: [
+          YoutubeMusicHomeItem(title: 'Saved playlist', subtitle: '20 songs', kind: 'playlist', playlistId: 'PLsaved'),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Saved playlist'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('Saved playlist')).dy, lessThan(tester.getTopLeft(find.text('Quick picks')).dy));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('shows a two-result preview after idle and full results on submit', (tester) async {
     await tester.binding.setSurfaceSize(const Size(900, 1200));
     addTearDown(() => tester.binding.setSurfaceSize(null));

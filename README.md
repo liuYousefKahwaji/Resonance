@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-The current source version is **3.4.5**. Packaged builds are available on the [GitHub Releases page](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
+The current source version is **3.4.8**. Packaged builds are available on the [GitHub Releases page](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 
@@ -28,6 +28,8 @@ The working tree may contain features intended for the next release. See the rel
 
 - Import MP3, WAV, M4A, OGG, Opus, WebM, AAC, and FLAC files.
 - Create, rename, reorder, switch, and delete playlists stored as local M3U8 files.
+- Keep songs in a permanent **Favorites** playlist. Favorites are shared across playlists and marked with a bright gold star or shuffle cue.
+- Sort tracks by name, date added, or a saved random order. **Favorites first** keeps favorites at the top in either ascending or descending order.
 - Search the active playlist by title or artist, with title matches ranked first.
 - Drag files into the Windows app or use the cross-platform file picker.
 - Edit title, artist, and embedded artwork without leaving the library.
@@ -53,6 +55,7 @@ The working tree may contain features intended for the next release. See the rel
 - Convert an existing streamed playlist entry into a local download from its three-dot menu while preserving its position.
 - Display streamed artwork immediately at thumbnail quality, then crossfade to a higher-resolution version when it is ready.
 - Browse authenticated YouTube Music Home shelves such as Quick Picks, Suggestions, and Speed Dial.
+- Browse your saved YouTube Music playlists in **Playlist Library**, above Quick Picks. This shelf loads independently and uses the same playback and import actions as other collections.
 - Open YouTube Music albums and playlists as session queues or import them for streaming or download.
 - Recover stalled Windows streams by resolving a fresh media URL once.
 - Optionally report genuine Resonance YouTube plays to YouTube Music after three seconds. This is off by default.
@@ -80,6 +83,12 @@ The working tree may contain features intended for the next release. See the rel
 - Use artwork-derived player colors, reduced motion, optional tracklist motion blur, and Windows native controls.
 - Move between Discover and the library with gentle page transitions.
 - Responsive layouts adapt the library, player, queue, YouTube shelves, and settings to desktop and mobile widths.
+
+## Favorites
+
+Open a song's three-dot menu and choose **Add to favorites** or **Remove from favorites**. The selection toolbar's gold star changes favorites for the selected songs. To keep every song in an existing playlist, choose **Favorite all tracks** from the playlist menu; when all are favorited, it becomes **Unfavorite all tracks**. The gold Favorites playlist cannot be renamed or deleted; removing a song there unfavorites it everywhere without deleting its audio file.
+
+**Playlist menu → Sort tracks → Favorites first** groups favorites above other songs while applying the selected order within each group. The preference is saved separately for each playlist.
 
 ## Listening history
 

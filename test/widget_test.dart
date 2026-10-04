@@ -13,7 +13,7 @@ void main() {
     addTearDown(() => directory.delete(recursive: true));
     final service = FileService(documentsPathOverride: directory.path);
 
-    expect(await service.listPlaylistNumbers(), [1]);
+    expect(await service.listPlaylistNumbers(), [0, 1]);
     final created = await service.createNextPlaylist();
     expect(created, 2);
     expect(await service.getActivePlaylistNumber(), 2);
@@ -23,7 +23,7 @@ void main() {
 
     final activeAfterDelete = await service.deletePlaylist(created);
     expect(activeAfterDelete, 1);
-    expect(await service.listPlaylistNumbers(), [1]);
+    expect(await service.listPlaylistNumbers(), [0, 1]);
   });
 
   test('deleting playlist 1 promotes the next playlist instead of creating an empty replacement', () async {
@@ -43,7 +43,7 @@ void main() {
     final active = await service.deletePlaylist(1);
 
     expect(active, 1);
-    expect(await service.listPlaylistNumbers(), [1, 3]);
+    expect(await service.listPlaylistNumbers(), [0, 1, 3]);
     expect((await service.getPlaylistNames())[1], 'Keep Me');
     expect(await service.readTextFromPlaylist(1), contains('second-track.mp3'));
     expect(await service.readTextFromPlaylist(1), isNot(contains('Old Main')));

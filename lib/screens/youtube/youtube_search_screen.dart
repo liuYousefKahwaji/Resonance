@@ -27,6 +27,7 @@ import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:resonance/services/youtube/youtube_music_home_service.dart';
+import 'package:resonance/services/youtube/youtube_music_library_service.dart';
 import 'package:resonance/services/youtube/youtube_link_metadata_service.dart';
 import 'package:resonance/services/youtube_playlist_import_service.dart';
 import 'package:resonance/core/youtube/youtube_music_home_models.dart';
@@ -48,6 +49,7 @@ class YoutubeSearchScreen extends StatefulWidget {
   final YoutubeSearchLoader? searchLoader;
   final YoutubeSuggestionsLoader? suggestionsLoader;
   final YoutubeMusicHomeLoader? youtubeMusicHomeLoader;
+  final Future<YoutubeMusicHomeShelf> Function()? playlistLibraryLoader;
   final Duration previewDelay;
   final bool embedded;
   final bool startOnMusicHome;
@@ -63,6 +65,7 @@ class YoutubeSearchScreen extends StatefulWidget {
     this.searchLoader,
     this.suggestionsLoader,
     this.youtubeMusicHomeLoader,
+    this.playlistLibraryLoader,
     this.previewDelay = const Duration(milliseconds: 120),
     this.embedded = false,
     this.startOnMusicHome = false,
@@ -85,6 +88,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   final AndroidYoutubeDownloader _android = AndroidYoutubeDownloader();
   final SuggestedMusicService _suggestions = const SuggestedMusicService();
   final YoutubeMusicHomeService _youtubeMusicHome = const YoutubeMusicHomeService();
+  final YoutubeMusicLibraryService _playlistLibrary = const YoutubeMusicLibraryService();
   final PlaylistProfileBuilder _profileBuilder = PlaylistProfileBuilder();
   List<YoutubeTrack> _results = const [];
   bool _loading = false;
@@ -103,6 +107,9 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   YoutubeMusicHome? _youtubeMusicHomeData;
   bool _youtubeMusicHomeLoading = false;
   String? _youtubeMusicHomeError;
+  YoutubeMusicHomeShelf? _playlistLibraryData;
+  bool _playlistLibraryLoading = false;
+  String? _playlistLibraryError;
   int _refreshGeneration = 0;
   int _searchGeneration = 0;
   int _suggestionGeneration = 0;
@@ -186,6 +193,10 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       unawaited(_loadSuggestions());
     } else if (_suggestionMode == _SuggestionMode.youtubeMusic && _youtubeMusicHomeData == null) {
       unawaited(_loadYoutubeMusicHome());
+    } else if (_suggestionMode == _SuggestionMode.youtubeMusic &&
+        _playlistLibraryData == null &&
+        _usesPlaylistLibrary) {
+      unawaited(_loadPlaylistLibrary(_homeGeneration));
     }
   }
 
@@ -194,6 +205,8 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     setState(() => _suggestionMode = mode);
     if (mode == _SuggestionMode.youtubeMusic && _youtubeMusicHomeData == null) {
       unawaited(_loadYoutubeMusicHome());
+    } else if (mode == _SuggestionMode.youtubeMusic && _playlistLibraryData == null && _usesPlaylistLibrary) {
+      unawaited(_loadPlaylistLibrary(_homeGeneration));
     } else if (mode == _SuggestionMode.resonance && _suggestionProfile == null && !_suggestionLoading) {
       unawaited(_loadSuggestions());
     }
@@ -202,6 +215,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   Future<void> _loadYoutubeMusicHome({bool refresh = false}) async {
     if (_controller.text.trim().isNotEmpty) return;
     final generation = ++_homeGeneration;
+    if (_usesPlaylistLibrary) unawaited(_loadPlaylistLibrary(generation, refresh: refresh));
     setState(() {
       _youtubeMusicHomeLoading = true;
       _youtubeMusicHomeError = null;
@@ -242,6 +256,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
               ? error.userMessage
               : 'Could not load YouTube Music home right now.';
         }
+        if (error is YoutubeFailure && error.isAccessFailure) _playlistLibraryData = null;
       });
     }
   }
@@ -251,6 +266,82 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       context.read<PlayerHandler>().warmStreamCandidates(
         home.shelves.expand((shelf) => shelf.tracks.map((track) => track.url)),
       ),
+    );
+  }
+
+  bool get _usesPlaylistLibrary => widget.youtubeMusicHomeLoader == null || widget.playlistLibraryLoader != null;
+
+  Future<void> _loadPlaylistLibrary(int generation, {bool refresh = false}) async {
+    final access = YoutubeAccessService.active;
+    final revision = access?.revision;
+    bool isCurrent() =>
+        mounted &&
+        generation == _homeGeneration &&
+        _suggestionMode == _SuggestionMode.youtubeMusic &&
+        (widget.playlistLibraryLoader != null ||
+            (identical(access, YoutubeAccessService.active) && access?.revision == revision));
+    setState(() {
+      _playlistLibraryLoading = true;
+      _playlistLibraryError = null;
+    });
+    try {
+      if (!refresh && widget.playlistLibraryLoader == null && _playlistLibraryData == null) {
+        final cached = await _playlistLibrary.loadCached();
+        if (!isCurrent()) return;
+        if (cached != null) setState(() => _playlistLibraryData = cached);
+      }
+      final data = await (widget.playlistLibraryLoader?.call() ?? _playlistLibrary.fetch(forceRefresh: refresh));
+      if (!isCurrent()) return;
+      setState(() {
+        _playlistLibraryData = data;
+        _playlistLibraryLoading = false;
+      });
+    } catch (error) {
+      if (!isCurrent()) return;
+      setState(() {
+        _playlistLibraryLoading = false;
+        _playlistLibraryError = error is YoutubeFailure
+            ? error.userMessage
+            : 'Could not load your playlists. Tap to retry.';
+        if (error is YoutubeFailure && error.isAccessFailure) _playlistLibraryData = null;
+      });
+    }
+  }
+
+  Widget _buildPlaylistLibrary() {
+    final shelf = _playlistLibraryData;
+    if (shelf != null && shelf.items.isNotEmpty) {
+      return _YoutubeMusicShelf(
+        shelf: shelf,
+        busyUrl: _busyUrl,
+        onPlay: _play,
+        onStream: _stream,
+        onDownload: _download,
+        onPlayCollection: _playCollection,
+        onImportCollection: _importCollection,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Playlist Library',
+          style: Platform.isWindows
+              ? Theme.of(context).textTheme.headlineSmall
+              : Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 10),
+        if (_playlistLibraryLoading)
+          const SizedBox(width: 160, child: LinearProgressIndicator(minHeight: 2))
+        else if (_playlistLibraryError != null)
+          TextButton.icon(
+            onPressed: () => _loadPlaylistLibrary(_homeGeneration, refresh: true),
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            label: Text(_playlistLibraryError!),
+          )
+        else
+          Text('Your saved YouTube Music playlists will appear here.', style: Theme.of(context).textTheme.bodySmall),
+      ],
     );
   }
 
@@ -1057,7 +1148,8 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   }
 
   Widget _buildYoutubeMusicHome() {
-    if (_youtubeMusicHomeLoading && _youtubeMusicHomeData == null) {
+    final hasLibrary = _playlistLibraryData?.items.isNotEmpty == true;
+    if (_youtubeMusicHomeLoading && _youtubeMusicHomeData == null && !hasLibrary) {
       return const _MessageState(
         icon: Icons.music_note_rounded,
         title: 'Loading YouTube Music Home',
@@ -1065,7 +1157,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         loading: true,
       );
     }
-    if (_youtubeMusicHomeError != null) {
+    if (_youtubeMusicHomeError != null && !hasLibrary) {
       final configured = YoutubeAccessService.active?.isConfigured == true;
       return _MessageState(
         icon: configured ? Icons.cloud_off_rounded : Icons.lock_outline_rounded,
@@ -1081,7 +1173,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       );
     }
     final home = _youtubeMusicHomeData;
-    if (home == null || home.isEmpty) {
+    if ((home == null || home.isEmpty) && !hasLibrary) {
       return _MessageState(
         icon: Icons.music_off_rounded,
         title: 'No YouTube Music shelves found',
@@ -1090,27 +1182,32 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         onAction: () => _loadYoutubeMusicHome(refresh: true),
       );
     }
+    final homeShelves = home?.shelves ?? const <YoutubeMusicHomeShelf>[];
+    final libraryOffset = _usesPlaylistLibrary ? 1 : 0;
     final shelves = ListView.separated(
       key: const Key('youtube-music-home-shelves'),
       physics: const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.fromLTRB(Platform.isWindows ? 28 : 16, 4, Platform.isWindows ? 28 : 16, 36),
-      itemCount: home.shelves.length,
+      itemCount: homeShelves.length + libraryOffset,
       separatorBuilder: (_, __) => SizedBox(height: Platform.isWindows ? 30 : 24),
       itemBuilder: (_, index) {
-        final shelf = home.shelves[index];
+        final library = libraryOffset == 1 && index == 0;
+        final shelf = library ? null : homeShelves[index - libraryOffset];
         return Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 1500),
-            child: _YoutubeMusicShelf(
-              shelf: shelf,
-              busyUrl: _busyUrl,
-              onPlay: _play,
-              onStream: _stream,
-              onDownload: _download,
-              onPlayCollection: _playCollection,
-              onImportCollection: _importCollection,
-            ),
+            child: library
+                ? _buildPlaylistLibrary()
+                : _YoutubeMusicShelf(
+                    shelf: shelf!,
+                    busyUrl: _busyUrl,
+                    onPlay: _play,
+                    onStream: _stream,
+                    onDownload: _download,
+                    onPlayCollection: _playCollection,
+                    onImportCollection: _importCollection,
+                  ),
           ),
         );
       },

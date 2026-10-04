@@ -20,11 +20,14 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byType(Switch));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('favorites-first-sort')));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Apply'));
     await tester.pumpAndSettle();
     expect(service.appliedMode, PlaylistSortMode.title);
     expect(service.appliedNumber, 4);
     expect(service.descending, isTrue);
+    expect(service.favoritesFirst, isTrue);
     expect(find.byType(AlertDialog), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -36,7 +39,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Sort tracks'));
     await tester.pumpAndSettle();
-    expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isFalse);
+    expect(
+      tester.widget<CheckboxListTile>(find.widgetWithText(CheckboxListTile, 'Generate a new random order')).value,
+      isFalse,
+    );
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(service.appliedMode, isNull);
@@ -45,7 +51,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Sort tracks'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(Checkbox));
+    await tester.tap(find.text('Generate a new random order'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Apply'));
     await tester.pumpAndSettle();
@@ -87,16 +93,24 @@ class _SortService extends Fake implements FileService {
   int? appliedNumber;
   bool? descending;
   bool? reroll;
+  bool? favoritesFirst;
   _SortService({this.mode = PlaylistSortMode.dateAdded});
 
   @override
   Future<PlaylistSortState> playlistSortState(int number) async => PlaylistSortState(mode: mode);
 
   @override
-  Future<void> sortPlaylist(int number, PlaylistSortMode mode, {bool descending = false, bool reroll = false}) async {
+  Future<void> sortPlaylist(
+    int number,
+    PlaylistSortMode mode, {
+    bool descending = false,
+    bool reroll = false,
+    bool? favoritesFirst,
+  }) async {
     appliedNumber = number;
     appliedMode = mode;
     this.descending = descending;
     this.reroll = reroll;
+    this.favoritesFirst = favoritesFirst;
   }
 }

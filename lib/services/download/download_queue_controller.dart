@@ -188,11 +188,6 @@ class DownloadQueueController extends ChangeNotifier {
   }
 
   Future<void> _finishTrack(DownloadQueueEntry entry, String path, String? videoId) async {
-    if (entry.replaceStream) {
-      await FileService().replaceStreamWithDownload(entry.playlistNumber, entry.track.url, path);
-    } else {
-      await ImportService.importFiles([path], (_) {}, playlistNumber: entry.playlistNumber);
-    }
     if (videoId != null) {
       await const TrackSourceRepository().saveSource(
         localPath: path,
@@ -200,6 +195,11 @@ class DownloadQueueController extends ChangeNotifier {
         method: TrackSourceMethod.downloadedByResonance,
         lastVerifiedAt: DateTime.now().toUtc(),
       );
+    }
+    if (entry.replaceStream) {
+      await FileService().replaceStreamWithDownload(entry.playlistNumber, entry.track.url, path);
+    } else {
+      await ImportService.importFiles([path], (_) {}, playlistNumber: entry.playlistNumber);
     }
     unawaited(
       const LyricsService().prefetch(

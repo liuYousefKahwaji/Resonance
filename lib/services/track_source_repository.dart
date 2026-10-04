@@ -51,6 +51,12 @@ class TrackSourceRepository {
     return record != null && isValidYoutubeVideoId(record.youtubeVideoId) ? record : null;
   }
 
+  /// One snapshot for library-wide identity lookups, without a preference read
+  /// for every visible row or every comparison while sorting.
+  Future<Map<String, String>> youtubeIdsByLocalPath() async => {
+    for (final record in (await _loadRecords()).values) record.localTrackKey: record.youtubeVideoId,
+  };
+
   Future<TrackSourceRecord?> getSourceForYoutubeId(String videoId) async {
     if (!isValidYoutubeVideoId(videoId)) return null;
     final records = await _loadRecords();

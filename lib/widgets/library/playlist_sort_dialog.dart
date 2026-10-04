@@ -10,6 +10,7 @@ Future<bool> showPlaylistSortDialog(NavigatorState navigator, int number, {FileS
   if (!navigator.mounted || context == null || !context.mounted) return false;
   var mode = saved.mode;
   var descending = saved.descending;
+  var favoritesFirst = saved.favoritesFirst;
   var reroll = false;
   final accepted = await showDialog<bool>(
     context: context,
@@ -31,6 +32,14 @@ Future<bool> showPlaylistSortDialog(NavigatorState navigator, int number, {FileS
                   DropdownMenuItem(value: PlaylistSortMode.custom, child: Text('Manual order')),
                 ],
                 onChanged: (value) => setState(() => mode = value!),
+              ),
+              CheckboxListTile(
+                key: const Key('favorites-first-sort'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Favorites first'),
+                subtitle: const Text('Keep favorites at the top in either direction.'),
+                value: favoritesFirst,
+                onChanged: (value) => setState(() => favoritesFirst = value!),
               ),
               if (mode != PlaylistSortMode.custom)
                 SwitchListTile(
@@ -66,6 +75,6 @@ Future<bool> showPlaylistSortDialog(NavigatorState navigator, int number, {FileS
     ),
   );
   if (accepted != true) return false;
-  await service.sortPlaylist(number, mode, descending: descending, reroll: reroll);
+  await service.sortPlaylist(number, mode, descending: descending, reroll: reroll, favoritesFirst: favoritesFirst);
   return true;
 }

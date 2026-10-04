@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:resonance/widgets/library/playlist_sort_dialog.dart';
+import 'package:resonance/widgets/library/favorite_tracks_button.dart';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -44,6 +45,7 @@ import 'package:path/path.dart' as p;
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/music_recognition/music_recognition_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
+import 'package:resonance/services/favorites_repository.dart';
 import 'package:resonance/services/track_selection_service.dart';
 import 'package:resonance/services/companion/companion_client_service.dart';
 import 'package:resonance/services/companion/companion_server_service.dart';
@@ -212,10 +214,13 @@ Future<void> main(List<String> args) async {
     unawaited(DiscordPresenceService().setEnabled(discordEnabled));
   }
 
+  final favorites = FavoritesRepository();
+  await favorites.refresh();
   runApp(
     MultiProvider(
       providers: [
         Provider<PlayerHandler>.value(value: handler),
+        ChangeNotifierProvider<FavoritesRepository>.value(value: favorites),
         ChangeNotifierProvider<YoutubeAccessService>.value(value: youtubeAccessService),
         ChangeNotifierProvider<YoutubeHistoryPreferences>.value(value: youtubeHistoryPreferences),
         ChangeNotifierProvider<DownloadQueueController>.value(value: DownloadQueueController.instance),
@@ -758,6 +763,7 @@ class _MainAppState extends State<MainApp> {
   }
 
   Future<void> _renamePlaylist(int number) async {
+    if (FileService.isFavoritesPlaylist(number)) return;
     final currentName = playlistNames[number] ?? 'Playlist $number';
     final name = await _askForPlaylistName('Rename playlist', currentName);
     if (name == null || name == currentName) return;
@@ -770,7 +776,10 @@ class _MainAppState extends State<MainApp> {
   }
 
   Future<void> _deletePlaylist(int number) async {
-    if (playlistNumbers.length <= 1) return;
+    if (FileService.isFavoritesPlaylist(number) ||
+        playlistNumbers.where((value) => !FileService.isFavoritesPlaylist(value)).length <= 1) {
+      return;
+    }
     final navigatorContext = _navigatorKey.currentState?.overlay?.context;
     if (navigatorContext == null) return;
     final name = playlistNames[number] ?? 'Playlist $number';
@@ -808,19 +817,31 @@ class _MainAppState extends State<MainApp> {
           children: [
             ListTile(
               leading: const Icon(Icons.queue_music_rounded),
-              title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+              title: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: FileService.isFavoritesPlaylist(number)
+                    ? const TextStyle(color: FavoritesRepository.gold)
+                    : null,
+              ),
               subtitle: const Text('Playlist actions'),
             ),
             ListTile(
+              enabled: !FileService.isFavoritesPlaylist(number),
               leading: const Icon(Icons.edit_rounded),
               title: const Text('Rename'),
-              onTap: () => Navigator.pop(sheetContext, _PlaylistActionType.rename),
+              onTap: FileService.isFavoritesPlaylist(number)
+                  ? null
+                  : () => Navigator.pop(sheetContext, _PlaylistActionType.rename),
             ),
             ListTile(
-              enabled: playlistNumbers.length > 1,
+              enabled: !FileService.isFavoritesPlaylist(number) && playlistNumbers.length > 2,
               leading: const Icon(Icons.delete_outline_rounded),
               title: const Text('Delete'),
-              onTap: playlistNumbers.length > 1 ? () => Navigator.pop(sheetContext, _PlaylistActionType.delete) : null,
+              onTap: !FileService.isFavoritesPlaylist(number) && playlistNumbers.length > 2
+                  ? () => Navigator.pop(sheetContext, _PlaylistActionType.delete)
+                  : null,
             ),
             const SizedBox(height: 8),
           ],
@@ -839,6 +860,7 @@ class _MainAppState extends State<MainApp> {
       case _PlaylistActionType.select:
       case _PlaylistActionType.create:
       case _PlaylistActionType.sort:
+      case _PlaylistActionType.favoriteAll:
         return;
     }
   }
@@ -1931,7 +1953,11 @@ class _MainAppState extends State<MainApp> {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
-                    color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                    color: FileService.isFavoritesPlaylist(activePlaylistNumber)
+                        ? FavoritesRepository.gold
+                        : isDark
+                        ? const Color(0xFF64748B)
+                        : const Color(0xFF94A3B8),
                     letterSpacing: 0.3,
                   ),
                 ),
@@ -2016,6 +2042,12 @@ class _MainAppState extends State<MainApp> {
                 onPressed: allSelected ? _clearTrackSelection : _selectAllTracks,
                 icon: Icon(allSelected ? Icons.deselect_rounded : Icons.select_all_rounded),
                 tooltip: allSelected ? 'Select none' : 'Select all',
+              ),
+              FavoriteTracksButton(
+                key: const Key('favorite-selected-tracks'),
+                tracks: selectedTracks(playlist, _selectedTrackIndices),
+                onPressed: (favorite) =>
+                    unawaited(_setTracksFavorite(selectedTracks(playlist, _selectedTrackIndices), favorite)),
               ),
               if (!compact) ...[
                 IconButton(
@@ -2317,68 +2349,96 @@ class _MainAppState extends State<MainApp> {
     );
   }
 
-  Widget _buildPlaylistMenu() => PopupMenuButton<_PlaylistMenuAction>(
-    tooltip: 'Switch playlist',
-    icon: const Icon(Icons.queue_music_rounded),
-    onSelected: (action) {
-      switch (action.type) {
-        case _PlaylistActionType.select:
-          unawaited(_switchPlaylist(action.playlistNumber!));
-        case _PlaylistActionType.create:
-          unawaited(_createPlaylist());
-        case _PlaylistActionType.rename:
-          unawaited(_renameActivePlaylist());
-        case _PlaylistActionType.delete:
-          unawaited(_deleteActivePlaylist());
-        case _PlaylistActionType.sort:
-          unawaited(_sortActivePlaylist());
-      }
-    },
-    itemBuilder: (menuContext) => [
-      for (final number in playlistNumbers)
-        PopupMenuItem<_PlaylistMenuAction>(
-          value: _PlaylistMenuAction.select(number),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onLongPress: () {
-              Navigator.pop(menuContext);
-              Future.microtask(() => _showPlaylistActions(number));
-            },
-            child: Row(
-              children: [
-                Icon(
-                  number == activePlaylistNumber
-                      ? Icons.radio_button_checked_rounded
-                      : Icons.radio_button_unchecked_rounded,
-                  size: 18,
-                ),
-                const SizedBox(width: 8),
-                Flexible(child: Text(playlistNames[number] ?? 'Playlist $number', overflow: TextOverflow.ellipsis)),
-              ],
+  Widget _buildPlaylistMenu() {
+    final favorites = context.watch<FavoritesRepository?>();
+    final allFavorited = favorites?.allFavorite(playlist) ?? false;
+    return PopupMenuButton<_PlaylistMenuAction>(
+      tooltip: 'Switch playlist',
+      icon: const Icon(Icons.queue_music_rounded),
+      onSelected: (action) {
+        switch (action.type) {
+          case _PlaylistActionType.select:
+            unawaited(_switchPlaylist(action.playlistNumber!));
+          case _PlaylistActionType.create:
+            unawaited(_createPlaylist());
+          case _PlaylistActionType.rename:
+            unawaited(_renameActivePlaylist());
+          case _PlaylistActionType.delete:
+            unawaited(_deleteActivePlaylist());
+          case _PlaylistActionType.sort:
+            unawaited(_sortActivePlaylist());
+          case _PlaylistActionType.favoriteAll:
+            unawaited(_favoriteAllTracks());
+        }
+      },
+      itemBuilder: (menuContext) => [
+        for (final number in playlistNumbers)
+          PopupMenuItem<_PlaylistMenuAction>(
+            value: _PlaylistMenuAction.select(number),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onLongPress: () {
+                Navigator.pop(menuContext);
+                Future.microtask(() => _showPlaylistActions(number));
+              },
+              child: Row(
+                children: [
+                  Icon(
+                    FileService.isFavoritesPlaylist(number)
+                        ? Icons.star_rounded
+                        : number == activePlaylistNumber
+                        ? Icons.radio_button_checked_rounded
+                        : Icons.radio_button_unchecked_rounded,
+                    size: 18,
+                    color: FileService.isFavoritesPlaylist(number) ? FavoritesRepository.gold : null,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      playlistNames[number] ?? 'Playlist $number',
+                      overflow: TextOverflow.ellipsis,
+                      style: FileService.isFavoritesPlaylist(number)
+                          ? const TextStyle(color: FavoritesRepository.gold)
+                          : null,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          enabled: playlist.isNotEmpty,
+          value: const _PlaylistMenuAction(_PlaylistActionType.sort),
+          child: const _ToolbarMenuLabel(icon: Icons.sort_rounded, label: 'Sort tracks'),
         ),
-      const PopupMenuDivider(),
-      PopupMenuItem(
-        enabled: playlist.isNotEmpty,
-        value: const _PlaylistMenuAction(_PlaylistActionType.sort),
-        child: const _ToolbarMenuLabel(icon: Icons.sort_rounded, label: 'Sort tracks'),
-      ),
-      const PopupMenuItem(
-        value: _PlaylistMenuAction(_PlaylistActionType.create),
-        child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: 'New playlist'),
-      ),
-      const PopupMenuItem(
-        value: _PlaylistMenuAction(_PlaylistActionType.rename),
-        child: _ToolbarMenuLabel(icon: Icons.edit_rounded, label: 'Rename current'),
-      ),
-      PopupMenuItem(
-        value: const _PlaylistMenuAction(_PlaylistActionType.delete),
-        enabled: playlistNumbers.length > 1,
-        child: const _ToolbarMenuLabel(icon: Icons.delete_outline_rounded, label: 'Delete current'),
-      ),
-    ],
-  );
+        PopupMenuItem(
+          enabled: playlist.isNotEmpty,
+          value: const _PlaylistMenuAction(_PlaylistActionType.favoriteAll),
+          child: _ToolbarMenuLabel(
+            icon: allFavorited ? Icons.star_rounded : Icons.star_outline_rounded,
+            label: allFavorited ? 'Unfavorite all tracks' : 'Favorite all tracks',
+            color: FavoritesRepository.gold,
+          ),
+        ),
+        const PopupMenuItem(
+          value: _PlaylistMenuAction(_PlaylistActionType.create),
+          child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: 'New playlist'),
+        ),
+        if (!FileService.isFavoritesPlaylist(activePlaylistNumber))
+          const PopupMenuItem(
+            value: _PlaylistMenuAction(_PlaylistActionType.rename),
+            child: _ToolbarMenuLabel(icon: Icons.edit_rounded, label: 'Rename current'),
+          ),
+        if (!FileService.isFavoritesPlaylist(activePlaylistNumber))
+          PopupMenuItem(
+            value: const _PlaylistMenuAction(_PlaylistActionType.delete),
+            enabled: playlistNumbers.length > 2,
+            child: const _ToolbarMenuLabel(icon: Icons.delete_outline_rounded, label: 'Delete current'),
+          ),
+      ],
+    );
+  }
 
   Future<void> _sortActivePlaylist() async {
     final navigator = _navigatorKey.currentState;
@@ -2388,7 +2448,37 @@ class _MainAppState extends State<MainApp> {
     } catch (error) {
       final promptContext = navigator.overlay?.context;
       if (mounted && promptContext != null && promptContext.mounted) {
-        ScaffoldMessenger.maybeOf(promptContext)?.showSnackBar(SnackBar(content: Text('Could not sort tracks: $error')));
+        ScaffoldMessenger.maybeOf(
+          promptContext,
+        )?.showSnackBar(SnackBar(content: Text('Could not sort tracks: $error')));
+      }
+    }
+  }
+
+  Future<void> _favoriteAllTracks() async {
+    final tracks = List<String>.of(playlist);
+    final favorites = context.read<FavoritesRepository?>();
+    await _setTracksFavorite(tracks, !(favorites?.allFavorite(tracks) ?? false));
+  }
+
+  Future<void> _setTracksFavorite(List<String> tracks, bool favorite) async {
+    if (tracks.isEmpty) return;
+    final favorites = context.read<FavoritesRepository?>();
+    final promptContext = _navigatorKey.currentState?.overlay?.context;
+    try {
+      if (favorites != null) {
+        await favorites.setTracks(tracks, favorite);
+      } else {
+        await FileService().setTracksFavorite(tracks, favorite);
+      }
+      if (mounted && promptContext != null && promptContext.mounted) {
+        ScaffoldMessenger.of(promptContext).showSnackBar(
+          SnackBar(content: Text(favorite ? 'Tracks added to Favorites.' : 'Tracks removed from Favorites.')),
+        );
+      }
+    } catch (error) {
+      if (mounted && promptContext != null && promptContext.mounted) {
+        ScaffoldMessenger.of(promptContext).showSnackBar(SnackBar(content: Text('Could not change favorites: $error')));
       }
     }
   }
@@ -2415,7 +2505,7 @@ class _ToolbarMenuLabel extends StatelessWidget {
   );
 }
 
-enum _PlaylistActionType { select, create, rename, delete, sort }
+enum _PlaylistActionType { select, create, rename, delete, sort, favoriteAll }
 
 enum _SelectionAction { copy, move, remove, delete }
 
