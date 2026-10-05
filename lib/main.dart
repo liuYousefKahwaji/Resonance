@@ -147,6 +147,7 @@ Future<void> main(List<String> args) async {
   } else {
     handler = await AudioService.init<PlayerHandler>(
       builder: () => PlayerHandler(
+        audioSession: session,
         youtubeAccessService: youtubeAccessService,
         youtubeHistoryCoordinator: youtubeHistoryCoordinator,
         localHistoryCoordinator: localHistoryCoordinator,

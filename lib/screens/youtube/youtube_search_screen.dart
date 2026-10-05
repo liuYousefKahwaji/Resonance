@@ -13,6 +13,7 @@ import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/models/download_queue_entry.dart';
 import 'package:resonance/screens/external_playlist/external_playlist_import_screen.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
+import 'package:resonance/screens/youtube/youtube_collection_screen.dart';
 import 'package:resonance/services/external_playlist_service.dart';
 import 'package:resonance/services/youtube_stats_service.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
@@ -50,6 +51,7 @@ class YoutubeSearchScreen extends StatefulWidget {
   final YoutubeSuggestionsLoader? suggestionsLoader;
   final YoutubeMusicHomeLoader? youtubeMusicHomeLoader;
   final Future<YoutubeMusicHomeShelf> Function()? playlistLibraryLoader;
+  final YoutubeCollectionLoader? collectionLoader;
   final Duration previewDelay;
   final bool embedded;
   final bool startOnMusicHome;
@@ -66,6 +68,7 @@ class YoutubeSearchScreen extends StatefulWidget {
     this.suggestionsLoader,
     this.youtubeMusicHomeLoader,
     this.playlistLibraryLoader,
+    this.collectionLoader,
     this.previewDelay = const Duration(milliseconds: 120),
     this.embedded = false,
     this.startOnMusicHome = false,
@@ -771,40 +774,24 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   }
 
   Future<void> _playCollection(YoutubeMusicHomeItem item) async {
-    final playlistUrl = item.playlistUrl;
-    if (playlistUrl == null || _busyUrl != null) return;
-    setState(() => _busyUrl = playlistUrl);
-    try {
-      final playlist = await ExternalPlaylistService().fetch(playlistUrl);
-      final tracks = <YoutubeTrack>[
-        for (final entry in playlist.tracks)
-          if (entry.sourceId case final videoId?)
-            if (TrackSourceRepository.isValidYoutubeVideoId(videoId))
-              YoutubeTrack(
-                title: entry.title,
-                artist: entry.artistLabel,
-                url: TrackSourceRepository.canonicalUrlFor(videoId),
-                durationSeconds: entry.duration?.inSeconds,
-                thumbnailUrl: TrackSourceRepository.thumbnailUrlFor(videoId),
-              ),
-      ];
-      if (tracks.isEmpty) {
-        throw const ExternalPlaylistException('This YouTube Music collection has no playable public tracks.');
-      }
-      unawaited(
-        _rememberSource(tracks.first, TrackSourceMethod.manuallySelected).catchError((Object error) {
-          debugPrint('Could not remember YouTube source: $error');
-        }),
-      );
-      if (!mounted) return;
-      await _playStandaloneQueue(tracks.first, tracks, relatedQueue: false);
-    } catch (error) {
-      if (mounted) {
-        await showYoutubeFailure(context, error, sourceUrl: playlistUrl, actionLabel: 'Could not play collection');
-      }
-    } finally {
-      if (mounted) setState(() => _busyUrl = null);
-    }
+    if (item.playlistUrl == null) return;
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => YoutubeCollectionScreen(
+          item: item,
+          loader: widget.collectionLoader,
+          onPlay: (selected, tracks) async {
+            unawaited(
+              _rememberSource(selected, TrackSourceMethod.manuallySelected).catchError((Object error) {
+                debugPrint('Could not remember YouTube source: $error');
+              }),
+            );
+            await _playStandaloneQueue(selected, tracks, relatedQueue: false);
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _importCollection(YoutubeMusicHomeItem item, YoutubePlaylistImportMode mode) async {
