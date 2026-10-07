@@ -6,6 +6,7 @@ import 'package:resonance/core/youtube/youtube_cookie_validator.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/android_youtube_access_backend.dart';
 import 'package:resonance/services/youtube/youtube_access_backend.dart';
+import 'package:resonance/services/youtube/windows_chromium_connector.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 typedef WindowsAccessTester = Future<void> Function(String browserId, String sourceUrl);
@@ -18,10 +19,12 @@ class YoutubeAccessService extends ChangeNotifier {
     SharedPreferences? preferences,
     bool? isWindows,
     bool? isAndroid,
+    WindowsChromiumConnector? windowsConnector,
   }) : _androidBackend = androidBackend ?? AndroidYoutubeAccessBackend(),
        _preferences = preferences,
        _isWindows = isWindows ?? Platform.isWindows,
-       _isAndroid = isAndroid ?? Platform.isAndroid;
+       _isAndroid = isAndroid ?? Platform.isAndroid,
+       windowsConnector = windowsConnector ?? WindowsChromiumConnector();
 
   // Resolve the first current search result instead of depending on one
   // hard-coded video which may later be removed or made private.
@@ -34,6 +37,7 @@ class YoutubeAccessService extends ChangeNotifier {
   static const _windowsCookiePathKey = 'youtube_access.windows_cookie_path';
 
   final YoutubeAccessBackend _androidBackend;
+  final WindowsChromiumConnector windowsConnector;
   SharedPreferences? _preferences;
   final bool _isWindows;
   final bool _isAndroid;
@@ -109,6 +113,8 @@ class YoutubeAccessService extends ChangeNotifier {
 
   List<String> windowsAuthArguments({String? overrideBrowserId}) {
     final browser = overrideBrowserId ?? windowsBrowserId;
+    // The process owner must materialize and clean a lease for this source.
+    if (WindowsChromiumConnector.isSource(browser)) return const [];
     if (browser != null) return ['--cookies-from-browser', browser];
     final cookiePath = windowsCookiePath;
     return cookiePath == null ? const [] : ['--cookies', cookiePath];
@@ -126,6 +132,7 @@ class YoutubeAccessService extends ChangeNotifier {
     final previous = _status;
     _setTesting(YoutubeAccessMethod.windowsBrowser, browserId: browserId);
     try {
+      if (WindowsChromiumConnector.isSource(browserId)) await windowsConnector.activate(browserId);
       await tester(browserId, sourceUrl ?? fallbackTestTarget);
       await _windowsHomeTester?.call(browserId);
       final now = DateTime.now();
@@ -144,7 +151,13 @@ class YoutubeAccessService extends ChangeNotifier {
         revision: nextRevision,
       );
       notifyListeners();
+      if (previous.browserId != browserId && WindowsChromiumConnector.isSource(previous.browserId)) {
+        await windowsConnector.revoke(previous.browserId!);
+      }
     } catch (error) {
+      if (browserId != previous.browserId && WindowsChromiumConnector.isSource(browserId)) {
+        await windowsConnector.revoke(browserId);
+      }
       final failure = YoutubeFailureClassifier.classify(error, authenticated: true, sourceUrl: sourceUrl);
       _status = previous.copyWith(
         state: failure.kind == YoutubeFailureKind.sessionRejected
@@ -218,6 +231,7 @@ class YoutubeAccessService extends ChangeNotifier {
         revision: _status.revision + 1,
       );
       notifyListeners();
+      if (WindowsChromiumConnector.isSource(previous.browserId)) await windowsConnector.revoke(previous.browserId!);
     } catch (error) {
       _windowsCookiePath = previousPath;
       final failure = YoutubeFailureClassifier.classify(error, authenticated: true, sourceUrl: sourceUrl);
@@ -281,6 +295,7 @@ class YoutubeAccessService extends ChangeNotifier {
 
   Future<void> clear() async {
     final nextRevision = _status.revision + 1;
+    if (WindowsChromiumConnector.isSource(windowsBrowserId)) await windowsConnector.revoke(windowsBrowserId!);
     if (_status.method == YoutubeAccessMethod.androidCookieFile || _isAndroid) {
       await _androidBackend.clearCookies();
     }
@@ -336,7 +351,7 @@ class YoutubeAccessService extends ChangeNotifier {
       'chromium': 'Chromium',
       'whale': 'Whale',
     };
-    return names[id?.split(':').first] ?? 'selected';
+    return names[id?.split(':').first.split('+').first] ?? 'selected';
   }
 
   void _setTesting(YoutubeAccessMethod method, {String? browserId}) {

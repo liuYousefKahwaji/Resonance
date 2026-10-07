@@ -35,6 +35,7 @@ class YoutubeTrack {
   final bool isLive;
   final bool isShort;
   final String? availability;
+  final String? artistId;
 
   /// Compatibility alias for older transfer/search callers.
   String get uploader => artist;
@@ -50,6 +51,7 @@ class YoutubeTrack {
     this.isLive = false,
     this.isShort = false,
     this.availability,
+    this.artistId,
   });
 
   String? get videoId {
@@ -76,6 +78,7 @@ class YoutubeTrack {
     'isLive': isLive,
     'isShort': isShort,
     if (availability != null) 'availability': availability,
+    if (artistId != null) 'artistId': artistId,
   };
 
   factory YoutubeTrack.fromCacheJson(Map<String, dynamic> json) => YoutubeTrack(
@@ -89,6 +92,7 @@ class YoutubeTrack {
     isLive: json['isLive'] == true,
     isShort: json['isShort'] == true,
     availability: json['availability']?.toString(),
+    artistId: json['artistId']?.toString(),
   );
 
   String get formattedDuration {
@@ -118,6 +122,7 @@ class YoutubeTrack {
     isLive: isLive,
     isShort: isShort,
     availability: availability,
+    artistId: artistId,
   );
 
   factory YoutubeTrack.fromJson(Map<String, dynamic> json) {
@@ -143,6 +148,7 @@ class YoutubeTrack {
           json['webpage_url']?.toString().contains('/shorts/') == true ||
           json['original_url']?.toString().contains('/shorts/') == true,
       availability: json['availability']?.toString(),
+      artistId: _firstNonEmpty([json['artistId'], json['channel_id']]),
     );
   }
 

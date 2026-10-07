@@ -1,17 +1,24 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/windows_browser_detector.dart';
+import 'package:resonance/services/youtube/windows_chromium_connector.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:resonance/services/youtube/youtube_history_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+const _browserSessionNote =
+    'Resonance tries your default browser directly. Some browsers protect their saved sessions and may need the optional browser connector.';
+
+enum _BrowserFallback { retry, connector }
 
 class YoutubeAccessScreen extends StatefulWidget {
   const YoutubeAccessScreen({super.key, this.sourceUrl, this.windows, this.android, this.browserDetector});
@@ -72,13 +79,13 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
       if (_isWindows) _buildWindows(service) else if (_isAndroid) _buildAndroid(service),
     ];
     return Scaffold(
-      appBar: AppBar(title: const Text('YouTube access')),
+      appBar: AppBar(title: Text(context.tr("YouTube access"))),
       body: SafeArea(
         child: Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: _isWindows ? 720 : double.infinity),
-            child: ListView(padding: const EdgeInsets.fromLTRB(16, 12, 16, 28), children: content),
+            child: ListView(padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 28), children: content),
           ),
         ),
       ),
@@ -88,12 +95,14 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
   Widget _buildWindows(YoutubeAccessService service) {
     if (service.status.method == YoutubeAccessMethod.windowsCookieFile) {
       return _AccessCard(
-        title: 'Imported cookies.txt',
+        title: context.tr("Imported cookies.txt"),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'yt-dlp will read this selected Netscape cookies.txt file. Treat it like a password and keep it in a private location.',
+            Text(
+              context.tr(
+                "yt-dlp will read this selected Netscape cookies.txt file. Treat it like a password and keep it in a private location.",
+              ),
             ),
             const SizedBox(height: 14),
             Wrap(
@@ -103,17 +112,20 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
                 FilledButton.icon(
                   onPressed: _busy ? null : () => _run(() => service.testCurrent(sourceUrl: widget.sourceUrl)),
                   icon: const Icon(Icons.verified_rounded),
-                  label: const Text('Test access'),
+                  label: Text(context.tr("Test access")),
                 ),
                 OutlinedButton(
                   onPressed: _busy ? null : () => _importWindowsCookies(service),
-                  child: const Text('Replace cookies.txt'),
+                  child: Text(context.tr("Replace cookies.txt")),
                 ),
                 OutlinedButton(
                   onPressed: _busy ? null : () => _connect(service, null),
-                  child: const Text('Use browser instead'),
+                  child: Text(context.tr("Use browser instead")),
                 ),
-                TextButton(onPressed: _busy ? null : () => _confirmClear(service), child: const Text('Disconnect')),
+                TextButton(
+                  onPressed: _busy ? null : () => _confirmClear(service),
+                  child: Text(context.tr("Disconnect")),
+                ),
               ],
             ),
           ],
@@ -122,13 +134,19 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
     }
     if (service.isConfigured) {
       return _AccessCard(
-        title: 'Browser session',
+        title: context.tr("Browser session"),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'yt-dlp reads ${YoutubeAccessService.browserDisplayName(service.windowsBrowserId)} cookies locally when Resonance uses YouTube. '
-              'Resonance remembers the connected browser profile and reads it live; it does not save a Windows cookie file or your Google password.',
+              WindowsChromiumConnector.isSource(service.windowsBrowserId)
+                  ? context.tr(
+                      'The {0} connector keeps your YouTube session refreshed. Resonance stores an encrypted copy on this PC; your Google password is never saved.',
+                      [YoutubeAccessService.browserDisplayName(service.windowsBrowserId)],
+                    )
+                  : context.tr(
+                      'Resonance reads your connected browser profile locally when you use YouTube. Your Google password is never saved.',
+                    ),
             ),
             const SizedBox(height: 14),
             Wrap(
@@ -138,17 +156,20 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
                 FilledButton.icon(
                   onPressed: _busy ? null : () => _run(() => service.testCurrent(sourceUrl: widget.sourceUrl)),
                   icon: const Icon(Icons.verified_rounded),
-                  label: const Text('Test access'),
+                  label: Text(context.tr("Test access")),
                 ),
                 OutlinedButton(
                   onPressed: _busy ? null : () => _connect(service, service.windowsBrowserId),
-                  child: const Text('Reconnect'),
+                  child: Text(context.tr("Reconnect")),
                 ),
                 OutlinedButton(
                   onPressed: _busy ? null : () => _chooseAndConnect(service),
-                  child: const Text('Choose another browser'),
+                  child: Text(context.tr("Choose another browser")),
                 ),
-                TextButton(onPressed: _busy ? null : () => _confirmClear(service), child: const Text('Disconnect')),
+                TextButton(
+                  onPressed: _busy ? null : () => _confirmClear(service),
+                  child: Text(context.tr("Disconnect")),
+                ),
               ],
             ),
           ],
@@ -156,25 +177,29 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
       );
     }
     return _AccessCard(
-      title: 'Connect your browser',
+      title: context.tr("Connect your browser"),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Open YouTube Music, sign in or complete its verification page, then let Resonance test and remember that browser profile.',
+          Text(
+            context.tr(
+              "Open YouTube Music, sign in or complete its verification page, then let Resonance test and remember that browser profile.",
+            ),
           ),
+          const SizedBox(height: 8),
+          Text(context.tr(_browserSessionNote), style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 14),
           FilledButton.icon(
             onPressed: _busy ? null : () => _connect(service, null),
             icon: const Icon(Icons.open_in_browser_rounded),
-            label: const Text('Connect browser session'),
+            label: Text(context.tr("Connect browser session")),
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             key: const Key('youtube-windows-import-cookies'),
             onPressed: _busy ? null : () => _importWindowsCookies(service),
             icon: const Icon(Icons.file_open_rounded),
-            label: const Text('Import cookies.txt instead'),
+            label: Text(context.tr("Import cookies.txt instead")),
           ),
         ],
       ),
@@ -184,11 +209,11 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
   Widget _buildAndroid(YoutubeAccessService service) {
     if (service.isConfigured && !_showGuide) {
       return _AccessCard(
-        title: 'Imported cookies.txt',
+        title: context.tr("Imported cookies.txt"),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Delete the original cookies.txt from Downloads. Treat it like a password.'),
+            Text(context.tr("Delete the original cookies.txt from Downloads. Treat it like a password.")),
             const SizedBox(height: 14),
             Wrap(
               spacing: 8,
@@ -196,14 +221,20 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
               children: [
                 FilledButton(
                   onPressed: _busy ? null : () => _run(() => service.testCurrent(sourceUrl: widget.sourceUrl)),
-                  child: const Text('Test access'),
+                  child: Text(context.tr("Test access")),
                 ),
                 OutlinedButton(
                   onPressed: _busy ? null : () => _importCookies(service),
-                  child: const Text('Replace cookies'),
+                  child: Text(context.tr("Replace cookies")),
                 ),
-                OutlinedButton(onPressed: () => setState(() => _showGuide = true), child: const Text('Show guide')),
-                TextButton(onPressed: _busy ? null : () => _confirmClear(service), child: const Text('Clear cookies')),
+                OutlinedButton(
+                  onPressed: () => setState(() => _showGuide = true),
+                  child: Text(context.tr("Show guide")),
+                ),
+                TextButton(
+                  onPressed: _busy ? null : () => _confirmClear(service),
+                  child: Text(context.tr("Clear cookies")),
+                ),
               ],
             ),
           ],
@@ -214,7 +245,7 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
       children: [
         _TutorialCard(
           number: 1,
-          title: 'Install Firefox',
+          title: context.tr("Install Firefox"),
           body:
               'Install Firefox for Android. Resonance uses Firefox because it can export a YouTube session as the cookie file yt-dlp understands.',
           actions: [
@@ -226,13 +257,13 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
                           ? 'https://support.mozilla.org/en-US/products/mobile'
                           : 'https://play.google.com/store/apps/details?id=org.mozilla.firefox',
                     ),
-              child: Text(_firefoxInstalled ? 'Open Firefox' : 'Install Firefox'),
+              child: Text(_firefoxInstalled ? context.tr("Open Firefox") : context.tr("Install Firefox")),
             ),
           ],
         ),
         _TutorialCard(
           number: 2,
-          title: 'Keep YouTube inside Firefox',
+          title: context.tr("Keep YouTube inside Firefox"),
           body:
               'In Firefox, open ⋮ → Settings → Advanced → Open links in apps, then choose Never. '
               'This stops YouTube links from jumping into the YouTube app while you sign in.\n\n'
@@ -244,7 +275,7 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
                   : () => _openAndroidUrl(
                       'https://support.mozilla.org/en-US/kb/set-firefox-android-open-links-native-apps',
                     ),
-              child: const Text('View Firefox instructions'),
+              child: Text(context.tr("View Firefox instructions")),
             ),
             OutlinedButton(
               onPressed: _busy
@@ -252,13 +283,13 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
                   : () => _run(() async {
                       await context.read<YoutubeAccessService>().androidBackend.openYoutubeAppSettings();
                     }),
-              child: const Text('YouTube app settings'),
+              child: Text(context.tr("YouTube app settings")),
             ),
           ],
         ),
         _TutorialCard(
           number: 3,
-          title: 'Install cookies.txt',
+          title: context.tr("Install cookies.txt"),
           body:
               'Install the “cookies.txt” add-on by Lennon Hill from Mozilla Add-ons. During installation, allow it in private browsing. '
               'This is a third-party add-on and requests access to site data, tabs, downloads, and the clipboard.',
@@ -268,13 +299,13 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
               onPressed: _busy
                   ? null
                   : () => _openAndroidUrl('https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/'),
-              child: const Text('Open cookies.txt add-on'),
+              child: Text(context.tr("Open cookies.txt add-on")),
             ),
           ],
         ),
         _TutorialCard(
           number: 4,
-          title: 'Create a durable YouTube session',
+          title: context.tr("Create a durable YouTube session"),
           body:
               'Open one new private Firefox tab and sign in at youtube.com. Confirm your profile avatar/account menu is visible before continuing. '
               'In that same tab, open youtube.com/robots.txt and reload it once. '
@@ -283,34 +314,34 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
             OutlinedButton(
               key: const Key('youtube-open-firefox'),
               onPressed: _busy ? null : () => _openAndroidUrl('https://www.youtube.com/'),
-              child: const Text('Open YouTube in Firefox'),
+              child: Text(context.tr("Open YouTube in Firefox")),
             ),
             OutlinedButton(
               onPressed: _busy ? null : () => _openAndroidUrl('https://www.youtube.com/robots.txt'),
-              child: const Text('Open robots.txt in Firefox'),
+              child: Text(context.tr("Open robots.txt in Firefox")),
             ),
           ],
         ),
-        const _TutorialCard(
+        _TutorialCard(
           number: 5,
-          title: 'Export only YouTube cookies',
+          title: context.tr("Export only YouTube cookies"),
           body:
               'While robots.txt is open, open cookies.txt and choose Current Site → Download. Do not choose ALL. '
               'Then close every private Firefox tab and do not reopen that session.',
         ),
         _TutorialCard(
           number: 6,
-          title: 'Import into Resonance',
+          title: context.tr("Import into Resonance"),
           body:
               'Import the downloaded .txt file. Resonance verifies that it contains a signed-in YouTube session, keeps an app-private copy, and tests it without downloading audio.',
           actions: [
             FilledButton.icon(
               onPressed: _busy ? null : () => _importCookies(service),
               icon: const Icon(Icons.file_open_rounded),
-              label: Text(service.isConfigured ? 'Replace cookies.txt' : 'Import cookies.txt'),
+              label: Text(service.isConfigured ? context.tr("Replace cookies.txt") : context.tr("Import cookies.txt")),
             ),
             if (service.isConfigured)
-              TextButton(onPressed: () => setState(() => _showGuide = false), child: const Text('Hide guide')),
+              TextButton(onPressed: () => setState(() => _showGuide = false), child: Text(context.tr("Hide guide"))),
           ],
         ),
       ],
@@ -324,6 +355,7 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
         : WindowsBrowserDetector.baseBrowserId(browserId);
     if (selected == null && mounted) selected = await _pickBrowser();
     if (selected == null || !mounted) return;
+    final selectedBrowser = selected;
     var launched = await _detector.launchBrowser(selected, 'https://music.youtube.com/');
     launched =
         launched || await launchUrl(Uri.parse('https://music.youtube.com/'), mode: LaunchMode.externalApplication);
@@ -337,23 +369,165 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
     final test = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Finish in your browser'),
-        content: Text(
-          'Sign in to YouTube Music or complete any verification page in ${YoutubeAccessService.browserDisplayName(selected)}. '
-          'Return when your personalized Music home opens normally. If extraction says the cookie database is locked, close all browser windows first.',
+        title: Text(context.tr("Finish in your browser")),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              context.tr(
+                'Sign in to YouTube Music in {0}, then return here when your personalized home opens normally.',
+                [YoutubeAccessService.browserDisplayName(selected)],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(context.tr(_browserSessionNote), style: Theme.of(context).textTheme.bodySmall),
+          ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(context.tr("Cancel"))),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text("I'm signed in — test access"),
+            child: Text(context.tr("I'm signed in — test access")),
           ),
         ],
       ),
     );
     if (test == true) {
       final cookieSource = await _detector.resolveCookieSource(selected);
-      await _run(() => service.connectWindowsBrowser(cookieSource, sourceUrl: widget.sourceUrl));
+      await _run(() async {
+        while (mounted) {
+          try {
+            await service.connectWindowsBrowser(cookieSource, sourceUrl: widget.sourceUrl);
+            return;
+          } catch (error) {
+            final failure = YoutubeFailureClassifier.classify(error, authenticated: true);
+            final browserReadBlocked =
+                failure.kind == YoutubeFailureKind.browserCookiesLocked ||
+                failure.kind == YoutubeFailureKind.browserDecryptionFailed;
+            if (!mounted || !WindowsChromiumConnector.supports(selectedBrowser) || !browserReadBlocked) rethrow;
+            final choice = await showDialog<_BrowserFallback>(
+              context: context,
+              builder: (dialogContext) => AlertDialog(
+                title: Text(context.tr('Could not read this browser session')),
+                content: Text(
+                  context.tr(
+                    failure.kind == YoutubeFailureKind.browserCookiesLocked
+                        ? 'The browser is keeping its session locked. Close its windows and retry, or use the optional Resonance browser connector.'
+                        : 'This browser protects its saved session, so direct access did not work. You can use the optional Resonance browser connector instead.',
+                  ),
+                ),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(dialogContext), child: Text(context.tr('Cancel'))),
+                  OutlinedButton(
+                    onPressed: () => Navigator.pop(dialogContext, _BrowserFallback.retry),
+                    child: Text(context.tr('Retry')),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(dialogContext, _BrowserFallback.connector),
+                    child: Text(context.tr('Use browser connector')),
+                  ),
+                ],
+              ),
+            );
+            if (choice == _BrowserFallback.retry) continue;
+            if (choice == _BrowserFallback.connector) {
+              await _connectChromium(service, selectedBrowser);
+              return;
+            }
+            rethrow;
+          }
+        }
+      });
+    }
+  }
+
+  Future<void> _connectChromium(YoutubeAccessService service, String browser) async {
+    final connector = service.windowsConnector;
+    final pending = await connector.begin(browser);
+    try {
+      await _detector.launchBrowser(browser, 'https://music.youtube.com/');
+      if (!mounted) return;
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(context.tr('Connect {0}', [YoutubeAccessService.browserDisplayName(browser)])),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    context.tr(
+                      'One-time setup: install the Resonance YouTube Connector in this browser. If it is already installed, skip to step 3.',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(context.tr('1. Open the extensions page and enable Developer mode.')),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final url = browser == 'edge'
+                          ? 'edge://extensions/'
+                          : browser == 'brave'
+                          ? 'brave://extensions/'
+                          : 'chrome://extensions/';
+                      if (!await _detector.launchBrowser(browser, url) && dialogContext.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(context.tr('Open the extensions page from your browser menu.'))),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.extension_outlined),
+                    label: Text(context.tr('Open extensions')),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    context.tr(
+                      '2. Choose Load unpacked, then select the connector folder. Paste its path into the folder picker.',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: pending.extensionDirectory));
+                      if (dialogContext.mounted) {
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(SnackBar(content: Text(context.tr('Connector folder path copied.'))));
+                      }
+                    },
+                    icon: const Icon(Icons.copy_rounded),
+                    label: Text(context.tr('Copy folder path')),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    context.tr(
+                      '3. Sign in to YouTube Music. Open the Resonance connector from your browser’s extensions menu and press Connect.',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    context.tr(
+                      'Return here and test access. Keep the connector enabled to refresh your session automatically.',
+                    ),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(context.tr('Cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: Text(context.tr('Test access'))),
+          ],
+        ),
+      );
+      if (accepted == true) await service.connectWindowsBrowser(pending.source, sourceUrl: widget.sourceUrl);
+    } finally {
+      if (service.windowsBrowserId != pending.source) await connector.revoke(pending.source);
     }
   }
 
@@ -379,7 +553,7 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
   Future<String?> _pickBrowser() => showDialog<String>(
     context: context,
     builder: (dialogContext) => SimpleDialog(
-      title: const Text('Choose the browser where you are signed in to YouTube'),
+      title: Text(context.tr("Choose the browser where you are signed in to YouTube")),
       children: [
         for (final browser in WindowsBrowserDetector.supported)
           SimpleDialogOption(
@@ -417,14 +591,15 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Account safety'),
-        content: const Text(
-          'This uses a signed-in YouTube session. Automated requests can cause YouTube to temporarily restrict or permanently disable an account. '
-          'Use it only when verification is required, avoid large batches, and consider a separate account.',
+        title: Text(context.tr("Account safety")),
+        content: Text(
+          context.tr(
+            "This uses a signed-in YouTube session. Automated requests can cause YouTube to temporarily restrict or permanently disable an account. Use it only when verification is required, avoid large batches, and consider a separate account.",
+          ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('I understand')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(context.tr("Cancel"))),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: Text(context.tr("I understand"))),
         ],
       ),
     );
@@ -436,11 +611,11 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(_isWindows ? 'Disconnect browser session?' : 'Clear imported cookies?'),
-        content: const Text('YouTube requests will return to anonymous access.'),
+        title: Text(_isWindows ? context.tr("Disconnect browser session?") : context.tr("Clear imported cookies?")),
+        content: Text(context.tr("YouTube requests will return to anonymous access.")),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Clear')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(context.tr("Cancel"))),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: Text(context.tr("Clear"))),
         ],
       ),
     );
@@ -500,16 +675,16 @@ class _HistorySyncCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _AccessCard(
-      title: 'YouTube Music history',
+      title: context.tr("YouTube Music history"),
       child: SwitchListTile.adaptive(
         contentPadding: EdgeInsets.zero,
         value: enabled,
         onChanged: !accessReady || busy ? null : (value) => unawaited(onChanged(value)),
-        title: const Text('Sync plays to YouTube Music history'),
+        title: Text(context.tr("Sync plays to YouTube Music history")),
         subtitle: Text(
           accessReady
-              ? 'Adds YouTube tracks played in Resonance to your YouTube Music listening history.'
-              : 'Connect and test YouTube access before enabling history sync.',
+              ? context.tr("Adds YouTube tracks played in Resonance to your YouTube Music listening history.")
+              : context.tr("Connect and test YouTube access before enabling history sync."),
         ),
       ),
     );
@@ -537,7 +712,7 @@ class _StatusCard extends StatelessWidget {
         children: [
           Icon(icon, color: status.state == YoutubeAccessState.ready ? Theme.of(context).colorScheme.primary : null),
           const SizedBox(width: 12),
-          Expanded(child: Text(status.shortMessage ?? _statusExplanation(status))),
+          Expanded(child: Text(context.trRendered(status.shortMessage ?? _statusExplanation(status)))),
         ],
       ),
     );
@@ -558,10 +733,12 @@ class _StatusCard extends StatelessWidget {
 class _SafetyCard extends StatelessWidget {
   const _SafetyCard();
   @override
-  Widget build(BuildContext context) => const _AccessCard(
-    title: 'Use only when required',
+  Widget build(BuildContext context) => _AccessCard(
+    title: context.tr("Use only when required"),
     child: Text(
-      'A signed-in session is password-equivalent. Avoid large automated batches and consider using a separate YouTube account.',
+      context.tr(
+        "A signed-in session is password-equivalent. Avoid large automated batches and consider using a separate YouTube account.",
+      ),
     ),
   );
 }
@@ -572,18 +749,21 @@ class _MessageCard extends StatelessWidget {
   final String? details;
   @override
   Widget build(BuildContext context) => _AccessCard(
-    title: 'Could not complete that action',
+    title: context.tr("Could not complete that action"),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(message, maxLines: 6, overflow: TextOverflow.ellipsis),
+        Text(context.trRendered(message), maxLines: 6, overflow: TextOverflow.ellipsis),
         if (details != null) ...[
           const SizedBox(height: 8),
-          ExpansionTile(
-            tilePadding: EdgeInsets.zero,
-            childrenPadding: EdgeInsets.zero,
-            title: const Text('Details'),
-            children: [SelectableText(details!, maxLines: 12)],
+          Material(
+            type: MaterialType.transparency,
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              title: Text(context.tr("Details")),
+              children: [SelectableText(details!, maxLines: 12)],
+            ),
           ),
         ],
       ],
@@ -606,7 +786,7 @@ class _AccessCard extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+        Text(context.tr(title), style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
         const SizedBox(height: 8),
         child,
       ],
@@ -625,11 +805,11 @@ class _TutorialCard extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(bottom: 12),
     child: _AccessCard(
-      title: '$number. $title',
+      title: '$number. ${context.tr(title)}',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(body),
+          Text(context.tr(body)),
           if (actions.isNotEmpty) ...[const SizedBox(height: 12), Wrap(spacing: 8, runSpacing: 8, children: actions)],
         ],
       ),

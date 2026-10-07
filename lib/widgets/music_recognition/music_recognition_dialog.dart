@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
@@ -250,7 +251,7 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
           await _entrypoint.completeRecognition(
             success: false,
             canOpenDirectly: mounted,
-            message: 'Music recognition was cancelled.',
+            message: context.tr("Music recognition was cancelled."),
           );
         } catch (_) {
           // The reset below still has to release the scan reservation.
@@ -284,9 +285,9 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
         key: const Key('music-recognition-dialog'),
         scrollable: true,
         insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        titlePadding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
-        contentPadding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
-        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        titlePadding: const EdgeInsetsDirectional.fromSTEB(20, 16, 8, 0),
+        contentPadding: const EdgeInsetsDirectional.fromSTEB(20, 10, 20, 14),
+        actionsPadding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 8),
         title: Row(
           children: [
             Container(
@@ -299,10 +300,10 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
               child: Icon(Icons.graphic_eq_rounded, size: 21, color: Theme.of(context).colorScheme.onPrimaryContainer),
             ),
             const SizedBox(width: 10),
-            const Expanded(child: Text('Identify a song')),
+            Expanded(child: Text(context.tr("Identify a song"))),
             IconButton(
               onPressed: _close,
-              tooltip: 'Close',
+              tooltip: context.tr("Close"),
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.close_rounded),
             ),
@@ -317,9 +318,9 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
           ),
         ),
         actions: _running
-            ? [TextButton(onPressed: _close, child: const Text('Cancel'))]
+            ? [TextButton(onPressed: _close, child: Text(context.tr("Cancel")))]
             : _error != null
-            ? [TextButton(onPressed: _close, child: const Text('Close'))]
+            ? [TextButton(onPressed: _close, child: Text(context.tr("Close")))]
             : null,
       ),
     );
@@ -344,17 +345,20 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
                 Icon(Icons.error_outline_rounded, color: Theme.of(context).colorScheme.onErrorContainer),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer)),
+                  child: Text(
+                    context.trRendered(_error!),
+                    style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
+                  ),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 14),
-          Text('Try another source', style: Theme.of(context).textTheme.titleSmall),
+          Text(context.tr("Try another source"), style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
         ] else ...[
           Text(
-            'Choose how Resonance listens.',
+            context.tr("Choose how Resonance listens."),
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
@@ -364,10 +368,10 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
         _SourceCard(
           key: const Key('recognition-source-microphone'),
           icon: Icons.mic_rounded,
-          title: _isAndroid ? 'Listen with microphone' : 'Microphone',
+          title: _isAndroid ? context.tr("Listen with microphone") : context.tr("Microphone"),
           subtitle: _isAndroid
-              ? 'Nearby music and this phone’s speakers. No casting prompt.'
-              : 'Listen to music playing nearby',
+              ? context.tr("Nearby music and this phone’s speakers. No casting prompt.")
+              : context.tr("Listen to music playing nearby"),
           recommended: _isAndroid,
           isDefault: _isAndroid && _defaultSource == MusicRecognitionSource.microphone,
           onSetDefault: _isAndroid ? () => _setDefaultSource(MusicRecognitionSource.microphone) : null,
@@ -377,10 +381,10 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
         _SourceCard(
           key: const Key('recognition-source-device-output'),
           icon: Icons.speaker_rounded,
-          title: _isAndroid ? 'Capture device audio' : 'Device audio',
+          title: _isAndroid ? context.tr("Capture device audio") : context.tr("Device audio"),
           subtitle: _isAndroid
-              ? 'Direct audio for headphones or failed mic scans. Android shows a capture prompt.'
-              : 'Listen directly to audio playing on this computer',
+              ? context.tr("Direct audio for headphones or failed mic scans. Android shows a capture prompt.")
+              : context.tr("Listen directly to audio playing on this computer"),
           isDefault: _isAndroid && _defaultSource == MusicRecognitionSource.deviceOutput,
           onSetDefault: _isAndroid ? () => _setDefaultSource(MusicRecognitionSource.deviceOutput) : null,
           onTap: () => _start(MusicRecognitionSource.deviceOutput),
@@ -422,9 +426,13 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
             ),
           ),
           const SizedBox(height: 22),
-          Text(_stageTitle(), style: Theme.of(context).textTheme.titleMedium, textAlign: TextAlign.center),
+          Text(context.tr(_stageTitle()), style: Theme.of(context).textTheme.titleMedium, textAlign: TextAlign.center),
           const SizedBox(height: 8),
-          Text(_stageDescription(), style: Theme.of(context).textTheme.bodySmall, textAlign: TextAlign.center),
+          Text(
+            context.tr(_stageDescription()),
+            style: Theme.of(context).textTheme.bodySmall,
+            textAlign: TextAlign.center,
+          ),
         ],
       ),
     );
@@ -507,7 +515,7 @@ class _SourceCard extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      title,
+                      context.tr(title),
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
                     ),
                   ),
@@ -517,7 +525,9 @@ class _SourceCard extends StatelessWidget {
                       dimension: 36,
                       child: IconButton(
                         onPressed: isDefault ? null : onSetDefault,
-                        tooltip: isDefault ? 'Quick Settings tile default' : 'Use for Quick Settings tile',
+                        tooltip: isDefault
+                            ? context.tr("Quick Settings tile default")
+                            : context.tr("Use for Quick Settings tile"),
                         padding: EdgeInsets.zero,
                         visualDensity: VisualDensity.compact,
                         style: IconButton.styleFrom(
@@ -541,10 +551,10 @@ class _SourceCard extends StatelessWidget {
                   children: [
                     if (recommended)
                       TextSpan(
-                        text: 'Recommended · ',
+                        text: context.tr('Recommended · '),
                         style: TextStyle(color: primary, fontWeight: FontWeight.w600),
                       ),
-                    TextSpan(text: subtitle),
+                    TextSpan(text: context.tr(subtitle)),
                   ],
                 ),
               ),
@@ -574,7 +584,7 @@ class _InfoRow extends StatelessWidget {
           child: Icon(icon, size: 16, color: colors.onSurfaceVariant),
         ),
         const SizedBox(width: 7),
-        Expanded(child: Text(text, style: style)),
+        Expanded(child: Text(context.tr(text), style: style)),
       ],
     );
   }

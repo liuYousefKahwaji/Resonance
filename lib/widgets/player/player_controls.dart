@@ -85,7 +85,7 @@ class _MobileControls extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: EdgeInsets.fromLTRB(12, standalone ? 4 : 8, 12, 10),
+        padding: EdgeInsetsDirectional.fromSTEB(12, standalone ? 4 : 8, 12, 10),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -98,6 +98,7 @@ class _MobileControls extends StatelessWidget {
             _LockedControl(
               locked: transportLocked,
               child: Row(
+                textDirection: TextDirection.ltr,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: standalone ? 40 : 26),
@@ -156,7 +157,7 @@ class _DesktopControls extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.fromLTRB(20, standalone ? 4 : 10, 20, 14),
+      padding: EdgeInsetsDirectional.fromSTEB(20, standalone ? 4 : 10, 20, 14),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -171,7 +172,7 @@ class _DesktopControls extends StatelessWidget {
                 _LockedControl(
                   locked: transportLocked,
                   child: Align(
-                    alignment: Alignment.centerLeft,
+                    alignment: AlignmentDirectional.centerStart,
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -187,6 +188,7 @@ class _DesktopControls extends StatelessWidget {
                 _LockedControl(
                   locked: transportLocked,
                   child: Row(
+                    textDirection: TextDirection.ltr,
                     mainAxisAlignment: MainAxisAlignment.center,
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -204,7 +206,7 @@ class _DesktopControls extends StatelessWidget {
                 ),
 
                 // RIGHT — volume bar
-                Positioned(right: 0, top: 0, bottom: 0, width: screenWidth * 0.22, child: const VolumeBar()),
+                PositionedDirectional(end: 0, top: 0, bottom: 0, width: screenWidth * 0.22, child: const VolumeBar()),
               ],
             ),
           ),

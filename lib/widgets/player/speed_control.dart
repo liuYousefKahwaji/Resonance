@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 // widgets/player/speed_control.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -15,14 +16,14 @@ class SpeedControl extends StatelessWidget {
       builder: (context, currentSpeed, _) {
         return IconButton(
           icon: const Icon(Icons.speed),
-          tooltip: 'Playback Speed',
+          tooltip: context.tr("Playback Speed"),
           onPressed: () {
             showDialog(
               context: context,
               builder: (context) {
                 double speed = currentSpeed;
                 return AlertDialog(
-                  title: const Text('Playback Speed'),
+                  title: Text(context.tr("Playback Speed")),
                   content: StatefulBuilder(
                     builder: (context, setState) {
                       return SizedBox(
@@ -55,7 +56,7 @@ class SpeedControl extends StatelessWidget {
                       );
                     },
                   ),
-                  actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+                  actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Close")))],
                 );
               },
             );

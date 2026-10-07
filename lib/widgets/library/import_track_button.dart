@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -36,6 +37,6 @@ class _ImportTrackButtonState extends State<ImportTrackButton> {
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(onPressed: _selectFiles, icon: const Icon(Icons.add), tooltip: 'Import local tracks');
+    return IconButton(onPressed: _selectFiles, icon: const Icon(Icons.add), tooltip: context.tr("Import local tracks"));
   }
 }

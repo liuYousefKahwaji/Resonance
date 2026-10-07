@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/core/audio/audio_service.dart';
@@ -61,18 +62,18 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
     final colors = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Equalizer'),
+        title: Text(context.tr("Equalizer")),
         actions: [
           if (_applying)
             const Padding(
-              padding: EdgeInsets.only(right: 18),
+              padding: EdgeInsetsDirectional.only(end: 18),
               child: Center(child: SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))),
             ),
         ],
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 32),
           children: [
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -85,12 +86,15 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
                 children: [
                   Icon(Icons.equalizer_rounded, color: colors.primary),
                   const SizedBox(width: 12),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Five-band equalizer', style: TextStyle(fontWeight: FontWeight.w700)),
-                        Text('Automatic headroom prevents boosted bands from clipping', style: TextStyle(fontSize: 12)),
+                        Text(context.tr("Five-band equalizer"), style: TextStyle(fontWeight: FontWeight.w700)),
+                        Text(
+                          context.tr("Automatic headroom prevents boosted bands from clipping"),
+                          style: TextStyle(fontSize: 12),
+                        ),
                       ],
                     ),
                   ),
@@ -102,7 +106,7 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
               ),
             ),
             const SizedBox(height: 18),
-            Text('PRESETS', style: Theme.of(context).textTheme.labelSmall?.copyWith(letterSpacing: 1.1)),
+            Text(context.tr("PRESETS"), style: Theme.of(context).textTheme.labelSmall?.copyWith(letterSpacing: 1.1)),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -110,13 +114,13 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
               children: [
                 for (final preset in EqualizerPreset.values.where((preset) => preset != EqualizerPreset.custom))
                   ChoiceChip(
-                    label: Text(preset.label),
+                    label: Text(context.tr(preset.label)),
                     selected: _settings.preset == preset,
                     onSelected: (_) => _apply(_settings.selectPreset(preset)),
                   ),
                 if (_settings.preset == EqualizerPreset.custom || _settings.hasRememberedCustom)
                   ChoiceChip(
-                    label: const Text('Custom'),
+                    label: Text(context.tr("Custom")),
                     selected: _settings.preset == EqualizerPreset.custom,
                     onSelected: (_) => _apply(_settings.selectPreset(EqualizerPreset.custom)),
                   ),
@@ -125,7 +129,7 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
             const SizedBox(height: 22),
             Container(
               height: 330,
-              padding: const EdgeInsets.fromLTRB(8, 18, 8, 12),
+              padding: const EdgeInsetsDirectional.fromSTEB(8, 18, 8, 12),
               decoration: BoxDecoration(
                 color: colors.surface,
                 borderRadius: resonanceBorderRadius(context, 16),
@@ -149,7 +153,7 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Preamp ${_settings.automaticPreampDb.toStringAsFixed(1)} dB',
+              context.tr("Preamp {0} dB", [_settings.automaticPreampDb.toStringAsFixed(1)]),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -179,7 +183,7 @@ class _EqualizerBand extends StatelessWidget {
   Widget build(BuildContext context) {
     final valueLabel = '${value >= 0 ? '+' : ''}${value.toStringAsFixed(1)} dB';
     return Semantics(
-      label: '$label equalizer band',
+      label: context.tr("{0} equalizer band", [label]),
       value: valueLabel,
       slider: true,
       child: Column(

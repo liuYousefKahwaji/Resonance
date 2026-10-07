@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 // lib/widgets/player/player_modes.dart
 // Logic: UNCHANGED. Visual refinement only.
 
@@ -52,10 +53,10 @@ class _PlayerModesState extends State<PlayerModes> {
             setState(() {});
           },
           tooltip: loopMode == LoopMode.off
-              ? 'Loop off'
+              ? context.tr("Loop off")
               : loopMode == LoopMode.one
-              ? 'Loop one'
-              : 'Loop all',
+              ? context.tr("Loop one")
+              : context.tr("Loop all"),
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
         ),
@@ -66,7 +67,7 @@ class _PlayerModesState extends State<PlayerModes> {
             await handler.toggleShuffle();
             setState(() {});
           },
-          tooltip: shuffleOn ? 'Shuffle on' : 'Shuffle off',
+          tooltip: shuffleOn ? context.tr("Shuffle on") : context.tr("Shuffle off"),
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
         ),

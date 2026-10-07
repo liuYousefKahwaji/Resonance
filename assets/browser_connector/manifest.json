@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Resonance YouTube Connector",
+  "version": "1.0.0",
+  "description": "Connect your YouTube session to Resonance on this PC.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqznah53zX6B/KZMiMQvNJ6qCsm1r3jt1BrUuqJ5BC7S9RY8TK0pfqpmL50c9JMnUJiBSkrnuwooVLTIzzxznbGKSsR/BlRnir5mRQUk+wX6cDvpXwGZwVkKsrfYDwm9spJE9xVjiP6FH515OzM9vS5LnchaNIHospt9oIxuzYf7belNZOB0FB0RhCV74i+7dw/NLb1Tu/PmeTWOK0WTYuQ6luG9niCE3KoEcF+3VO0fingwf45wKf7MZrZmpXB/9OiI5MsXFfcTYHge1A2pFSozBttuJiNFZTGv2b7WXO1NEajSYr3MtVU3D/8e4wg275k2F/dyBDakGw2Dk6FT+VwIDAQAB",
+  "permissions": [
+    "cookies",
+    "nativeMessaging",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://*.youtube.com/*"
+  ],
+  "incognito": "not_allowed",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  },
+  "icons": {
+    "128": "icon.png"
+  }
+}

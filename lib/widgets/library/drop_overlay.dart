@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 // lib/widgets/library/drop_overlay.dart
 // Logic: UNCHANGED. Visual only.
@@ -20,25 +21,15 @@ class DropOverlay extends StatelessWidget {
       opacity: isDragging ? 1.0 : 0.0,
       duration: const Duration(milliseconds: 150),
       child: Container(
-        color: (isDark ? const Color(0xFF0D0D14) : const Color(0xFFF0EFF5))
-            .withValues(alpha: 0.85),
+        color: (isDark ? const Color(0xFF0D0D14) : const Color(0xFFF0EFF5)).withValues(alpha: 0.85),
         child: Center(
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 32),
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF1A1A2A) : Colors.white,
               borderRadius: resonanceBorderRadius(context, 20),
-              border: Border.all(
-                color: primary.withValues(alpha: 0.5),
-                width: 1.5,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: primary.withValues(alpha: 0.15),
-                  blurRadius: 30,
-                  spreadRadius: 0,
-                ),
-              ],
+              border: Border.all(color: primary.withValues(alpha: 0.5), width: 1.5),
+              boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.15), blurRadius: 30, spreadRadius: 0)],
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -46,36 +37,23 @@ class DropOverlay extends StatelessWidget {
                 Container(
                   width: 60,
                   height: 60,
-                  decoration: BoxDecoration(
-                    color: primary.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    Icons.file_upload_rounded,
-                    size: 28,
-                    color: primary,
-                  ),
+                  decoration: BoxDecoration(color: primary.withValues(alpha: 0.1), shape: BoxShape.circle),
+                  child: Icon(Icons.file_upload_rounded, size: 28, color: primary),
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'Drop to import',
+                  context.tr("Drop to import"),
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
-                    color: isDark
-                        ? const Color(0xFFE2E8F0)
-                        : const Color(0xFF0F172A),
+                    color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A),
                     letterSpacing: -0.3,
                   ),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'MP3, WAV, M4A, OGG, M3U, M3U8',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF64748B),
-                    letterSpacing: 0.3,
-                  ),
+                  context.tr("MP3, WAV, M4A, OGG, M3U, M3U8"),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF64748B), letterSpacing: 0.3),
                 ),
               ],
             ),

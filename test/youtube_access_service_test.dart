@@ -4,10 +4,64 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/services/youtube/youtube_access_backend.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/services/youtube/windows_chromium_connector.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('Chromium connector persists without browser DB arguments and disconnect revokes it', () async {
+    SharedPreferences.setMockInitialValues({});
+    final connector = RecordingChromiumConnector();
+    final preferences = await SharedPreferences.getInstance();
+    final service = YoutubeAccessService(
+      preferences: preferences,
+      isWindows: true,
+      isAndroid: false,
+      windowsConnector: connector,
+    );
+    await service.initialize();
+    const source = 'chrome+connector:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    service.setWindowsTester((browser, _) async {
+      expect(browser, source);
+      expect(connector.activated, [source]);
+    });
+    service.setWindowsHomeTester((browser) async => expect(browser, source));
+    await service.connectWindowsBrowser(source);
+    expect(service.windowsAuthArguments(), isEmpty);
+    expect(service.settingsSubtitle, contains('Chrome browser session'));
+    final restored = YoutubeAccessService(
+      preferences: preferences,
+      isWindows: true,
+      isAndroid: false,
+      windowsConnector: connector,
+    );
+    await restored.initialize();
+    expect(restored.windowsBrowserId, source);
+    await restored.clear();
+    expect(connector.revoked, [source]);
+    expect(restored.isConfigured, isFalse);
+  });
+
+  test('failed Chromium connection revokes the new ticket and preserves the previous Firefox profile', () async {
+    SharedPreferences.setMockInitialValues({});
+    final connector = RecordingChromiumConnector();
+    final service = YoutubeAccessService(
+      preferences: await SharedPreferences.getInstance(),
+      isWindows: true,
+      isAndroid: false,
+      windowsConnector: connector,
+    );
+    await service.initialize();
+    service.setWindowsTester((_, __) async {});
+    await service.connectWindowsBrowser('firefox:my-profile');
+    service.setWindowsHomeTester((_) async => throw StateError('Account not signed in'));
+    const source = 'edge+connector:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    await expectLater(service.connectWindowsBrowser(source), throwsA(isA<YoutubeFailure>()));
+    expect(service.windowsBrowserId, 'firefox:my-profile');
+    expect(connector.revoked, [source]);
+    expect(service.revision, 1);
+  });
 
   test('Windows connection commits only after a successful test and revisions track changes', () async {
     SharedPreferences.setMockInitialValues({});
@@ -136,4 +190,13 @@ void main() {
     expect(testedSource, 'edge:Profile 1');
     expect(preferences.getString('youtube_access.windows_browser_id'), 'edge:Profile 1');
   });
+}
+
+class RecordingChromiumConnector extends WindowsChromiumConnector {
+  final activated = <String>[];
+  final revoked = <String>[];
+  @override
+  Future<void> activate(String source) async => activated.add(source);
+  @override
+  Future<void> revoke(String source) async => revoked.add(source);
 }

@@ -8,8 +8,9 @@ class YoutubeMusicHomeShelf {
   final String title;
   final List<YoutubeTrack> tracks;
   final List<YoutubeMusicHomeItem> items;
+  final String? kind;
 
-  const YoutubeMusicHomeShelf({required this.title, required this.tracks, this.items = const []});
+  const YoutubeMusicHomeShelf({required this.title, required this.tracks, this.items = const [], this.kind});
 
   List<YoutubeMusicHomeItem> get displayItems =>
       items.isNotEmpty ? items : [for (final track in tracks) YoutubeMusicHomeItem.fromTrack(track)];
@@ -26,6 +27,7 @@ class YoutubeMusicHomeItem {
   final YoutubeTrack? track;
   final String? playlistId;
   final String? browseId;
+  final String? artistId;
 
   const YoutubeMusicHomeItem({
     required this.title,
@@ -35,6 +37,7 @@ class YoutubeMusicHomeItem {
     this.track,
     this.playlistId,
     this.browseId,
+    this.artistId,
   });
 
   /// The canonical playlist URL used by the existing cross-platform playlist
@@ -56,6 +59,7 @@ class YoutubeMusicHomeItem {
     thumbnailUrl: track.thumbnailUrl,
     kind: 'track',
     track: track,
+    artistId: track.artistId,
   );
 }
 

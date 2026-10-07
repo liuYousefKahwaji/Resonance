@@ -17,22 +17,34 @@ class YoutubeMusicHomeService {
   static const _androidChannel = MethodChannel('resonance/android_youtube');
   static const _cacheTtl = Duration(minutes: 3);
   static const _diskCacheTtl = Duration(hours: 24);
-  static const _diskCacheKey = 'youtube_music_home.snapshot_v1';
-  static ({YoutubeAccessService access, int revision, int limit, DateTime storedAt, YoutubeMusicHome home})?
-  _cachedHome;
+  String get _diskCacheKey =>
+      language == 'en' ? 'youtube_music_home.snapshot_v1' : 'youtube_music_home.snapshot_v1.$language';
+  final String language;
+  static final Map<
+    String,
+    ({YoutubeAccessService access, int revision, int limit, String language, DateTime storedAt, YoutubeMusicHome home})
+  >
+  _cachedHomes = {};
   static final Map<String, Future<YoutubeMusicHome>> _requestsInFlight = {};
 
-  const YoutubeMusicHomeService();
+  final Future<String> Function(int limit, String language)? loader;
+  const YoutubeMusicHomeService({this.language = 'en', this.loader});
+
+  static void clearCache() {
+    _cachedHomes.clear();
+    _requestsInFlight.clear();
+  }
 
   /// A previously viewed Home can paint immediately while a live refresh runs.
   /// Only normalized shelf data is stored; browser cookies stay native-side.
   Future<YoutubeMusicHome?> loadCached() async {
     final access = YoutubeAccessService.active;
     if (access == null || !_canUseHome(access)) return null;
-    final memory = _cachedHome;
+    final memory = _cachedHomes[language];
     if (memory != null &&
         identical(memory.access, access) &&
         memory.revision == access.revision &&
+        memory.language == language &&
         DateTime.now().difference(memory.storedAt) < _diskCacheTtl) {
       return memory.home;
     }
@@ -48,9 +60,10 @@ class YoutubeMusicHomeService {
       if (payload is! Map) return null;
       final home = decodeResponse(jsonEncode(payload));
       if (home.isEmpty) return null;
-      _cachedHome = (
+      _cachedHomes[language] = (
         access: access,
         revision: access.revision,
+        language: language,
         limit: snapshot['limit'] is int ? snapshot['limit'] as int : 24,
         storedAt: storedAt,
         home: home,
@@ -110,16 +123,17 @@ class YoutubeMusicHomeService {
       );
     }
     final requestedLimit = limit.clamp(1, 80);
-    final cached = _cachedHome;
+    final cached = _cachedHomes[language];
     if (!forceRefresh &&
         cached != null &&
         identical(cached.access, access) &&
         cached.revision == access.revision &&
         cached.limit == requestedLimit &&
+        cached.language == language &&
         DateTime.now().difference(cached.storedAt) < _cacheTtl) {
       return cached.home;
     }
-    final key = '${identityHashCode(access)}:${access.revision}:$requestedLimit';
+    final key = '${identityHashCode(access)}:${access.revision}:$requestedLimit:$language';
     var pending = _requestsInFlight[key];
     if (pending == null) {
       pending = _fetchFresh(access, requestedLimit);
@@ -134,8 +148,10 @@ class YoutubeMusicHomeService {
 
   Future<YoutubeMusicHome> _fetchFresh(YoutubeAccessService access, int limit) async {
     try {
-      final raw = Platform.isAndroid
-          ? await _androidChannel.invokeMethod<String>('getMusicHome', {'limit': limit})
+      final raw = loader != null
+          ? await loader!(limit, language)
+          : Platform.isAndroid
+          ? await _androidChannel.invokeMethod<String>('getMusicHome', {'limit': limit, 'language': language})
           : Platform.isWindows
           ? await _fetchWindows(limit)
           : throw const YoutubeFailure(
@@ -145,7 +161,14 @@ class YoutubeMusicHomeService {
       if (raw == null || raw.trim().isEmpty) throw StateError('YouTube Music returned an empty home feed.');
       final home = decodeResponse(raw);
       await access.recordAuthenticatedSuccess();
-      _cachedHome = (access: access, revision: access.revision, limit: limit, storedAt: DateTime.now(), home: home);
+      _cachedHomes[language] = (
+        access: access,
+        revision: access.revision,
+        limit: limit,
+        language: language,
+        storedAt: DateTime.now(),
+        home: home,
+      );
       if (!home.isEmpty) unawaited(_storeCachedRaw(access, raw, limit));
       return home;
     } catch (error) {
@@ -160,6 +183,7 @@ class YoutubeMusicHomeService {
   Future<String> _fetchWindows(int limit, {String? overrideBrowserSource}) async {
     return const WindowsYtMusicHelper().invoke(
       action: 'home',
+      language: language,
       limit: limit,
       overrideBrowserSource: overrideBrowserSource,
     );
@@ -204,6 +228,7 @@ class YoutubeMusicHomeService {
                 : null,
             kind: rawItem['kind']?.toString().trim() ?? 'collection',
             track: track,
+            artistId: rawItem['artistId']?.toString(),
             playlistId: rawItem['playlistId']?.toString().trim().isNotEmpty == true
                 ? rawItem['playlistId'].toString().trim()
                 : null,
@@ -215,7 +240,7 @@ class YoutubeMusicHomeService {
         if (track != null && tracks.every((existing) => existing.url != track!.url)) tracks.add(track);
       }
       if (tracks.isNotEmpty || items.isNotEmpty) {
-        shelves.add(YoutubeMusicHomeShelf(title: title, tracks: tracks, items: items));
+        shelves.add(YoutubeMusicHomeShelf(title: title, tracks: tracks, items: items, kind: shelf['kind']?.toString()));
       }
     }
     return YoutubeMusicHome(shelves: shelves);

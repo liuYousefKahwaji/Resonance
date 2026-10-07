@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 // lib/widgets/player/album_cover.dart
 
 import 'dart:io';
@@ -32,7 +33,7 @@ class AlbumCover extends StatelessWidget {
         final item = mediaSnapshot.data;
         final path = item?.id ?? '';
         final rawTitle = item?.title ?? '';
-        final title = rawTitle.isNotEmpty ? rawTitle : 'Nothing playing';
+        final title = rawTitle.isNotEmpty ? rawTitle : context.tr('Nothing playing');
         final artist = item?.artist ?? '';
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (context.mounted) context.read<ThemeProvider>().updatePlayerArtwork(item?.artUri);
@@ -57,7 +58,7 @@ class AlbumCover extends StatelessWidget {
 
                 return Center(
                   child: Container(
-                    margin: EdgeInsets.fromLTRB(16, windowsNative ? 8 : 12, 16, windowsNative ? 8 : 12),
+                    margin: EdgeInsetsDirectional.fromSTEB(16, windowsNative ? 8 : 12, 16, windowsNative ? 8 : 12),
                     constraints: BoxConstraints(maxWidth: maxW),
                     width: double.infinity,
                     child: PlaybackPulse(
@@ -251,7 +252,7 @@ class NowPlayingCard extends StatelessWidget {
                 IconButton(
                   key: const Key('upcoming-queue-button'),
                   onPressed: onQueueTap,
-                  tooltip: 'Upcoming tracks',
+                  tooltip: context.tr("Upcoming tracks"),
                   visualDensity: VisualDensity.compact,
                   icon: Icon(Icons.queue_music_rounded, size: 20, color: primary),
                 ),
@@ -456,7 +457,7 @@ class _LoadingBadge extends StatelessWidget {
           SizedBox(width: 8, height: 8, child: CircularProgressIndicator(strokeWidth: 1.5, color: color)),
           const SizedBox(width: 5),
           Text(
-            'LOADING',
+            context.tr("LOADING"),
             style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.8, color: color),
           ),
         ],
@@ -478,7 +479,7 @@ class _PlayingBadge extends StatelessWidget {
         border: Border.all(color: primary.withValues(alpha: 0.3), width: 1),
       ),
       child: Text(
-        'NOW PLAYING',
+        context.tr("NOW PLAYING"),
         style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.8, color: primary),
       ),
     );

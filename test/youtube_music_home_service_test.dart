@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/services/youtube/youtube_music_home_service.dart';
@@ -6,6 +7,63 @@ import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(YoutubeMusicHomeService.clearCache);
+  tearDown(YoutubeMusicHomeService.clearCache);
+
+  test('English and Arabic Home requests and snapshots stay separate even with late results', () async {
+    SharedPreferences.setMockInitialValues({
+      'youtube_access.windows_browser_id': 'firefox',
+      'youtube_access.windows_configured_at': '2026-09-24T00:00:00.000Z',
+    });
+    final prefs = await SharedPreferences.getInstance();
+    final access = YoutubeAccessService(preferences: prefs, isWindows: true, isAndroid: false);
+    await access.initialize();
+    addTearDown(() {
+      YoutubeAccessService.active = null;
+      access.dispose();
+    });
+    final responses = {'en': Completer<String>(), 'ar': Completer<String>()};
+    final requests = <String>[];
+    Future<String> load(int limit, String language) {
+      requests.add(language);
+      return responses[language]!.future;
+    }
+
+    final english = YoutubeMusicHomeService(loader: load);
+    final arabic = YoutubeMusicHomeService(language: 'ar', loader: load);
+    final en = english.fetch();
+    final ar = arabic.fetch();
+    final arAgain = arabic.fetch();
+    expect(requests, ['en', 'ar']);
+    String payload(String title) => jsonEncode({
+      'shelves': [
+        {
+          'title': title,
+          'kind': 'quickPicks',
+          'tracks': [
+            {'title': 'Original song', 'artist': 'Artist', 'url': 'https://www.youtube.com/watch?v=jNQXAC9IVRw'},
+          ],
+        },
+      ],
+    });
+    responses['ar']!.complete(payload('اختيارات سريعة'));
+    final localized = await ar;
+    expect(identical(await arAgain, localized), isTrue);
+    expect(localized.shelves.single.kind, 'quickPicks');
+    responses['en']!.complete(payload('Quick picks'));
+    await en;
+    expect(identical(await arabic.fetch(), localized), isTrue);
+    expect((await english.fetch()).shelves.single.title, 'Quick picks');
+    await Future<void>.delayed(Duration.zero);
+    YoutubeMusicHomeService.clearCache();
+    expect((await arabic.loadCached())!.shelves.single.title, 'اختيارات سريعة');
+    expect((await english.loadCached())!.shelves.single.title, 'Quick picks');
+    await prefs.remove('youtube_music_home.snapshot_v1.ar');
+    YoutubeMusicHomeService.clearCache();
+    expect(await arabic.loadCached(), isNull);
+  });
+
   test('cached Home is available immediately only for the configured account', () async {
     SharedPreferences.setMockInitialValues({
       'youtube_access.windows_browser_id': 'firefox',

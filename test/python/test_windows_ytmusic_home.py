@@ -6,6 +6,7 @@ from unittest.mock import patch
 from contextlib import redirect_stdout
 import io
 import json
+import types
 from pathlib import Path
 
 
@@ -26,6 +27,51 @@ finally:
 
 
 class WindowsYoutubeMusicHomeTests(unittest.TestCase):
+    def test_chromium_connector_uses_the_authorized_jar_without_reading_browser_databases(self):
+        jar = http.cookiejar.CookieJar()
+        jar.set_cookie(http.cookiejar.Cookie(0, "__Secure-3PAPISID", "fake", None, False, ".youtube.com", True, True, "/", True, True, None, True, None, None, {}))
+        source = "chrome+connector:" + "a" * 32
+        calls = []
+        module = types.SimpleNamespace(load_cookie_jar=lambda value: calls.append(value) or jar)
+        with patch.dict(sys.modules, {"chromium_connector": module}), patch.object(helper, "extract_cookies_from_browser") as browser_extractor:
+            cookie = helper._cookie_header(source, None)
+        self.assertEqual(calls, [source])
+        self.assertEqual(cookie, "__Secure-3PAPISID=fake")
+        browser_extractor.assert_not_called()
+
+    def test_artist_identity_survives_track_and_album_normalization(self):
+        artist_id = "UCQJ-a2IzCJ-gwlHvqvOWGhw"
+        source = {"title": "Song", "videoId": "abcdefghijk", "artists": [{"name": "Artist", "id": artist_id}]}
+        self.assertEqual(helper._track(source)["artistId"], artist_id)
+        album = {"title": "Album", "resultType": "album", "browseId": "MPREtest", "artists": source["artists"]}
+        self.assertEqual(helper._item(album)["artistId"], artist_id)
+        self.assertIsNone(helper._item(album)["track"])
+
+    def test_arabic_home_preserves_layout_kind_and_metadata(self):
+        class FakeMusic:
+            def get_account_info(self):
+                return {"accountName": "Test"}
+
+            def get_home(self, **_):
+                return [{"title": "اختيارات سريعة", "contents": [
+                    {"title": f"Original song {i}", "videoId": f"track00000{i}", "artists": [{"name": "Artist"}]}
+                    for i in range(4)
+                ]}]
+
+        with patch.object(helper, "_build_authenticated_ytmusic", return_value=FakeMusic()) as builder:
+            output = io.StringIO()
+            with patch.object(sys, "argv", ["helper", "--browser", "firefox", "--language", "ar", "--limit", "6"]), redirect_stdout(output):
+                helper.main()
+            builder.assert_called_once_with("firefox", None, "ar")
+            response = output.getvalue()
+        quick = [shelf for shelf in json.loads(response)["shelves"] if shelf.get("kind") == "quickPicks"]
+        self.assertEqual(len(quick), 1)
+        self.assertEqual(quick[0]["title"], "اختيارات سريعة")
+        self.assertEqual(quick[0]["tracks"][0]["title"], "Original song 0")
+        self.assertEqual(helper._home_shelf_kind("الوصول السريع"), "speedDial")
+        self.assertEqual(helper._home_shelf_kind("اقتراحات"), "suggestions")
+
+
     def test_playlist_library_fetches_all_pages_and_returns_only_unique_valid_cards(self):
         class FakeMusic:
             def get_account_info(self):

@@ -8,6 +8,27 @@ class YoutubeFailureClassifier {
     final technical = sanitize(error.toString());
     final lower = technical.toLowerCase();
 
+    // A Chromium warning can accompany a later "no signed-in cookies" error.
+    // Preserve the root cause so the UI offers its optional connector only
+    // when direct cookie access is actually blocked.
+    if (_containsAny(lower, const [
+      'failed to decrypt',
+      'could not decrypt',
+      'decrypting cookies',
+      'dpapi',
+      'app-bound',
+      'app bound',
+      'unsupported cookie version',
+      'unknown cookie version',
+    ])) {
+      return _failure(
+        YoutubeFailureKind.browserDecryptionFailed,
+        'Windows could not read this browser session. Reconnect or import cookies.txt.',
+        technical,
+        sourceUrl,
+      );
+    }
+
     if (_containsAny(lower, const [
       "sign in to confirm you're not a bot",
       'sign in to confirm you’re not a bot',
@@ -56,14 +77,6 @@ class YoutubeFailureClassifier {
       return _failure(
         YoutubeFailureKind.browserCookiesLocked,
         'Close all browser windows, then retry the test.',
-        technical,
-        sourceUrl,
-      );
-    }
-    if (_containsAny(lower, const ['failed to decrypt', 'could not decrypt', 'decrypting cookies', 'dpapi'])) {
-      return _failure(
-        YoutubeFailureKind.browserDecryptionFailed,
-        'Windows could not unlock this browser session. Try Firefox or another supported browser.',
         technical,
         sourceUrl,
       );

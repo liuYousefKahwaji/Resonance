@@ -16,6 +16,7 @@ class WindowsYtMusicHelper {
     required String action,
     int? limit,
     String? videoId,
+    String? language,
     String? overrideBrowserSource,
     YoutubeAccessService? access,
   }) async {
@@ -44,6 +45,7 @@ class WindowsYtMusicHelper {
       '--action',
       action,
       if (limit != null) ...['--limit', '$limit'],
+      if (language != null) ...['--language', language],
       if (videoId != null) ...['--video-id', videoId],
     ], runInShell: false);
     late final String stdout;

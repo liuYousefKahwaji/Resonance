@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:resonance/services/app_update_service.dart';
@@ -66,7 +67,9 @@ class _AndroidUpdateStatusState extends State<AndroidUpdateStatus> with WidgetsB
       await (widget.retry?.call() ?? AppUpdateService().retryAndroidInstall());
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not continue update: $error')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.tr("Could not continue update: {0}", [error]))));
       }
     } finally {
       if (mounted) {
@@ -102,13 +105,13 @@ class _AndroidUpdateStatusState extends State<AndroidUpdateStatus> with WidgetsB
       _ => 'Preparing the update…',
     };
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
+      padding: const EdgeInsetsDirectional.fromSTEB(18, 12, 18, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Updating to ${status['version']}', style: Theme.of(context).textTheme.titleSmall),
+          Text(context.tr("Updating to {0}", [status['version']]), style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 6),
-          Text(message),
+          Text(context.trRendered(message)),
           if (!ready && !failed) ...[
             const SizedBox(height: 10),
             LinearProgressIndicator(value: downloading ? fraction : null),
@@ -116,11 +119,11 @@ class _AndroidUpdateStatusState extends State<AndroidUpdateStatus> with WidgetsB
               Padding(padding: const EdgeInsets.only(top: 5), child: Text('${(fraction * 100).round()}%')),
           ],
           if (downloading && status['full'] == true)
-            const Padding(padding: EdgeInsets.only(top: 5), child: Text('Downloading the full package.')),
+            Padding(padding: EdgeInsets.only(top: 5), child: Text(context.tr("Downloading the full package."))),
           if (ready || failed)
             TextButton(
               onPressed: _busy ? null : _retry,
-              child: Text(failed ? 'Retry update' : 'Continue installation'),
+              child: Text(failed ? context.tr("Retry update") : context.tr("Continue installation")),
             ),
         ],
       ),

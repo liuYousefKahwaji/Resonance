@@ -4,6 +4,8 @@ import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:resonance/l10n/app_strings.dart';
+import 'package:resonance/widgets/settings/language_selector.dart';
 import 'package:flutter/services.dart';
 import 'package:metadata_god/metadata_god.dart';
 import 'package:path/path.dart' as p;
@@ -40,6 +42,25 @@ import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 import 'package:resonance/widgets/app_update_prompt.dart';
 import 'package:resonance/services/app_update_service.dart';
+
+String _youtubeAccessSubtitle(BuildContext context, YoutubeAccessService service) {
+  final status = service.status;
+  if (status.state != YoutubeAccessState.ready) return context.trRendered(service.settingsSubtitle);
+  final session = status.method == YoutubeAccessMethod.windowsBrowser
+      ? context.tr('Using {0} browser session', [YoutubeAccessService.browserDisplayName(status.browserId)])
+      : context.tr('YouTube cookies imported');
+  final tested = status.lastTestedAt;
+  if (tested == null) return session;
+  final elapsed = DateTime.now().difference(tested);
+  final relative = elapsed.inMinutes < 1
+      ? context.tr('just now')
+      : elapsed.inHours < 1
+      ? context.tr('{0} min ago', [elapsed.inMinutes])
+      : elapsed.inDays < 1
+      ? context.tr('{0} hr ago', [elapsed.inHours])
+      : context.tr('{0} days ago', [elapsed.inDays]);
+  return '$session · ${context.tr('tested {0}', [relative])}';
+}
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -125,13 +146,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final update = await AppUpdateService().check(force: true);
       if (!mounted) return;
       if (update == null) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Resonance is up to date.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.tr("Resonance is up to date."))));
       } else {
         await showAppUpdatePrompt(context, update);
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not check for updates: $error')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.tr("Could not check for updates: {0}", [error]))));
       }
     } finally {
       if (mounted) setState(() => _checkingUpdate = false);
@@ -239,10 +262,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         context: context,
         barrierDismissible: false,
         builder: (context) => AlertDialog(
-          title: const Text('Restart Required'),
-          content: const Text('Tray mode changes need a restart to take effect.'),
+          title: Text(context.tr("Restart Required")),
+          content: Text(context.tr("Tray mode changes need a restart to take effect.")),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Later')),
+            TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Later"))),
             ElevatedButton(
               onPressed: () async {
                 try {
@@ -256,11 +279,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (mounted) {
                     ScaffoldMessenger.of(
                       this.context,
-                    ).showSnackBar(SnackBar(content: Text('Could not restart: $error')));
+                    ).showSnackBar(SnackBar(content: Text(context.tr("Could not restart: {0}", [error]))));
                   }
                 }
               },
-              child: const Text('Restart Now'),
+              child: Text(context.tr("Restart Now")),
             ),
           ],
         ),
@@ -273,13 +296,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Fill missing covers?'),
-        content: const Text(
-          'This searches YouTube for each local track in the current playlist and embeds the first result thumbnail only when the track has no cover.',
+        title: Text(context.tr("Fill missing covers?")),
+        content: Text(
+          context.tr(
+            "This searches YouTube for each local track in the current playlist and embeds the first result thumbnail only when the track has no cover.",
+          ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Start')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(context.tr("Cancel"))),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text(context.tr("Start"))),
         ],
       ),
     );
@@ -369,11 +394,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Cover lookup complete: $updated updated, $skipped skipped, $failed failed.')),
+        SnackBar(
+          content: Text(
+            context.tr("Cover lookup complete: {0} updated, {1} skipped, {2} failed.", [updated, skipped, failed]),
+          ),
+        ),
       );
     } catch (e) {
       if (mounted) {
-        await showYoutubeFailure(context, e, actionLabel: 'Cover lookup failed');
+        await showYoutubeFailure(context, e, actionLabel: context.tr("Cover lookup failed"));
       }
     } finally {
       if (mounted) {
@@ -485,7 +514,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Settings'),
+        title: Text(context.tr("Settings")),
         titleTextStyle: TextStyle(
           fontSize: 16,
           fontWeight: FontWeight.w700,
@@ -500,16 +529,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // ── Appearance ──────────────────────────────────────────
-            _SectionHeader(label: 'Appearance'),
+            _SectionHeader(label: context.tr("Appearance")),
             _SettingsCard(
               children: [
+                _SettingsTile(
+                  icon: Icons.language_rounded,
+                  title: context.tr('Language'),
+                  trailing: const LanguageSelector(),
+                ),
+                _Divider(),
                 Consumer<ThemeProvider>(
                   builder: (context, themeProvider, child) => _SettingsTile(
                     icon: Icons.explore_rounded,
-                    title: 'Listening focus',
+                    title: context.tr("Listening focus"),
                     subtitle: themeProvider.listeningFocus == ListeningFocus.local
-                        ? 'Open your local library first'
-                        : 'Open music discovery first; keep your library one tap away',
+                        ? context.tr("Open your local library first")
+                        : context.tr("Open music discovery first; keep your library one tap away"),
                     trailing: DropdownButtonHideUnderline(
                       child: DropdownButton<ListeningFocus>(
                         key: const Key('listening-focus-setting'),
@@ -517,9 +552,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         onChanged: (focus) {
                           if (focus != null) themeProvider.setListeningFocus(focus);
                         },
-                        items: const [
-                          DropdownMenuItem(value: ListeningFocus.local, child: Text('Local')),
-                          DropdownMenuItem(value: ListeningFocus.stream, child: Text('Stream')),
+                        items: [
+                          DropdownMenuItem(value: ListeningFocus.local, child: Text(context.tr("Local"))),
+                          DropdownMenuItem(value: ListeningFocus.stream, child: Text(context.tr("Stream"))),
                         ],
                       ),
                     ),
@@ -530,7 +565,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   builder: (context, themeProvider, child) {
                     return _SettingsTile(
                       icon: Icons.dark_mode_rounded,
-                      title: 'Dark Mode',
+                      title: context.tr("Dark Mode"),
                       trailing: Switch(value: themeProvider.isDarkMode, onChanged: themeProvider.toggleTheme),
                     );
                   },
@@ -540,8 +575,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Consumer<ThemeProvider>(
                     builder: (context, themeProvider, child) => _SettingsTile(
                       icon: Icons.desktop_windows_rounded,
-                      title: 'Windows-native controls',
-                      subtitle: 'Use a Windows 11 title bar, command surfaces, menus, fields, focus, and controls',
+                      title: context.tr("Windows-native controls"),
+                      subtitle: context.tr(
+                        "Use a Windows 11 title bar, command surfaces, menus, fields, focus, and controls",
+                      ),
                       trailing: Switch(
                         value: themeProvider.windowsNativeControls,
                         onChanged: themeProvider.setWindowsNativeControls,
@@ -554,8 +591,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   builder: (context, themeProvider, child) {
                     return _SettingsTile(
                       icon: Icons.palette_rounded,
-                      title: 'Theme',
-                      subtitle: 'Changes accent and supporting colors without restarting',
+                      title: context.tr("Theme"),
+                      subtitle: context.tr("Changes accent and supporting colors without restarting"),
                       trailing: DropdownButtonHideUnderline(
                         child: DropdownButton<ResonanceThemeStyle>(
                           value: themeProvider.themeStyle,
@@ -566,7 +603,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           },
                           items: [
                             for (final style in ResonanceThemeStyle.values)
-                              DropdownMenuItem(value: style, child: Text(style.label)),
+                              DropdownMenuItem(value: style, child: Text(context.tr(style.label))),
                           ],
                         ),
                       ),
@@ -581,8 +618,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _Divider(),
                         _SettingsTile(
                           icon: Icons.colorize_rounded,
-                          title: 'Custom color',
-                          subtitle: 'Choose the accent, surfaces, and borders',
+                          title: context.tr("Custom color"),
+                          subtitle: context.tr("Choose the accent, surfaces, and borders"),
                           trailing: CircleAvatar(backgroundColor: themeProvider.customColor, radius: 15),
                           onTap: () => _pickCustomThemeColor(themeProvider),
                         ),
@@ -595,10 +632,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   builder: (context, themeProvider, child) {
                     return _SettingsTile(
                       icon: Icons.layers_rounded,
-                      title: 'Full Theme Styling',
+                      title: context.tr("Full Theme Styling"),
                       subtitle: themeProvider.fullThemePalette
-                          ? 'Accent, backgrounds, surfaces, and borders'
-                          : 'Accent colors only — classic Resonance styling',
+                          ? context.tr("Accent, backgrounds, surfaces, and borders")
+                          : context.tr("Accent colors only — classic Resonance styling"),
                       trailing: Switch(
                         value: themeProvider.fullThemePalette,
                         onChanged: themeProvider.setFullThemePalette,
@@ -610,8 +647,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Consumer<ThemeProvider>(
                   builder: (context, themeProvider, child) => _SettingsTile(
                     icon: Icons.rounded_corner_rounded,
-                    title: 'Rounder corners',
-                    subtitle: 'Use softer corners throughout Resonance',
+                    title: context.tr("Rounder corners"),
+                    subtitle: context.tr("Use softer corners throughout Resonance"),
                     trailing: Switch(value: themeProvider.rounderCorners, onChanged: themeProvider.setRounderCorners),
                   ),
                 ),
@@ -620,8 +657,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   builder: (context, themeProvider, child) {
                     return _SettingsTile(
                       icon: Icons.color_lens_rounded,
-                      title: 'Artwork-based Player Colors',
-                      subtitle: 'Blend safe colors from the current cover into player accents and glow',
+                      title: context.tr("Artwork-based Player Colors"),
+                      subtitle: context.tr("Blend safe colors from the current cover into player accents and glow"),
                       trailing: Switch(
                         value: themeProvider.artworkPlayerColors,
                         onChanged: themeProvider.setArtworkPlayerColors,
@@ -632,8 +669,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.auto_awesome_rounded,
-                  title: 'Startup Intro',
-                  subtitle: 'Show the Resonance pulse when the app opens',
+                  title: context.tr("Startup Intro"),
+                  subtitle: context.tr("Show the Resonance pulse when the app opens"),
                   trailing: Switch(value: _introEnabled, onChanged: _toggleIntro),
                 ),
                 if (Platform.isAndroid) ...[
@@ -642,8 +679,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     valueListenable: ScrollEffectsPreferences.instance.motionBlurEnabled,
                     builder: (context, enabled, _) => _SettingsTile(
                       icon: Icons.blur_on_rounded,
-                      title: 'Track List Motion Blur',
-                      subtitle: 'Optional scroll effect; off by default for smoother performance',
+                      title: context.tr("Track List Motion Blur"),
+                      subtitle: context.tr("Optional scroll effect; off by default for smoother performance"),
                       trailing: Switch(
                         value: enabled,
                         onChanged: (value) => unawaited(ScrollEffectsPreferences.instance.setMotionBlurEnabled(value)),
@@ -656,10 +693,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   valueListenable: LyricsDisplayPreferences.instance.framesPerSecond,
                   builder: (context, framesPerSecond, _) => _SettingsTile(
                     icon: Icons.speed_rounded,
-                    title: 'Lyrics Animation',
+                    title: context.tr("Lyrics Animation"),
                     subtitle: framesPerSecond == 120
-                        ? 'Smoothest highlight motion; uses more power'
-                        : 'Battery-friendly highlight motion',
+                        ? context.tr("Smoothest highlight motion; uses more power")
+                        : context.tr("Battery-friendly highlight motion"),
                     trailing: DropdownButtonHideUnderline(
                       child: DropdownButton<int>(
                         key: const Key('lyrics-animation-fps-setting'),
@@ -669,9 +706,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             unawaited(LyricsDisplayPreferences.instance.setFramesPerSecond(value));
                           }
                         },
-                        items: const [
-                          DropdownMenuItem(value: 30, child: Text('30 FPS')),
-                          DropdownMenuItem(value: 120, child: Text('120 FPS')),
+                        items: [
+                          DropdownMenuItem(value: 30, child: Text(context.tr("30 FPS"))),
+                          DropdownMenuItem(value: 120, child: Text(context.tr("120 FPS"))),
                         ],
                       ),
                     ),
@@ -681,13 +718,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
 
             // ── Playback ────────────────────────────────────────────
-            _SectionHeader(label: 'Playback'),
+            _SectionHeader(label: context.tr("Playback")),
             _SettingsCard(
               children: [
                 _SettingsTile(
                   icon: Icons.forward_5_rounded,
-                  title: 'Seek Step',
-                  subtitle: 'Used by seek buttons and seek hotkeys',
+                  title: context.tr("Seek Step"),
+                  subtitle: context.tr("Used by seek buttons and seek hotkeys"),
                   trailing: SizedBox(
                     width: 180,
                     child: Row(
@@ -729,10 +766,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         final hasPhysicalOutput = devices.any((device) => !device.isSystemDefault);
                         return _SettingsTile(
                           icon: Icons.speaker_rounded,
-                          title: 'Output device',
+                          title: context.tr("Output device"),
                           subtitle: hasPhysicalOutput
-                              ? 'Choose where Resonance sends audio'
-                              : 'No physical output detected — connect speakers or headphones',
+                              ? context.tr("Choose where Resonance sends audio")
+                              : context.tr("No physical output detected — connect speakers or headphones"),
                           trailing: SizedBox(
                             width: 220,
                             child: Row(
@@ -757,7 +794,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   ),
                                 ),
                                 IconButton(
-                                  tooltip: 'Refresh output devices',
+                                  tooltip: context.tr("Refresh output devices"),
                                   onPressed: () => unawaited(handler.refreshOutputDevices()),
                                   icon: const Icon(Icons.refresh_rounded, size: 19),
                                 ),
@@ -771,18 +808,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ] else if (Platform.isAndroid) ...[
                   _Divider(),
-                  const _SettingsTile(
+                  _SettingsTile(
                     icon: Icons.speaker_rounded,
-                    title: 'Output device',
-                    subtitle: 'Android controls media routing. Use the system media output switcher to change devices.',
-                    trailing: Text('System'),
+                    title: context.tr("Output device"),
+                    subtitle: context.tr(
+                      "Android controls media routing. Use the system media output switcher to change devices.",
+                    ),
+                    trailing: Text(context.tr("System")),
                   ),
                 ],
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.multitrack_audio_rounded,
-                  title: 'Crossfade',
-                  subtitle: 'Blend automatic track changes; manual seeking is unaffected',
+                  title: context.tr("Crossfade"),
+                  subtitle: context.tr("Blend automatic track changes; manual seeking is unaffected"),
                   trailing: Switch(
                     value: _crossfadeEnabled,
                     onChanged: (enabled) => _toggleCrossfade(enabled, handler),
@@ -792,7 +831,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _Divider(),
                   _SettingsTile(
                     icon: Icons.timelapse_rounded,
-                    title: 'Crossfade Duration',
+                    title: context.tr("Crossfade Duration"),
                     trailing: SizedBox(
                       width: 180,
                       child: Row(
@@ -825,8 +864,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.restore_rounded,
-                  title: 'Resume Long Tracks',
-                  subtitle: 'Remember progress for tracks at least 10 minutes long',
+                  title: context.tr("Resume Long Tracks"),
+                  subtitle: context.tr("Remember progress for tracks at least 10 minutes long"),
                   trailing: Switch(
                     value: _resumeLongTracks,
                     onChanged: (enabled) => _toggleResumeLongTracks(enabled, handler),
@@ -837,10 +876,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   valueListenable: handler.equalizerNotifier,
                   builder: (context, equalizer, _) => _SettingsTile(
                     icon: Icons.equalizer_rounded,
-                    title: 'Equalizer',
+                    title: context.tr("Equalizer"),
                     subtitle: equalizer.enabled
-                        ? '${equalizer.preset.label} · five adjustable bands'
-                        : 'Off · five adjustable bands and presets',
+                        ? context.tr("{0} · five adjustable bands", [context.tr(equalizer.preset.label)])
+                        : context.tr("Off · five adjustable bands and presets"),
                     trailing: const Icon(Icons.chevron_right_rounded),
                     onTap: () => Navigator.push<void>(
                       context,
@@ -855,10 +894,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     valueListenable: handler.loudnessScanProgressNotifier,
                     builder: (context, progress, _) => _SettingsTile(
                       icon: Icons.waves_rounded,
-                      title: 'Volume Normalization',
+                      title: context.tr("Volume Normalization"),
                       subtitle: progress.scanning
-                          ? 'Analyzing in background · ${progress.completed}/${progress.total}'
-                          : 'Balance track loudness without delaying playback',
+                          ? context.tr("Analyzing in background · {0}/{1}", [progress.completed, progress.total])
+                          : context.tr("Balance track loudness without delaying playback"),
                       trailing: Switch(value: enabled, onChanged: handler.setVolumeNormalizationEnabled),
                     ),
                   ),
@@ -866,17 +905,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.tune_rounded,
-                  title: 'Playback Settings Scope',
+                  title: context.tr("Playback Settings Scope"),
                   subtitle: _playbackSettingsScope == PlaybackSettingsScope.global
-                      ? 'Use the same speed, pitch, and equalizer for every track'
-                      : 'Remember speed, pitch, and equalizer separately for each track',
+                      ? context.tr("Use the same speed, pitch, and equalizer for every track")
+                      : context.tr("Remember speed, pitch, and equalizer separately for each track"),
                   trailing: DropdownButtonHideUnderline(
                     child: DropdownButton<PlaybackSettingsScope>(
                       value: _playbackSettingsScope,
                       onChanged: (scope) => _setPlaybackSettingsScope(scope, handler),
-                      items: const [
-                        DropdownMenuItem(value: PlaybackSettingsScope.global, child: Text('All tracks')),
-                        DropdownMenuItem(value: PlaybackSettingsScope.perTrack, child: Text('Per track')),
+                      items: [
+                        DropdownMenuItem(value: PlaybackSettingsScope.global, child: Text(context.tr("All tracks"))),
+                        DropdownMenuItem(value: PlaybackSettingsScope.perTrack, child: Text(context.tr("Per track"))),
                       ],
                     ),
                   ),
@@ -885,7 +924,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
 
             if (Platform.isAndroid || Platform.isWindows) ...[
-              _SectionHeader(label: 'PC Companion'),
+              _SectionHeader(label: context.tr("PC Companion")),
               AnimatedBuilder(
                 animation: Platform.isWindows ? CompanionServerService.instance : CompanionClientService.instance,
                 builder: (context, _) {
@@ -903,8 +942,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       _SettingsTile(
                         icon: Platform.isWindows ? Icons.computer_rounded : Icons.phone_android_rounded,
-                        title: Platform.isWindows ? 'PC Companion Server' : 'PC Companion Remote',
-                        subtitle: subtitle,
+                        title: Platform.isWindows
+                            ? context.tr("PC Companion Server")
+                            : context.tr("PC Companion Remote"),
+                        subtitle: context.trRendered(subtitle),
                         trailing: const Icon(Icons.chevron_right_rounded),
                         onTap: () => Navigator.push<void>(
                           context,
@@ -918,7 +959,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
 
             if (Platform.isAndroid || Platform.isWindows) ...[
-              _SectionHeader(label: 'YouTube Access'),
+              _SectionHeader(label: context.tr("YouTube Access")),
               AnimatedBuilder(
                 animation: context.read<YoutubeAccessService>(),
                 builder: (context, _) {
@@ -927,8 +968,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       _SettingsTile(
                         icon: access.isReady ? Icons.verified_user_rounded : Icons.shield_outlined,
-                        title: 'YouTube access',
-                        subtitle: access.settingsSubtitle,
+                        title: context.tr("YouTube access"),
+                        subtitle: _youtubeAccessSubtitle(context, access),
                         trailing: const Icon(Icons.chevron_right_rounded),
                         onTap: () => Navigator.push<void>(
                           context,
@@ -942,13 +983,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
 
             // ── Downloads ───────────────────────────────────────────
-            _SectionHeader(label: 'Downloads'),
+            _SectionHeader(label: context.tr("Downloads")),
             _SettingsCard(
               children: [
                 _SettingsTile(
                   icon: Icons.folder_open_rounded,
-                  title: 'Download Location',
-                  subtitle: _downloadDirectory,
+                  title: context.tr("Download Location"),
+                  subtitle: _downloadDirectory == 'Default App Folder'
+                      ? context.tr('Default App Folder')
+                      : _downloadDirectory,
                   trailing: Icon(
                     Icons.chevron_right_rounded,
                     color: isDark ? const Color(0xFF475569) : const Color(0xFFABA8C8),
@@ -958,8 +1001,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.history_rounded,
-                  title: 'Download History',
-                  subtitle: 'Search downloaded tracks, failures, sources, and saved locations',
+                  title: context.tr("Download History"),
+                  subtitle: context.tr("Search downloaded tracks, failures, sources, and saved locations"),
                   trailing: Icon(
                     Icons.chevron_right_rounded,
                     color: isDark ? const Color(0xFF475569) : const Color(0xFFABA8C8),
@@ -973,10 +1016,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _Divider(),
                   _SettingsTile(
                     icon: Icons.image_search_rounded,
-                    title: 'Fill Missing Covers',
+                    title: context.tr("Fill Missing Covers"),
                     subtitle: _coverLookupRunning
-                        ? _coverLookupStatus
-                        : 'Search YouTube for cover art for tracks missing embedded images',
+                        ? context.trRendered(_coverLookupStatus)
+                        : context.tr("Search YouTube for cover art for tracks missing embedded images"),
                     trailing: _coverLookupRunning
                         ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.play_arrow_rounded, size: 18),
@@ -988,48 +1031,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // ── Hotkeys (desktop only) ──────────────────────────────
             if (_isDesktop) ...[
-              _SectionHeader(label: 'Hotkeys'),
+              _SectionHeader(label: context.tr("Hotkeys")),
               _SettingsCard(
                 children: [
-                  HotkeySettingsTile(actionId: 'play_pause', actionName: 'Play / Pause', callback: handler.playPause),
+                  HotkeySettingsTile(
+                    actionId: 'play_pause',
+                    actionName: context.tr("Play / Pause"),
+                    callback: handler.playPause,
+                  ),
                   _Divider(),
-                  HotkeySettingsTile(actionId: 'next', actionName: 'Next Track', callback: handler.next),
+                  HotkeySettingsTile(actionId: 'next', actionName: context.tr("Next Track"), callback: handler.next),
                   _Divider(),
-                  HotkeySettingsTile(actionId: 'previous', actionName: 'Previous Track', callback: handler.previous),
+                  HotkeySettingsTile(
+                    actionId: 'previous',
+                    actionName: context.tr("Previous Track"),
+                    callback: handler.previous,
+                  ),
                   _Divider(),
                   HotkeySettingsTile(
                     actionId: 'seek_backward',
-                    actionName: 'Seek Backward',
+                    actionName: context.tr("Seek Backward"),
                     callback: () async => handler.seekBySeconds(-(await handler.getSeekStepSeconds())),
                   ),
                   _Divider(),
                   HotkeySettingsTile(
                     actionId: 'seek_forward',
-                    actionName: 'Seek Forward',
+                    actionName: context.tr("Seek Forward"),
                     callback: () async => handler.seekBySeconds(await handler.getSeekStepSeconds()),
                   ),
                   _Divider(),
                   HotkeySettingsTile(
                     actionId: 'volume_up',
-                    actionName: 'Volume Up',
+                    actionName: context.tr("Volume Up"),
                     callback: () => handler.incrementVolume(),
                   ),
                   _Divider(),
                   HotkeySettingsTile(
                     actionId: 'volume_down',
-                    actionName: 'Volume Down',
+                    actionName: context.tr("Volume Down"),
                     callback: () => handler.decrementVolume(),
                   ),
                   _Divider(),
                   HotkeySettingsTile(
                     actionId: 'speed_up',
-                    actionName: 'Speed Up',
+                    actionName: context.tr("Speed Up"),
                     callback: () => handler.incrementSpeed(),
                   ),
                   _Divider(),
                   HotkeySettingsTile(
                     actionId: 'speed_down',
-                    actionName: 'Speed Down',
+                    actionName: context.tr("Speed Down"),
                     callback: () => handler.decrementSpeed(),
                   ),
                 ],
@@ -1038,7 +1089,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // ── System Tray (desktop only) ──────────────────────────
             if (_isDesktop) ...[
-              _SectionHeader(label: 'System Tray'),
+              _SectionHeader(label: context.tr("System Tray")),
               _SettingsCard(
                 children: [
                   Padding(
@@ -1051,13 +1102,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // ── Discord Rich Presence (desktop only) ────────────────
             if (_isDesktop) ...[
-              _SectionHeader(label: 'Integrations'),
+              _SectionHeader(label: context.tr("Integrations")),
               _SettingsCard(
                 children: [
                   _SettingsTile(
                     icon: Icons.discord,
-                    title: 'Discord Rich Presence',
-                    subtitle: 'Show what you\'re listening to on Discord',
+                    title: context.tr("Discord Rich Presence"),
+                    subtitle: context.tr("Show what you're listening to on Discord"),
                     trailing: Switch(value: _discordEnabled, onChanged: _toggleDiscord),
                   ),
                 ],
@@ -1066,13 +1117,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // ── Permissions (Android only) ──────────────────────────
             if (Platform.isAndroid) ...[
-              _SectionHeader(label: 'Permissions'),
+              _SectionHeader(label: context.tr("Permissions")),
               _SettingsCard(
                 children: [
                   _SettingsTile(
                     icon: Icons.folder_open_rounded,
-                    title: 'Audio / Storage Access',
-                    subtitle: 'Required to import music files',
+                    title: context.tr("Audio / Storage Access"),
+                    subtitle: context.tr("Required to import music files"),
                     trailing: const Icon(Icons.open_in_new_rounded, size: 16),
                     onTap: () async {
                       final granted = await StoragePermissionService.hasPermission();
@@ -1080,7 +1131,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         if (mounted) {
                           ScaffoldMessenger.of(
                             context,
-                          ).showSnackBar(const SnackBar(content: Text('Audio permission already granted ✓')));
+                          ).showSnackBar(SnackBar(content: Text(context.tr("Audio permission already granted ✓"))));
                         }
                       } else {
                         await StoragePermissionService.requestWithRationale(context);
@@ -1092,13 +1143,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
 
             // ── About ───────────────────────────────────────────────
-            _SectionHeader(label: 'About'),
+            _SectionHeader(label: context.tr("About")),
             _SettingsCard(
               children: [
                 _SettingsTile(
                   icon: Icons.auto_stories_rounded,
-                  title: 'Getting started tour',
-                  subtitle: 'Review the controls and setup choices',
+                  title: context.tr("Getting started tour"),
+                  subtitle: context.tr("Review the controls and setup choices"),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => Navigator.push<void>(
                     context,
@@ -1110,21 +1161,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.music_note_rounded,
-                  title: 'Resonance',
-                  subtitle: 'A local music player with YouTube support',
+                  title: context.tr("Resonance"),
+                  subtitle: context.tr("A local music player with YouTube support"),
                 ),
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.info_outline_rounded,
-                  title: 'Version',
+                  title: context.tr("Version"),
                   trailing: const AppVersionLabel(),
                   onTap: _handleVersionTap,
                 ),
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.system_update_rounded,
-                  title: 'Check for updates',
-                  subtitle: 'Compare with the latest GitHub release',
+                  title: context.tr("Check for updates"),
+                  subtitle: context.tr("Compare with the latest GitHub release"),
                   trailing: _checkingUpdate
                       ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.chevron_right_rounded),
@@ -1135,9 +1186,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _Divider(),
                   _SettingsTile(
                     icon: Icons.downloading_rounded,
-                    title: 'Background updates',
-                    subtitle:
-                        'Download newer GitHub releases automatically. Android may ask you to approve installation.',
+                    title: context.tr("Background updates"),
+                    subtitle: context.tr(
+                      "Download newer GitHub releases automatically. Android may ask you to approve installation.",
+                    ),
                     trailing: Switch(value: _androidAutoUpdates, onChanged: _setAndroidAutoUpdates),
                   ),
                 ],
@@ -1163,7 +1215,7 @@ class _SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 20, 4, 8),
+      padding: const EdgeInsetsDirectional.fromSTEB(4, 20, 4, 8),
       child: Text(
         label.toUpperCase(),
         style: TextStyle(
@@ -1224,7 +1276,7 @@ class _CustomColorPickerState extends State<_CustomColorPicker> {
     final outline = Theme.of(context).colorScheme.outline;
     final lightness = HSLColor.fromColor(color).lightness.clamp(0.08, 0.92);
     return AlertDialog(
-      title: const Text('Choose your color'),
+      title: Text(context.tr("Choose your color")),
       content: SizedBox(
         width: 350,
         child: ConstrainedBox(
@@ -1237,7 +1289,7 @@ class _CustomColorPickerState extends State<_CustomColorPicker> {
                 Container(
                   width: double.infinity,
                   height: 52,
-                  alignment: Alignment.centerLeft,
+                  alignment: AlignmentDirectional.centerStart,
                   padding: const EdgeInsets.symmetric(horizontal: 18),
                   decoration: BoxDecoration(
                     color: color.withValues(alpha: 0.22),
@@ -1248,12 +1300,12 @@ class _CustomColorPickerState extends State<_CustomColorPicker> {
                     children: [
                       CircleAvatar(backgroundColor: color, radius: 12),
                       const SizedBox(width: 12),
-                      const Text('Resonance', style: TextStyle(fontWeight: FontWeight.w700)),
+                      Text(context.tr("Resonance"), style: TextStyle(fontWeight: FontWeight.w700)),
                     ],
                   ),
                 ),
                 const SizedBox(height: 14),
-                Text('Quick colors', style: Theme.of(context).textTheme.titleSmall),
+                Text(context.tr("Quick colors"), style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 20,
@@ -1263,7 +1315,7 @@ class _CustomColorPickerState extends State<_CustomColorPicker> {
                       Tooltip(
                         message: name,
                         child: Semantics(
-                          label: '$name color',
+                          label: context.tr("{0} color", [context.tr(name)]),
                           button: true,
                           child: InkWell(
                             customBorder: const CircleBorder(),
@@ -1286,7 +1338,7 @@ class _CustomColorPickerState extends State<_CustomColorPicker> {
                   ],
                 ),
                 const SizedBox(height: 14),
-                Text('Fine tune', style: Theme.of(context).textTheme.titleSmall),
+                Text(context.tr("Fine tune"), style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: 8),
                 LayoutBuilder(
                   builder: (context, constraints) {
@@ -1397,10 +1449,10 @@ class _CustomColorPickerState extends State<_CustomColorPicker> {
                   },
                 ),
                 const SizedBox(height: 10),
-                Text('Shade', style: Theme.of(context).textTheme.titleSmall),
+                Text(context.tr("Shade"), style: Theme.of(context).textTheme.titleSmall),
                 Row(
                   children: [
-                    const Text('Darker'),
+                    Text(context.tr("Darker")),
                     Expanded(
                       child: Slider(
                         key: const Key('custom-color-shade'),
@@ -1412,7 +1464,7 @@ class _CustomColorPickerState extends State<_CustomColorPicker> {
                         }),
                       ),
                     ),
-                    const Text('Lighter'),
+                    Text(context.tr("Lighter")),
                   ],
                 ),
               ],
@@ -1421,8 +1473,8 @@ class _CustomColorPickerState extends State<_CustomColorPicker> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(onPressed: () => Navigator.pop(context, color), child: const Text('Use color')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Cancel"))),
+        FilledButton(onPressed: () => Navigator.pop(context, color), child: Text(context.tr("Use color"))),
       ],
     );
   }
@@ -1476,8 +1528,8 @@ class _SettingsTile extends StatelessWidget {
             children: [
               _buildTile(context, null),
               Padding(
-                padding: const EdgeInsets.fromLTRB(68, 0, 16, 10),
-                child: Align(alignment: Alignment.centerLeft, child: trailing),
+                padding: const EdgeInsetsDirectional.fromSTEB(68, 0, 16, 10),
+                child: Align(alignment: AlignmentDirectional.centerStart, child: trailing),
               ),
             ],
           );
@@ -1533,7 +1585,7 @@ class _Divider extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
-      padding: const EdgeInsets.only(left: 68),
+      padding: const EdgeInsetsDirectional.only(start: 68),
       child: Divider(height: 1, thickness: 1, color: isDark ? const Color(0xFF1F1F30) : const Color(0xFFF0EFF5)),
     );
   }

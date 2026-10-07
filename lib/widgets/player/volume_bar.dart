@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/app/theme.dart';
@@ -27,7 +28,9 @@ class _VolumeBarState extends State<VolumeBar> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Directionality(textDirection: TextDirection.ltr, child: _buildBar(context));
+
+  Widget _buildBar(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = Theme.of(context).colorScheme.primary;
@@ -70,7 +73,7 @@ class _VolumeBarState extends State<VolumeBar> {
                     ? const Color(0xFF64748B)
                     : const Color(0xFF94A3B8),
               ),
-              tooltip: displayVolume == 0 ? 'Unmute' : 'Mute',
+              tooltip: displayVolume == 0 ? context.tr("Unmute") : context.tr("Mute"),
               onPressed: handler.toggleMute,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
@@ -147,7 +150,7 @@ class _VolumeBarState extends State<VolumeBar> {
                                 border: Border.all(color: boostColor.withValues(alpha: 0.4), width: 1),
                               ),
                               child: Text(
-                                'BOOST',
+                                context.tr("BOOST"),
                                 style: TextStyle(
                                   fontSize: 8,
                                   fontWeight: FontWeight.w700,

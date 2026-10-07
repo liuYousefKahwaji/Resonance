@@ -6,10 +6,48 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/widgets/player/seek_bar.dart';
+import 'package:resonance/widgets/player/volume_bar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets('RTL does not reverse timeline or volume drag coordinates', (tester) async {
+    final handler = _FakePlayerHandler();
+    await tester.pumpWidget(
+      Provider<PlayerHandler>.value(
+        value: handler,
+        child: MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Scaffold(
+              body: Column(
+                children: const [
+                  SizedBox(width: 700, child: SeekBar()),
+                  SizedBox(width: 700, child: VolumeBar()),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final seek = find.descendant(of: find.byType(SeekBar), matching: find.byType(Slider));
+    final volume = find.descendant(of: find.byType(VolumeBar), matching: find.byType(Slider));
+    expect(Directionality.of(tester.element(seek)), TextDirection.ltr);
+    expect(Directionality.of(tester.element(volume)), TextDirection.ltr);
+    final seekBox = tester.getRect(seek);
+    await tester.tapAt(Offset(seekBox.left + seekBox.width * .75, seekBox.center.dy));
+    await tester.pump();
+    expect(handler.lastSeek!.inSeconds, greaterThan(100));
+    final volumeBox = tester.getRect(volume);
+    await tester.tapAt(Offset(volumeBox.left + volumeBox.width * .75, volumeBox.center.dy));
+    await tester.pump();
+    expect(handler.volumeNotifier.value, greaterThan(1));
+    await tester.pumpWidget(const SizedBox());
+    await handler.disposeTest();
+  });
 
   testWidgets('streams only dim and disable the seekbar while loading a source', (tester) async {
     final handler = _FakePlayerHandler();
@@ -80,6 +118,13 @@ class _FakePlayerHandler extends Fake implements PlayerHandler {
   final positions = StreamController<Duration>.broadcast();
   final durations = StreamController<Duration?>.broadcast();
   Object? seekError;
+  Duration? lastSeek;
+  @override
+  final volumeNotifier = ValueNotifier<double>(1);
+  @override
+  Future<void> changeVolume(double volume) async => volumeNotifier.value = volume;
+  @override
+  Future<void> toggleMute() async => volumeNotifier.value = volumeNotifier.value == 0 ? 1 : 0;
 
   _FakePlayerHandler() {
     mediaItem.add(const MediaItem(id: 'https://youtube.test/watch?v=abcdefghijk', title: 'Stream'));
@@ -109,6 +154,7 @@ class _FakePlayerHandler extends Fake implements PlayerHandler {
   @override
   Future<void> seek(Duration position) async {
     if (seekError != null) throw seekError!;
+    lastSeek = position;
     positions.add(position);
   }
 
@@ -117,5 +163,6 @@ class _FakePlayerHandler extends Fake implements PlayerHandler {
     await durations.close();
     uiVisibleNotifier.dispose();
     seekStepNotifier.dispose();
+    volumeNotifier.dispose();
   }
 }

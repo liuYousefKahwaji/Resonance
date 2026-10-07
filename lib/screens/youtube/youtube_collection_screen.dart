@@ -1,3 +1,5 @@
+import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
+import 'package:resonance/l10n/app_strings.dart';
 import 'dart:async';
 import 'dart:math';
 
@@ -86,7 +88,7 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
       await widget.onPlay(track, queue ?? _tracks);
     } catch (error) {
       if (mounted) {
-        await showYoutubeFailure(context, error, sourceUrl: track.url, actionLabel: 'Could not play track');
+        await showYoutubeFailure(context, error, sourceUrl: track.url, actionLabel: context.tr("Could not play track"));
       }
     } finally {
       if (mounted) setState(() => _playingUrl = null);
@@ -99,7 +101,7 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
     final colors = theme.colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isAlbum ? 'Album' : 'Playlist', style: theme.textTheme.titleMedium),
+        title: Text(_isAlbum ? context.tr("Album") : context.tr("Playlist"), style: theme.textTheme.titleMedium),
         backgroundColor: theme.scaffoldBackgroundColor,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
@@ -140,13 +142,15 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
 
   String get _metadata {
     if (_loading || _error != null) return 'YouTube Music';
-    final pieces = <String>['${_tracks.length} ${_tracks.length == 1 ? 'song' : 'songs'}'];
+    final pieces = <String>[
+      context.tr('{0} {1}', [_tracks.length, context.tr(_tracks.length == 1 ? 'song' : 'songs')]),
+    ];
     if (_tracks.isNotEmpty && _tracks.every((track) => track.durationSeconds != null)) {
       final duration = Duration(seconds: _tracks.fold<int>(0, (total, track) => total + track.durationSeconds!));
       if (duration.inHours > 0) {
-        pieces.add('${duration.inHours} hr ${duration.inMinutes % 60} min');
+        pieces.add(context.tr('{0} hr {1} min', [duration.inHours, duration.inMinutes % 60]));
       } else if (duration.inMinutes > 0) {
-        pieces.add('${duration.inMinutes} min');
+        pieces.add(context.tr('{0} min', [duration.inMinutes]));
       }
     }
     return pieces.join(' · ');
@@ -210,7 +214,7 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
               onPressed: canPlay ? () => _play(_tracks.first) : null,
               style: FilledButton.styleFrom(minimumSize: const Size(116, 44), shape: const StadiumBorder()),
               icon: const Icon(Icons.play_arrow_rounded, size: 25),
-              label: const Text('Play'),
+              label: Text(context.tr("Play")),
             ),
             OutlinedButton.icon(
               key: const Key('youtube-collection-shuffle'),
@@ -222,7 +226,7 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
                   : null,
               style: OutlinedButton.styleFrom(minimumSize: const Size(116, 44), shape: const StadiumBorder()),
               icon: const Icon(Icons.shuffle_rounded, size: 19),
-              label: const Text('Shuffle'),
+              label: Text(context.tr("Shuffle")),
             ),
           ],
         ),
@@ -231,7 +235,7 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
   }
 
   Widget _desktop(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(36, 18, 36, 28),
+    padding: const EdgeInsetsDirectional.fromSTEB(36, 18, 36, 28),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -241,10 +245,10 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
           child: Column(
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(18, 4, 18, 14),
+                padding: const EdgeInsetsDirectional.fromSTEB(18, 4, 18, 14),
                 child: Row(
                   children: [
-                    Expanded(child: Text('Songs', style: Theme.of(context).textTheme.titleMedium)),
+                    Expanded(child: Text(context.tr("Songs"), style: Theme.of(context).textTheme.titleMedium)),
                     Icon(Icons.schedule_rounded, size: 17, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ],
                 ),
@@ -276,14 +280,14 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
     controller: _scrollController,
     slivers: [
       SliverPadding(
-        padding: const EdgeInsets.fromLTRB(24, 12, 24, 28),
+        padding: const EdgeInsetsDirectional.fromSTEB(24, 12, 24, 28),
         sliver: SliverToBoxAdapter(child: _header(context, wide: false)),
       ),
       if (_loading || _error != null || _tracks.isEmpty)
         SliverFillRemaining(hasScrollBody: false, child: _status(context))
       else
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 24),
           sliver: SliverList.builder(
             itemCount: _tracks.length,
             itemBuilder: (context, index) => _row(index, wide: false),
@@ -316,27 +320,31 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
             children: [
               Icon(Icons.cloud_off_rounded, color: Theme.of(context).colorScheme.onSurfaceVariant, size: 36),
               const SizedBox(height: 16),
-              const Text('Could not load this collection.'),
+              Text(context.tr("Could not load this collection.")),
               const SizedBox(height: 12),
-              FilledButton.icon(onPressed: _load, icon: const Icon(Icons.refresh_rounded), label: const Text('Retry')),
+              FilledButton.icon(
+                onPressed: _load,
+                icon: const Icon(Icons.refresh_rounded),
+                label: Text(context.tr("Retry")),
+              ),
               TextButton(
                 onPressed: () => showYoutubeFailure(
                   context,
                   _error!,
                   sourceUrl: widget.item.playlistUrl,
-                  actionLabel: 'Could not load collection',
+                  actionLabel: context.tr("Could not load collection"),
                 ),
-                child: const Text('Details'),
+                child: Text(context.tr("Details")),
               ),
             ],
           ),
         ),
       );
     }
-    return const Center(
+    return Center(
       child: Padding(
         padding: EdgeInsets.all(24),
-        child: Text('No playable songs in this collection.', textAlign: TextAlign.center),
+        child: Text(context.tr("No playable songs in this collection."), textAlign: TextAlign.center),
       ),
     );
   }
@@ -417,7 +425,7 @@ class _CollectionTrackRowState extends State<_CollectionTrackRow> {
     final track = widget.track;
     return Semantics(
       button: true,
-      label: 'Play ${track.title} by ${track.artist}',
+      label: context.tr("Play {0} by {1}", [track.title, track.artist]),
       child: Material(
         color: widget.busy ? colors.primary.withValues(alpha: 0.08) : Colors.transparent,
         borderRadius: resonanceBorderRadius(context, 8, rounderRadius: 14),
@@ -474,11 +482,14 @@ class _CollectionTrackRowState extends State<_CollectionTrackRow> {
                         style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        track.artist,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+                      YoutubeArtistLink(
+                        track: track,
+                        child: Text(
+                          track.artist,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+                        ),
                       ),
                     ],
                   ),

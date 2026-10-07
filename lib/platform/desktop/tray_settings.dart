@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -5,11 +6,7 @@ class TraySettings extends StatefulWidget {
   final TrayMode selectedMode;
   final ValueChanged<TrayMode?> onChanged;
 
-  const TraySettings({
-    super.key,
-    required this.selectedMode,
-    required this.onChanged,
-  });
+  const TraySettings({super.key, required this.selectedMode, required this.onChanged});
 
   @override
   State<TraySettings> createState() => _TraySettingsState();
@@ -23,12 +20,8 @@ class _TraySettingsState extends State<TraySettings> {
       children: [
         Row(
           children: [
-            Radio<TrayMode>(
-              value: TrayMode.closeToTray,
-              groupValue: widget.selectedMode,
-              onChanged: widget.onChanged,
-            ),
-            const Text('Close to tray'),
+            Radio<TrayMode>(value: TrayMode.closeToTray, groupValue: widget.selectedMode, onChanged: widget.onChanged),
+            Text(context.tr("Close to tray")),
           ],
         ),
         Row(
@@ -38,17 +31,13 @@ class _TraySettingsState extends State<TraySettings> {
               groupValue: widget.selectedMode,
               onChanged: widget.onChanged,
             ),
-            const Text('Minimize to tray'),
+            Text(context.tr("Minimize to tray")),
           ],
         ),
         Row(
           children: [
-            Radio<TrayMode>(
-              value: TrayMode.noTray,
-              groupValue: widget.selectedMode,
-              onChanged: widget.onChanged,
-            ),
-            const Text('No tray'),
+            Radio<TrayMode>(value: TrayMode.noTray, groupValue: widget.selectedMode, onChanged: widget.onChanged),
+            Text(context.tr("No tray")),
           ],
         ),
       ],
@@ -56,11 +45,7 @@ class _TraySettingsState extends State<TraySettings> {
   }
 }
 
-enum TrayMode {
-  closeToTray,
-  minimizeToTray,
-  noTray,
-}
+enum TrayMode { closeToTray, minimizeToTray, noTray }
 
 class SettingsService {
   static const _trayModeKey = 'tray_mode';

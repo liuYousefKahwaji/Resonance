@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/models/download_queue_entry.dart';
 import 'package:resonance/services/download/download_queue_controller.dart';
@@ -22,7 +23,10 @@ class DownloadQueuePanel extends StatelessWidget {
           child: ListTile(
             dense: true,
             leading: Icon(active == null ? Icons.download_done_rounded : Icons.downloading_rounded),
-            title: Text(active?.track.title ?? '${controller.pendingCount} downloads waiting', maxLines: 1),
+            title: Text(
+              active?.track.title ?? context.tr("{0} downloads waiting", [controller.pendingCount]),
+              maxLines: 1,
+            ),
             subtitle: active == null ? null : LinearProgressIndicator(value: (active.progress / 100).clamp(0, 1)),
             trailing: const Icon(Icons.keyboard_arrow_up_rounded),
           ),
@@ -31,14 +35,14 @@ class DownloadQueuePanel extends StatelessWidget {
       return Column(
         children: [
           ListTile(
-            title: const Text('Download queue'),
-            subtitle: Text('${controller.pendingCount} remaining'),
-            trailing: TextButton(onPressed: controller.clearFinished, child: const Text('Clear finished')),
+            title: Text(context.tr("Download queue")),
+            subtitle: Text(context.tr("{0} remaining", [controller.pendingCount])),
+            trailing: TextButton(onPressed: controller.clearFinished, child: Text(context.tr("Clear finished"))),
           ),
           const Divider(height: 1),
           Expanded(
             child: entries.isEmpty
-                ? const Center(child: Text('Queued downloads will appear here'))
+                ? Center(child: Text(context.tr("Queued downloads will appear here")))
                 : ListView.builder(
                     itemCount: entries.length,
                     itemBuilder: (context, index) {
@@ -56,7 +60,12 @@ class DownloadQueuePanel extends StatelessWidget {
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(failed ? (entry.error ?? 'Download failed') : entry.statusText, maxLines: 2),
+                            Text(
+                              failed
+                                  ? (entry.error ?? context.tr("Download failed"))
+                                  : context.trRendered(entry.statusText),
+                              maxLines: 2,
+                            ),
                             if (entry.status == DownloadQueueStatus.downloading)
                               Padding(
                                 padding: const EdgeInsets.only(top: 6),
@@ -70,7 +79,7 @@ class DownloadQueuePanel extends StatelessWidget {
                                 children: [
                                   if (accessFailure)
                                     IconButton(
-                                      tooltip: 'Fix access',
+                                      tooltip: context.tr("Fix access"),
                                       icon: const Icon(Icons.verified_user_outlined),
                                       onPressed: () => Navigator.push<void>(
                                         context,
@@ -80,7 +89,7 @@ class DownloadQueuePanel extends StatelessWidget {
                                       ),
                                     ),
                                   IconButton(
-                                    tooltip: 'Retry',
+                                    tooltip: context.tr("Retry"),
                                     icon: const Icon(Icons.refresh_rounded),
                                     onPressed: () => controller.retry(entry.id),
                                   ),

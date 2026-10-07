@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -48,7 +49,7 @@ class _SyncLauncherState extends State<_SyncLauncher> {
     final sync = SyncSessionService.instance;
     if (sync.isHost) return _HostSessionView(sync: sync);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 4, 24, 32),
+      padding: const EdgeInsetsDirectional.fromSTEB(24, 4, 24, 32),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -57,12 +58,14 @@ class _SyncLauncherState extends State<_SyncLauncher> {
             children: [
               Icon(Icons.spatial_audio_rounded, color: Theme.of(context).colorScheme.primary),
               const SizedBox(width: 12),
-              Text('Resonance Sync', style: Theme.of(context).textTheme.headlineSmall),
+              Text(context.tr("Resonance Sync"), style: Theme.of(context).textTheme.headlineSmall),
             ],
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Play the same streamed music on nearby phones. The host controls playback; every phone keeps its own volume.',
+          Text(
+            context.tr(
+              "Play the same streamed music on nearby phones. The host controls playback; every phone keeps its own volume.",
+            ),
           ),
           if (_error != null) ...[
             const SizedBox(height: 12),
@@ -72,17 +75,17 @@ class _SyncLauncherState extends State<_SyncLauncher> {
           FilledButton.icon(
             onPressed: _busy ? null : _host,
             icon: const Icon(Icons.wifi_tethering_rounded),
-            label: Text(_busy ? 'Starting…' : 'Host from this playlist'),
+            label: Text(_busy ? context.tr("Starting…") : context.tr("Host from this playlist")),
           ),
           const SizedBox(height: 10),
           OutlinedButton.icon(
             onPressed: _busy ? null : _join,
             icon: const Icon(Icons.qr_code_scanner_rounded),
-            label: const Text('Join with QR code'),
+            label: Text(context.tr("Join with QR code")),
           ),
           const SizedBox(height: 14),
           Text(
-            'Phones must be on the same Wi-Fi or the host phone’s hotspot. Local files are excluded.',
+            context.tr("Phones must be on the same Wi-Fi or the host phone’s hotspot. Local files are excluded."),
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -129,13 +132,13 @@ class _HostSessionView extends StatelessWidget {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: sync,
     builder: (context, _) => Padding(
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 28),
+      padding: const EdgeInsetsDirectional.fromSTEB(24, 0, 24, 28),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('Resonance Sync is live', style: Theme.of(context).textTheme.headlineSmall),
+          Text(context.tr("Resonance Sync is live"), style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 6),
-          Text('${sync.peerCount} ${sync.peerCount == 1 ? 'phone' : 'phones'} connected'),
+          Text(context.tr("{0} {1} connected", [sync.peerCount, context.tr(sync.peerCount == 1 ? 'phone' : 'phones')])),
           const SizedBox(height: 18),
           if (sync.pairingPayload case final payload?)
             Container(
@@ -144,13 +147,15 @@ class _HostSessionView extends StatelessWidget {
               child: QrImageView(data: payload, size: 230, backgroundColor: Colors.white),
             )
           else
-            const Padding(
+            Padding(
               padding: EdgeInsets.all(32),
-              child: Text('The five-minute joining window has closed. End and restart Sync to invite another phone.'),
+              child: Text(
+                context.tr("The five-minute joining window has closed. End and restart Sync to invite another phone."),
+              ),
             ),
           const SizedBox(height: 14),
           Text(
-            'Guests hear only streamed tracks and cannot control playback.',
+            context.tr("Guests hear only streamed tracks and cannot control playback."),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 18),
@@ -160,7 +165,7 @@ class _HostSessionView extends StatelessWidget {
               if (context.mounted) Navigator.pop(context, true);
             },
             icon: const Icon(Icons.stop_circle_outlined),
-            label: const Text('End Sync'),
+            label: Text(context.tr("End Sync")),
           ),
         ],
       ),
@@ -224,7 +229,7 @@ class _SyncJoinScreenState extends State<SyncJoinScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Join Resonance Sync')),
+    appBar: AppBar(title: Text(context.tr("Join Resonance Sync"))),
     body: Column(
       children: [
         Expanded(
@@ -238,9 +243,9 @@ class _SyncJoinScreenState extends State<SyncJoinScreen> {
         ),
         if (_joining) const LinearProgressIndicator(),
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 10, 24, 28),
+          padding: const EdgeInsetsDirectional.fromSTEB(24, 10, 24, 28),
           child: Text(
-            _error ?? 'Scan the QR code shown on the host phone.',
+            _error ?? context.tr("Scan the QR code shown on the host phone."),
             textAlign: TextAlign.center,
             style: TextStyle(color: _error == null ? null : Theme.of(context).colorScheme.error),
           ),

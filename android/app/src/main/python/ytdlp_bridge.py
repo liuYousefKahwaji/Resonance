@@ -121,7 +121,19 @@ def _ytmusic_cookie_header(cookie_file):
     return "; ".join(pairs)
 
 
-def _build_authenticated_ytmusic(cookie_file):
+def _home_shelf_kind(title):
+    """Stable layout category, independent of the server's display language."""
+    value = str(title).strip().lower().replace("ـ", "")
+    if any(token in value for token in ("quick pick", "اختيارات سريعة", "مختارات سريعة", "اختياراتك السريعة")):
+        return "quickPicks"
+    if value in ("suggestions", "اقتراحات", "الاقتراحات"):
+        return "suggestions"
+    if any(token in value for token in ("speed dial", "الوصول السريع", "الاتصال السريع")):
+        return "speedDial"
+    return None
+
+
+def _build_authenticated_ytmusic(cookie_file, language="en"):
     """Create an authenticated YTMusic client from the private cookie copy."""
     try:
         from ytmusicapi import YTMusic
@@ -144,7 +156,7 @@ def _build_authenticated_ytmusic(cookie_file):
         # ytmusicapi refreshes the timestamped SAPISID hash per request.
         "authorization": get_authorization(sapisid + " " + origin),
     }
-    return YTMusic(auth=auth, language="en")
+    return YTMusic(auth=auth, language=language)
 
 
 def _validated_music_video_id(video_id):
@@ -181,6 +193,7 @@ def _normalize_music_item(item):
     return {
         "title": title,
         "artist": artist,
+        "artistId": artists[0].get("id") if artists and isinstance(artists[0], dict) else None,
         "url": f"https://www.youtube.com/watch?v={video_id}",
         "duration_seconds": duration,
         "thumbnail": thumbnail,
@@ -220,6 +233,7 @@ def _normalize_music_home_item(item):
     return {
         "title": title,
         "subtitle": subtitle,
+        "artistId": artists[0].get("id") if artists and isinstance(artists[0], dict) else None,
         "thumbnail": thumbnail,
         "kind": kind,
         "track": track,
@@ -248,9 +262,9 @@ def get_music_related(video_id: str, limit: int = 25) -> str:
     return json.dumps({"tracks": tracks[: max(1, min(int(limit), 50))]}, ensure_ascii=False)
 
 
-def get_music_library(cookie_file=None) -> str:
+def get_music_library(cookie_file=None, language="en") -> str:
     """Read all saved playlists separately, without delaying the Home feed."""
-    ytmusic = _build_authenticated_ytmusic(cookie_file)
+    ytmusic = _build_authenticated_ytmusic(cookie_file, language)
     items = []
     seen = set()
     for playlist in ytmusic.get_library_playlists(limit=None) or []:
@@ -272,9 +286,9 @@ def get_music_library(cookie_file=None) -> str:
     return json.dumps({"shelves": [{"title": "Playlist Library", "tracks": [], "items": items}]}, ensure_ascii=False)
 
 
-def get_music_home(limit: int = 24, cookie_file=None) -> str:
+def get_music_home(limit: int = 24, cookie_file=None, language="en") -> str:
     """Return normalized authenticated shelves from YouTube Music home."""
-    ytmusic = _build_authenticated_ytmusic(cookie_file)
+    ytmusic = _build_authenticated_ytmusic(cookie_file, language)
     home = ytmusic.get_home(limit=max(1, min(int(limit), 80)))
     shelves = []
     for shelf in home or []:
@@ -289,8 +303,8 @@ def get_music_home(limit: int = 24, cookie_file=None) -> str:
             if normalized_item and normalized_item not in items:
                 items.append(normalized_item)
         if title and items:
-            shelves.append({"title": title, "tracks": tracks, "items": items})
-    shelves.sort(key=lambda shelf: 0 if "quick pick" in shelf["title"].lower() else 1)
+            shelves.append({"title": title, "kind": _home_shelf_kind(title), "tracks": tracks, "items": items})
+    shelves.sort(key=lambda shelf: 0 if _home_shelf_kind(shelf["title"]) == "quickPicks" else 1)
     existing_playable = []
     for shelf in shelves:
         for track in shelf["tracks"]:
@@ -332,14 +346,14 @@ def get_music_home(limit: int = 24, cookie_file=None) -> str:
             if fallback_tracks or resolution_attempts >= 2:
                 break
     pick_source = history_tracks or (existing_playable + [track for track in fallback_tracks if track not in existing_playable])
-    if pick_source and not any("quick pick" in shelf["title"].lower() for shelf in shelves):
+    if pick_source and not any(_home_shelf_kind(shelf["title"]) == "quickPicks" for shelf in shelves):
         picks = pick_source[:20]
         pick_items = [
             {"title": track["title"], "subtitle": track["artist"], "thumbnail": track["thumbnail"], "kind": "track", "track": track}
             for track in picks
         ]
-        shelves.insert(0, {"title": "Quick picks", "tracks": picks, "items": pick_items})
-    if not any("suggest" in shelf["title"].lower() for shelf in shelves):
+        shelves.insert(0, {"title": "Quick picks", "kind": "quickPicks", "tracks": picks, "items": pick_items})
+    if not any(_home_shelf_kind(shelf["title"]) == "suggestions" for shelf in shelves):
         seen = set()
         suggestions = []
         seed = next((track for shelf in shelves for track in shelf["tracks"]), None)
@@ -356,7 +370,7 @@ def get_music_home(limit: int = 24, cookie_file=None) -> str:
             except Exception:
                 pass
         for shelf in shelves:
-            if "quick pick" in shelf["title"].lower():
+            if _home_shelf_kind(shelf["title"]) == "quickPicks":
                 continue
             for track in shelf["tracks"]:
                 if track["url"] not in seen:
@@ -372,7 +386,7 @@ def get_music_home(limit: int = 24, cookie_file=None) -> str:
                 {"title": track["title"], "subtitle": track["artist"], "thumbnail": track["thumbnail"], "kind": "track", "track": track}
                 for track in suggestions
             ]
-            shelves.insert(1 if shelves else 0, {"title": "Suggestions", "tracks": suggestions, "items": suggestion_items})
+            shelves.insert(1 if shelves else 0, {"title": "Suggestions", "kind": "suggestions", "tracks": suggestions, "items": suggestion_items})
     speed_dial = []
     seen_speed_dial = set()
     for shelf in shelves:
@@ -391,12 +405,12 @@ def get_music_home(limit: int = 24, cookie_file=None) -> str:
             speed_dial.append(track)
         if len(speed_dial) >= 12:
             break
-    if speed_dial and not any("speed dial" in shelf["title"].lower() for shelf in shelves):
+    if speed_dial and not any(_home_shelf_kind(shelf["title"]) == "speedDial" for shelf in shelves):
         speed_items = [
             {"title": track["title"], "subtitle": track["artist"], "thumbnail": track["thumbnail"], "kind": "track", "track": track}
             for track in speed_dial
         ]
-        shelves.insert(min(2, len(shelves)), {"title": "Speed dial", "tracks": speed_dial, "items": speed_items})
+        shelves.insert(min(2, len(shelves)), {"title": "Speed dial", "kind": "speedDial", "tracks": speed_dial, "items": speed_items})
     return json.dumps({"shelves": shelves}, ensure_ascii=False)
 
 
@@ -562,6 +576,7 @@ def search(query: str, limit: int = 10, cookie_file=None) -> str:
         results.append({
             "title": title,
             "uploader": uploader,
+            "channel_id": entry.get("channel_id"),
             "url": url,
             "duration_seconds": int(duration) if duration else None,
             "thumbnail": thumbnail,
@@ -600,6 +615,7 @@ def get_metadata(url: str, cookie_file=None) -> str:
         "title": title,
         "artist": artist,
         "url": info.get("webpage_url") or url,
+        "channel_id": info.get("channel_id"),
         "duration_seconds": int(info["duration"]) if info.get("duration") else None,
         "thumbnail": thumbnail,
         "view_count": info.get("view_count"),

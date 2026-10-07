@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 // lib/widgets/library/track_tile.dart
 //
 // Scroll-smoothness fixes:
@@ -248,7 +249,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                     children: [
                       Icon(Icons.edit_rounded, size: 18, color: Theme.of(dialogContext).colorScheme.primary),
                       const SizedBox(width: 10),
-                      const Text('Edit Metadata'),
+                      Text(context.tr("Edit Metadata")),
                     ],
                   ),
                   content: SingleChildScrollView(
@@ -257,16 +258,16 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                       children: [
                         TextField(
                           controller: titleController,
-                          decoration: const InputDecoration(
-                            labelText: 'Title',
+                          decoration: InputDecoration(
+                            labelText: context.tr("Title"),
                             prefixIcon: Icon(Icons.music_note_rounded, size: 18),
                           ),
                         ),
                         const SizedBox(height: 12),
                         TextField(
                           controller: artistController,
-                          decoration: const InputDecoration(
-                            labelText: 'Artist',
+                          decoration: InputDecoration(
+                            labelText: context.tr("Artist"),
                             prefixIcon: Icon(Icons.person_rounded, size: 18),
                           ),
                         ),
@@ -292,7 +293,9 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                                   OutlinedButton.icon(
                                     onPressed: saving ? null : pickCover,
                                     icon: const Icon(Icons.image_search_rounded, size: 18),
-                                    label: Text(coverBytes == null ? 'Choose cover' : 'Change cover'),
+                                    label: Text(
+                                      coverBytes == null ? context.tr("Choose cover") : context.tr("Change cover"),
+                                    ),
                                   ),
                                   if (coverBytes != null)
                                     TextButton.icon(
@@ -304,7 +307,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                                               coverRemoved = true;
                                             }),
                                       icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                                      label: const Text('Remove cover'),
+                                      label: Text(context.tr("Remove cover")),
                                     ),
                                 ],
                               ),
@@ -325,7 +328,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                   actions: [
                     TextButton(
                       onPressed: saving ? null : () => Navigator.pop(dialogContext),
-                      child: const Text('Cancel'),
+                      child: Text(context.tr("Cancel")),
                     ),
                     ElevatedButton(
                       onPressed: saving
@@ -384,7 +387,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                               dimension: 16,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
-                          : const Text('Save'),
+                          : Text(context.tr("Save")),
                     ),
                   ],
                 ),
@@ -693,7 +696,7 @@ class _TrackTileContent extends StatelessWidget {
                       ),
                       // ── Drag handle / shuffle cue ─────────────
                       Padding(
-                        padding: const EdgeInsets.only(right: 8),
+                        padding: const EdgeInsetsDirectional.only(end: 8),
                         child: selectionMode
                             ? Checkbox(
                                 value: selected,
@@ -809,19 +812,21 @@ class _TrackTileContent extends StatelessWidget {
                                     await favorites.toggle(trackPath);
                                   } catch (error) {
                                     if (context.mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(SnackBar(content: Text('Could not change favorite: $error')));
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text(context.tr("Could not change favorite: {0}", [error]))),
+                                      );
                                     }
                                   }
                                 },
-                                child: Text(isFavorite ? 'Remove from favorites' : 'Add to favorites'),
+                                child: Text(
+                                  isFavorite ? context.tr("Remove from favorites") : context.tr("Add to favorites"),
+                                ),
                               ),
                             MenuItemButton(
                               leadingIcon: const Icon(Icons.open_in_new_rounded, size: 19),
                               onPressed: () =>
                                   unawaited(_openStandalone(context, handler, resolvedTitle, resolvedArtist)),
-                              child: const Text('Open standalone player'),
+                              child: Text(context.tr("Open standalone player")),
                             ),
                             if (isStream)
                               ListenableBuilder(
@@ -835,7 +840,9 @@ class _TrackTileContent extends StatelessWidget {
                                         ? null
                                         : () async {
                                             final messenger = ScaffoldMessenger.of(context);
-                                            messenger.showSnackBar(const SnackBar(content: Text('Download queued')));
+                                            messenger.showSnackBar(
+                                              SnackBar(content: Text(context.tr("Download queued"))),
+                                            );
                                             try {
                                               await queue.enqueue(
                                                 YoutubeTrack(
@@ -848,7 +855,7 @@ class _TrackTileContent extends StatelessWidget {
                                                 replaceStream: true,
                                               );
                                               messenger.showSnackBar(
-                                                SnackBar(content: Text('$resolvedTitle downloaded')),
+                                                SnackBar(content: Text(context.tr("{0} downloaded", [resolvedTitle]))),
                                               );
                                             } catch (error) {
                                               if (context.mounted) {
@@ -856,14 +863,14 @@ class _TrackTileContent extends StatelessWidget {
                                                   context,
                                                   error,
                                                   sourceUrl: trackPath,
-                                                  actionLabel: 'Download failed',
+                                                  actionLabel: context.tr("Download failed"),
                                                 );
                                               }
                                             }
                                           },
                                     child: Text(
                                       pending == null
-                                          ? 'Download'
+                                          ? context.tr("Download")
                                           : '${pending.statusText} ${pending.progress.round()}%',
                                     ),
                                   );
@@ -873,7 +880,7 @@ class _TrackTileContent extends StatelessWidget {
                               MenuItemButton(
                                 leadingIcon: const Icon(Icons.edit_rounded, size: 19),
                                 onPressed: () => onEditMetadata(context, resolvedTitle, resolvedArtist),
-                                child: const Text('Edit metadata'),
+                                child: Text(context.tr("Edit metadata")),
                               ),
                             if (!isStream)
                               MenuItemButton(
@@ -882,11 +889,11 @@ class _TrackTileContent extends StatelessWidget {
                                 ),
                                 leadingIcon: const Icon(Icons.delete_forever_rounded, size: 19),
                                 onPressed: onDeleteEverywhere,
-                                child: const Text('Delete file everywhere'),
+                                child: Text(context.tr("Delete file everywhere")),
                               ),
                           ],
                           builder: (context, controller, _) => IconButton(
-                            tooltip: 'Track actions',
+                            tooltip: context.tr("Track actions"),
                             onPressed: () => controller.isOpen ? controller.close() : controller.open(),
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
@@ -899,7 +906,7 @@ class _TrackTileContent extends StatelessWidget {
                         ),
                         IconButton(
                           icon: const Icon(Icons.close_rounded, size: 16),
-                          tooltip: 'Remove from playlist',
+                          tooltip: context.tr("Remove from playlist"),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                           color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
@@ -1059,8 +1066,8 @@ class _StreamArtworkThumbnail extends StatelessWidget {
             child: const Icon(Icons.sensors_rounded, size: 17),
           ),
         ),
-        Positioned(
-          right: 2,
+        PositionedDirectional(
+          end: 2,
           bottom: 2,
           child: DecoratedBox(
             decoration: BoxDecoration(

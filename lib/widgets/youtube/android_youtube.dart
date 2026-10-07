@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 // lib/widgets/youtube/android_youtube.dart
 // Fixes:
@@ -364,12 +365,12 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Row(
+            content: Row(
               children: [
                 Icon(Icons.check_circle, color: Colors.greenAccent),
                 SizedBox(width: 8),
                 Text(
-                  'Download & Import Complete!',
+                  context.tr("Download & Import Complete!"),
                   style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
                 ),
               ],
@@ -383,7 +384,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     } catch (error) {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);
-        await showYoutubeFailure(context, error, sourceUrl: url, actionLabel: 'Download failed');
+        await showYoutubeFailure(context, error, sourceUrl: url, actionLabel: context.tr("Download failed"));
       }
     }
   }
@@ -412,12 +413,12 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
       Navigator.pop(context);
       messenger.showSnackBar(
         SnackBar(
-          content: const Row(
+          content: Row(
             children: [
               Icon(Icons.sensors_rounded, color: Colors.greenAccent),
               SizedBox(width: 8),
               Text(
-                'Stream URL Added to Playlist!',
+                context.tr("Stream URL Added to Playlist!"),
                 style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
               ),
             ],
@@ -459,7 +460,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _mode = _DialogMode.input);
-      await showYoutubeFailure(context, error, sourceUrl: url, actionLabel: 'Could not read stream');
+      await showYoutubeFailure(context, error, sourceUrl: url, actionLabel: context.tr("Could not read stream"));
     }
   }
 
@@ -494,7 +495,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
     } catch (e) {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);
-        await showYoutubeFailure(context, e, actionLabel: 'Search failed');
+        await showYoutubeFailure(context, e, actionLabel: context.tr("Search failed"));
       }
     }
   }
@@ -526,7 +527,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'YouTube · Stream or Download',
+                          context.tr("YouTube · Stream or Download"),
                           style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
@@ -557,11 +558,11 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
         // Mode toggle — shrink to fit narrow screens
         FittedBox(
           fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
+          alignment: AlignmentDirectional.centerStart,
           child: SegmentedButton<bool>(
-            segments: const [
-              ButtonSegment(value: true, label: Text('URL'), icon: Icon(Icons.link_rounded)),
-              ButtonSegment(value: false, label: Text('Search'), icon: Icon(Icons.search_rounded)),
+            segments: [
+              ButtonSegment(value: true, label: Text(context.tr("URL")), icon: Icon(Icons.link_rounded)),
+              ButtonSegment(value: false, label: Text(context.tr("Search")), icon: Icon(Icons.search_rounded)),
             ],
             selected: {_isUrlMode},
             onSelectionChanged: (s) => setState(() => _isUrlMode = s.first),
@@ -573,7 +574,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
           TextField(
             controller: _urlController,
             decoration: InputDecoration(
-              labelText: 'Video / Playlist URL',
+              labelText: context.tr("Video / Playlist URL"),
               hintText: 'https://youtu.be/...',
               prefixIcon: const Icon(Icons.link_rounded),
               border: OutlineInputBorder(borderRadius: resonanceBorderRadius(context, 10)),
@@ -587,7 +588,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
           const SizedBox(height: 16),
           Row(
             children: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Cancel"))),
               const SizedBox(width: 6),
               Expanded(
                 child: OutlinedButton.icon(
@@ -602,7 +603,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                     if (url.isNotEmpty) _startStreamUrl(url);
                   },
                   icon: const Icon(Icons.sensors_rounded, size: 18),
-                  label: const FittedBox(child: Text('Stream')),
+                  label: FittedBox(child: Text(context.tr("Stream"))),
                 ),
               ),
               const SizedBox(width: 8),
@@ -617,7 +618,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                     if (url.isNotEmpty) _startDownload(url);
                   },
                   icon: const Icon(Icons.download_rounded, size: 18),
-                  label: const FittedBox(child: Text('Download')),
+                  label: FittedBox(child: Text(context.tr("Download"))),
                 ),
               ),
             ],
@@ -626,8 +627,8 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
           TextField(
             controller: _searchController,
             decoration: InputDecoration(
-              labelText: 'Search YouTube',
-              hintText: 'Artist, song name...',
+              labelText: context.tr("Search YouTube"),
+              hintText: context.tr("Artist, song name..."),
               prefixIcon: const Icon(Icons.search_rounded),
               border: OutlineInputBorder(borderRadius: resonanceBorderRadius(context, 10)),
               filled: true,
@@ -641,14 +642,14 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Cancel"))),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 10)),
                 ),
                 onPressed: _runSearch,
                 icon: const Icon(Icons.search_rounded, size: 18),
-                label: const Text('Search'),
+                label: Text(context.tr("Search")),
               ),
             ],
           ),
@@ -667,7 +668,9 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             const CircularProgressIndicator(),
             const SizedBox(height: 16),
             Text(
-              _isUrlMode ? 'Extracting info...' : 'Searching for "${_searchController.text}"...',
+              _isUrlMode
+                  ? context.tr("Extracting info...")
+                  : context.tr("Searching for \"{0}\"...", [_searchController.text]),
               style: theme.textTheme.bodyMedium,
               textAlign: TextAlign.center,
             ),
@@ -687,7 +690,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
             IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => setState(() => _mode = _DialogMode.input)),
             Expanded(
               child: Text(
-                'Results for "${_searchController.text}"',
+                context.tr("Results for \"{0}\"", [_searchController.text]),
                 style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -697,9 +700,9 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
         ),
         const SizedBox(height: 8),
         if (_searchResults.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(vertical: 16),
-            child: Center(child: Text('No results found.')),
+            child: Center(child: Text(context.tr("No results found."))),
           )
         else
           Flexible(
@@ -739,7 +742,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                         child: IconButton(
                           padding: EdgeInsets.zero,
                           icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary, size: 20),
-                          tooltip: 'Stream',
+                          tooltip: context.tr("Stream"),
                           onPressed: () => _startStream(
                             result.url,
                             title: result.title,
@@ -755,7 +758,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                         child: IconButton(
                           padding: EdgeInsets.zero,
                           icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary, size: 20),
-                          tooltip: 'Download',
+                          tooltip: context.tr("Download"),
                           onPressed: () => _startDownload(result.url, track: result),
                         ),
                       ),
@@ -773,8 +776,8 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
           ),
         const SizedBox(height: 8),
         Align(
-          alignment: Alignment.centerRight,
-          child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          alignment: AlignmentDirectional.centerEnd,
+          child: TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Cancel"))),
         ),
       ],
     );
@@ -787,7 +790,10 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(_statusMessage, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500)),
+          Text(
+            context.trRendered(_statusMessage),
+            style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
+          ),
           const SizedBox(height: 12),
           ClipRRect(
             borderRadius: resonanceBorderRadius(context, 8),
@@ -799,7 +805,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
           ),
           const SizedBox(height: 8),
           Align(
-            alignment: Alignment.centerRight,
+            alignment: AlignmentDirectional.centerEnd,
             child: Text(
               '${_downloadPercentage.toStringAsFixed(1)}%',
               style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),

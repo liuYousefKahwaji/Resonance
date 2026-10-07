@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
@@ -20,7 +21,7 @@ class CompanionScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     if (Platform.isWindows) return const _CompanionServerScreen();
     if (Platform.isAndroid) return const _CompanionRemoteScreen();
-    return const Scaffold(body: Center(child: Text('PC Companion is available on Windows and Android.')));
+    return Scaffold(body: Center(child: Text(context.tr("PC Companion is available on Windows and Android."))));
   }
 }
 
@@ -80,8 +81,8 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
       SnackBar(
         content: Text(
           sent
-              ? '${action.label} shortcut delivered to Discord'
-              : 'Discord did not accept ${action.label.toLowerCase()}',
+              ? context.tr("{0} shortcut delivered to Discord", [action.label])
+              : context.tr("Discord did not accept {0}", [action.label.toLowerCase()]),
         ),
       ),
     );
@@ -91,7 +92,7 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
     await _discordKeybinds.resetDefaults();
     await _loadShortcuts();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Discord shortcuts restored')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.tr("Discord shortcuts restored"))));
     }
   }
 
@@ -99,7 +100,7 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
   Widget build(BuildContext context) {
     final payload = _server.pairingPayload;
     return Scaffold(
-      appBar: AppBar(title: const Text('PC Companion')),
+      appBar: AppBar(title: Text(context.tr("PC Companion"))),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(20),
@@ -115,11 +116,15 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
                         value: _server.enabled,
                         onChanged: (enabled) => unawaited(_server.setEnabled(enabled)),
                         secondary: const Icon(Icons.computer_rounded),
-                        title: const Text('Allow Android remote control'),
+                        title: Text(context.tr("Allow Android remote control")),
                         subtitle: Text(
                           _server.running
-                              ? '${_server.address}:${_server.port} · ${_server.connectedClientCount} connected'
-                              : _server.error ?? 'Server is off',
+                              ? context.tr("{0}:{1} · {2} connected", [
+                                  _server.address,
+                                  _server.port,
+                                  _server.connectedClientCount,
+                                ])
+                              : _server.error ?? context.tr("Server is off"),
                         ),
                       ),
                     ),
@@ -130,11 +135,13 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
                     const SizedBox(height: 24),
                     Row(
                       children: [
-                        Expanded(child: Text('Discord Controls', style: Theme.of(context).textTheme.titleLarge)),
+                        Expanded(
+                          child: Text(context.tr("Discord Controls"), style: Theme.of(context).textTheme.titleLarge),
+                        ),
                         TextButton.icon(
                           onPressed: _resetShortcuts,
                           icon: const Icon(Icons.restore_rounded, size: 18),
-                          label: const Text('Restore defaults'),
+                          label: Text(context.tr("Restore defaults")),
                         ),
                       ],
                     ),
@@ -157,15 +164,19 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'These shortcuts are sent to Windows when the Android Companion buttons are tapped. Discord state is not read or tracked.',
+                      context.tr(
+                        "These shortcuts are sent to Windows when the Android Companion buttons are tapped. Discord state is not read or tracked.",
+                      ),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     if (_server.running && payload != null) ...[
                       const SizedBox(height: 16),
-                      Text('Pair an Android device', style: Theme.of(context).textTheme.titleLarge),
+                      Text(context.tr("Pair an Android device"), style: Theme.of(context).textTheme.titleLarge),
                       const SizedBox(height: 8),
-                      const Text(
-                        'Open Settings → PC Companion on Android and scan this one-time code. Both devices must be on the same local network.',
+                      Text(
+                        context.tr(
+                          "Open Settings → PC Companion on Android and scan this one-time code. Both devices must be on the same local network.",
+                        ),
                       ),
                       const SizedBox(height: 16),
                       Center(
@@ -173,7 +184,10 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
                           width: 300,
                           height: 300,
                           padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(color: Colors.white, borderRadius: resonanceBorderRadius(context, 20)),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: resonanceBorderRadius(context, 20),
+                          ),
                           child: QrImageView(
                             data: payload,
                             version: QrVersions.auto,
@@ -184,7 +198,7 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        'Pairing code expires after 5 minutes · ${_server.address}:${_server.port}',
+                        context.tr("Pairing code expires after 5 minutes · {0}:{1}", [_server.address, _server.port]),
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
@@ -193,18 +207,18 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
                         child: OutlinedButton.icon(
                           onPressed: _server.rotatePairingCode,
                           icon: const Icon(Icons.refresh_rounded),
-                          label: const Text('New pairing code'),
+                          label: Text(context.tr("New pairing code")),
                         ),
                       ),
                     ],
                     const SizedBox(height: 24),
-                    Text('Approved devices', style: Theme.of(context).textTheme.titleLarge),
+                    Text(context.tr("Approved devices"), style: Theme.of(context).textTheme.titleLarge),
                     const SizedBox(height: 8),
                     if (_server.approvedDevices.isEmpty)
-                      const Card(
+                      Card(
                         child: Padding(
                           padding: EdgeInsets.all(18),
-                          child: Text('No Android devices have been paired yet.'),
+                          child: Text(context.tr("No Android devices have been paired yet.")),
                         ),
                       )
                     else
@@ -215,9 +229,9 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
                               ListTile(
                                 leading: const Icon(Icons.phone_android_rounded),
                                 title: Text(device.name),
-                                subtitle: Text('Paired ${_formatDate(device.pairedAt)}'),
+                                subtitle: Text(context.tr("Paired {0}", [_formatDate(device.pairedAt)])),
                                 trailing: IconButton(
-                                  tooltip: 'Forget device',
+                                  tooltip: context.tr("Forget device"),
                                   onPressed: () => unawaited(_server.forgetDevice(device.id)),
                                   icon: const Icon(Icons.delete_outline_rounded),
                                 ),
@@ -227,7 +241,9 @@ class _CompanionServerScreenState extends State<_CompanionServerScreen> {
                       ),
                     const SizedBox(height: 16),
                     Text(
-                      'The companion transfers playback state and control commands only. Audio, files, playlists, and downloads stay on this PC.',
+                      context.tr(
+                        "The companion transfers playback state and control commands only. Audio, files, playlists, and downloads stay on this PC.",
+                      ),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -273,19 +289,22 @@ class _DiscordKeybindTile extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(action.label, style: Theme.of(context).textTheme.titleMedium),
-              Text(hotKey == null ? 'Loading…' : formatHotKey(hotKey!), style: Theme.of(context).textTheme.bodySmall),
+              Text(context.tr(action.label), style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                hotKey == null ? context.tr("Loading…") : formatHotKey(hotKey!),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ],
           ),
         ),
-        TextButton(onPressed: onRecord, child: const Text('Record')),
+        TextButton(onPressed: onRecord, child: Text(context.tr("Record"))),
         const SizedBox(width: 4),
         OutlinedButton.icon(
           onPressed: hotKey == null || testing ? null : onTest,
           icon: testing
               ? const SizedBox.square(dimension: 14, child: CircularProgressIndicator(strokeWidth: 2))
               : const Icon(Icons.play_arrow_rounded, size: 18),
-          label: const Text('Test'),
+          label: Text(context.tr("Test")),
         ),
       ],
     ),
@@ -392,11 +411,11 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('PC Companion'),
+        title: Text(context.tr("PC Companion")),
         actions: [
           IconButton(
             onPressed: _openScanner,
-            tooltip: 'Pair another PC',
+            tooltip: context.tr("Pair another PC"),
             icon: const Icon(Icons.qr_code_scanner_rounded),
           ),
         ],
@@ -409,7 +428,10 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
     padding: const EdgeInsets.all(16),
     child: Column(
       children: [
-        Text('Scan the pairing code shown by Resonance on Windows', style: Theme.of(context).textTheme.titleMedium),
+        Text(
+          context.tr("Scan the pairing code shown by Resonance on Windows"),
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
         const SizedBox(height: 12),
         Expanded(
           child: ClipRRect(
@@ -417,14 +439,17 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
             child: MobileScanner(
               controller: _scanner,
               onDetect: _onDetect,
-              errorBuilder: (context, error) =>
-                  Center(child: Text('Camera unavailable: ${error.errorDetails?.message ?? error.errorCode.name}')),
+              errorBuilder: (context, error) => Center(
+                child: Text(
+                  context.tr("Camera unavailable: {0}", [error.errorDetails?.message ?? error.errorCode.name]),
+                ),
+              ),
             ),
           ),
         ),
         if (_client.hasSavedPairing) ...[
           const SizedBox(height: 10),
-          TextButton(onPressed: () => setState(() => _showScanner = false), child: const Text('Cancel')),
+          TextButton(onPressed: () => setState(() => _showScanner = false), child: Text(context.tr("Cancel"))),
         ],
       ],
     ),
@@ -453,7 +478,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    current?.title ?? 'Nothing playing',
+                    current?.title ?? context.tr("Nothing playing"),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
@@ -462,6 +487,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                   if (current?.artist.isNotEmpty == true) Text(current!.artist, textAlign: TextAlign.center),
                   const SizedBox(height: 16),
                   Row(
+                    textDirection: TextDirection.ltr,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       IconButton.filledTonal(
@@ -503,7 +529,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       IconButton(
-                        tooltip: 'Loop: ${snapshot.loopMode}',
+                        tooltip: context.tr("Loop: {0}", [snapshot.loopMode]),
                         onPressed: _client.connected
                             ? () => _client.sendCommand('setLoop', value: _nextLoopMode(snapshot.loopMode))
                             : null,
@@ -511,7 +537,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                         color: snapshot.loopMode == 'off' ? null : Theme.of(context).colorScheme.primary,
                       ),
                       IconButton(
-                        tooltip: snapshot.shuffle ? 'Turn shuffle off' : 'Turn shuffle on',
+                        tooltip: snapshot.shuffle ? context.tr("Turn shuffle off") : context.tr("Turn shuffle on"),
                         onPressed: _client.connected
                             ? () => _client.sendCommand('setShuffle', value: !snapshot.shuffle)
                             : null,
@@ -521,7 +547,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                     ],
                   ),
                   const Divider(height: 20),
-                  Text('Discord', style: Theme.of(context).textTheme.labelLarge),
+                  Text(context.tr("Discord"), style: Theme.of(context).textTheme.labelLarge),
                   const SizedBox(height: 8),
                   Wrap(
                     alignment: WrapAlignment.center,
@@ -532,13 +558,13 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                         key: const Key('companion-discord-mute'),
                         onPressed: _client.connected ? () => _client.sendCommand(companionToggleMuteCommand) : null,
                         icon: const Icon(Icons.mic_off_rounded),
-                        label: const Text('Toggle mute'),
+                        label: Text(context.tr("Toggle mute")),
                       ),
                       OutlinedButton.icon(
                         key: const Key('companion-discord-deafen'),
                         onPressed: _client.connected ? () => _client.sendCommand(companionToggleDeafenCommand) : null,
                         icon: const Icon(Icons.headset_off_rounded),
-                        label: const Text('Toggle deafen'),
+                        label: Text(context.tr("Toggle deafen")),
                       ),
                     ],
                   ),
@@ -549,11 +575,11 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
           const SizedBox(height: 12),
           Card(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
+              padding: const EdgeInsetsDirectional.fromSTEB(12, 14, 12, 10),
               child: Column(
                 children: [
                   _RemoteSlider(
-                    label: 'Volume',
+                    label: context.tr("Volume"),
                     value: (_volumeDraft ?? snapshot.volume).clamp(0, 2),
                     min: 0,
                     max: 2,
@@ -567,7 +593,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                     },
                   ),
                   _RemoteSlider(
-                    label: 'Speed',
+                    label: context.tr("Speed"),
                     value: (_speedDraft ?? snapshot.speed).clamp(0.5, 2),
                     min: 0.5,
                     max: 2,
@@ -581,7 +607,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                     },
                   ),
                   _RemoteSlider(
-                    label: 'Pitch',
+                    label: context.tr("Pitch"),
                     value: (_pitchDraft ?? snapshot.pitch).clamp(0.5, 2),
                     min: 0.5,
                     max: 2,
@@ -597,13 +623,13 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                   if (snapshot.equalizerSupported) ...[
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('Equalizer'),
-                      subtitle: Text(_equalizerPreset(snapshot.equalizerPreset).label),
+                      title: Text(context.tr("Equalizer")),
+                      subtitle: Text(context.tr(_equalizerPreset(snapshot.equalizerPreset).label)),
                       value: snapshot.equalizerEnabled,
                       onChanged: _client.connected ? (enabled) => _sendEqualizer(snapshot, enabled: enabled) : null,
                     ),
                     Align(
-                      alignment: Alignment.centerLeft,
+                      alignment: AlignmentDirectional.centerStart,
                       child: DropdownButton<EqualizerPreset>(
                         value: _equalizerPreset(snapshot.equalizerPreset),
                         onChanged: _client.connected
@@ -618,7 +644,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                                   _equalizerPreset(snapshot.equalizerPreset) == EqualizerPreset.custom ||
                                   snapshot.equalizerCustomGainsDb != null,
                             )
-                            .map((preset) => DropdownMenuItem(value: preset, child: Text(preset.label)))
+                            .map((preset) => DropdownMenuItem(value: preset, child: Text(context.tr(preset.label))))
                             .toList(growable: false),
                       ),
                     ),
@@ -648,11 +674,11 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
             ),
           ),
           const SizedBox(height: 18),
-          Text('PC queue', style: Theme.of(context).textTheme.titleLarge),
+          Text(context.tr("PC queue"), style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
           if (snapshot.queue.isEmpty)
-            const Card(
-              child: Padding(padding: EdgeInsets.all(18), child: Text('The PC queue is empty.')),
+            Card(
+              child: Padding(padding: EdgeInsets.all(18), child: Text(context.tr("The PC queue is empty."))),
             )
           else
             Card(
@@ -666,7 +692,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
                       subtitle: track.artist.isEmpty
                           ? null
                           : Text(track.artist, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      trailing: track.current ? const Text('NOW') : const Icon(Icons.play_arrow_rounded),
+                      trailing: track.current ? Text(context.tr("NOW")) : const Icon(Icons.play_arrow_rounded),
                       onTap: track.current || !_client.connected
                           ? null
                           : () => _client.sendCommand('playTrack', id: track.id),
@@ -678,7 +704,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
           OutlinedButton.icon(
             onPressed: _client.hasSavedPairing ? _client.reconnectNow : _openScanner,
             icon: const Icon(Icons.refresh_rounded),
-            label: const Text('Reconnect'),
+            label: Text(context.tr("Reconnect")),
           ),
           TextButton.icon(
             onPressed: () async {
@@ -686,7 +712,7 @@ class _CompanionRemoteScreenState extends State<_CompanionRemoteScreen> {
               if (mounted) _openScanner();
             },
             icon: const Icon(Icons.link_off_rounded),
-            label: const Text('Forget this PC'),
+            label: Text(context.tr("Forget this PC")),
           ),
         ],
       ),
@@ -721,7 +747,7 @@ class _ConnectionCard extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: Icon(icon, color: color),
-        title: Text(label),
+        title: Text(context.trRendered(label)),
         subtitle: client.error == null ? null : Text(client.error!, maxLines: 2, overflow: TextOverflow.ellipsis),
       ),
     );
@@ -756,7 +782,7 @@ class _RemoteSlider extends StatelessWidget {
     children: [
       SizedBox(
         width: 58,
-        child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+        child: Text(context.trRendered(label), style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
       Expanded(
         child: Slider(
@@ -769,7 +795,7 @@ class _RemoteSlider extends StatelessWidget {
           onChangeEnd: enabled ? onChangeEnd : null,
         ),
       ),
-      SizedBox(width: 46, child: Text(valueLabel, textAlign: TextAlign.right)),
+      SizedBox(width: 46, child: Text(valueLabel, textAlign: TextAlign.end)),
     ],
   );
 }

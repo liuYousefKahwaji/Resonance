@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:io';
 
@@ -97,27 +98,27 @@ class _QueueSurface extends StatelessWidget {
             ),
           ],
           Padding(
-            padding: EdgeInsets.fromLTRB(16, compact ? 8 : 14, 8, 8),
+            padding: EdgeInsetsDirectional.fromSTEB(16, compact ? 8 : 14, 8, 8),
             child: Row(
               children: [
                 Icon(Icons.queue_music_rounded, color: theme.colorScheme.primary),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Upcoming tracks',
+                    context.tr("Upcoming tracks"),
                     style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
                   ),
                 ),
                 if (queue.shuffled)
                   Tooltip(
-                    message: 'Showing the active shuffled order',
+                    message: context.tr("Showing the active shuffled order"),
                     child: Icon(Icons.shuffle_rounded, size: 18, color: theme.colorScheme.primary),
                   ),
                 if (onClose != null)
                   IconButton(
                     key: const Key('close-upcoming-queue'),
                     onPressed: onClose,
-                    tooltip: 'Close queue',
+                    tooltip: context.tr("Close queue"),
                     icon: Icon(compact ? Icons.keyboard_arrow_down_rounded : Icons.close_rounded),
                   ),
               ],
@@ -131,22 +132,22 @@ class _QueueSurface extends StatelessWidget {
               child: Center(
                 child: Padding(
                   padding: const EdgeInsets.all(24),
-                  child: Text('Could not load the queue.\n$error', textAlign: TextAlign.center),
+                  child: Text(context.tr("Could not load the queue.\n{0}", [error]), textAlign: TextAlign.center),
                 ),
               ),
             )
           else if (queue.current == null)
-            const Expanded(
+            Expanded(
               child: Center(
                 child: Padding(
                   padding: EdgeInsets.all(24),
-                  child: Text('Play a track to see what comes next.', textAlign: TextAlign.center),
+                  child: Text(context.tr("Play a track to see what comes next."), textAlign: TextAlign.center),
                 ),
               ),
             )
           else ...[
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+              padding: const EdgeInsetsDirectional.fromSTEB(12, 12, 12, 8),
               child: _QueueTrackTile(entry: queue.current!, current: true, resolveArtwork: resolveArtwork),
             ),
             if (queue.upcoming.isEmpty)
@@ -156,8 +157,8 @@ class _QueueSurface extends StatelessWidget {
                     padding: const EdgeInsets.all(20),
                     child: Text(
                       queue.loopBehavior == QueueLoopBehavior.one
-                          ? 'Repeat one is on — the current track will play again.'
-                          : 'This is the last track in the current playback order.',
+                          ? context.tr("Repeat one is on — the current track will play again.")
+                          : context.tr("This is the last track in the current playback order."),
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodySmall,
                     ),
@@ -167,7 +168,7 @@ class _QueueSurface extends StatelessWidget {
             else
               Expanded(
                 child: ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 12),
                   itemCount: queue.upcoming.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 4),
                   itemBuilder: (context, index) {
@@ -245,7 +246,7 @@ class _QueueTrackTile extends StatelessWidget {
               const SizedBox(width: 8),
               if (current)
                 Text(
-                  'NOW',
+                  context.tr("NOW"),
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: accent,
                     fontWeight: FontWeight.w900,
@@ -350,7 +351,7 @@ class _QueueFooter extends StatelessWidget {
     };
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 9, 16, 11),
+      padding: const EdgeInsetsDirectional.fromSTEB(16, 9, 16, 11),
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
       ),
@@ -366,7 +367,7 @@ class _QueueFooter extends StatelessWidget {
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
           const SizedBox(width: 7),
-          Expanded(child: Text(label, style: Theme.of(context).textTheme.labelSmall)),
+          Expanded(child: Text(context.tr(label), style: Theme.of(context).textTheme.labelSmall)),
         ],
       ),
     );

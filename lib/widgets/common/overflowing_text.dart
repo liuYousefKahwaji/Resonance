@@ -7,7 +7,7 @@ class OverflowingText extends StatefulWidget {
   final TextStyle? style;
   final TextAlign textAlign;
 
-  const OverflowingText({super.key, required this.text, this.style, this.textAlign = TextAlign.left});
+  const OverflowingText({super.key, required this.text, this.style, this.textAlign = TextAlign.start});
 
   @override
   State<OverflowingText> createState() => _OverflowingTextState();

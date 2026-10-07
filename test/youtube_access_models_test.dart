@@ -38,6 +38,21 @@ Use --cookies-from-browser or --cookies for the authentication.''';
       expect(YoutubeFailureClassifier.classify('HTTP Error 403: Forbidden').kind, YoutubeFailureKind.network);
     });
 
+    test('preserves cookie protection as the cause of a later sign-in failure', () {
+      for (final warning in [
+        'unknown cookie version: v20',
+        'unsupported cookie version',
+        'Failed to decrypt with DPAPI',
+      ]) {
+        final failure = YoutubeFailureClassifier.classify(
+          'WARNING: $warning\nThe selected browser profile is not signed in to YouTube Music',
+          authenticated: true,
+        );
+        expect(failure.kind, YoutubeFailureKind.browserDecryptionFailed);
+        expect(failure.userMessage, isNot(contains('Firefox')));
+      }
+    });
+
     test('recognizes browser, rate-limit, and unavailable failures', () {
       expect(
         YoutubeFailureClassifier.classify('ERROR: could not copy Chrome cookie database: database is locked').kind,

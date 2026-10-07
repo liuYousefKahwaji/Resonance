@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:io';
 
@@ -77,7 +78,9 @@ class _DownloadHistoryScreenState extends State<DownloadHistoryScreen> {
       await Process.start('explorer.exe', arguments, mode: ProcessStartMode.detached);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not open folder: $error')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.tr("Could not open folder: {0}", [error]))));
       }
     }
   }
@@ -91,11 +94,11 @@ class _DownloadHistoryScreenState extends State<DownloadHistoryScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Clear download history?'),
-        content: const Text('This removes history entries only. Downloaded audio files will not be deleted.'),
+        title: Text(context.tr("Clear download history?")),
+        content: Text(context.tr("This removes history entries only. Downloaded audio files will not be deleted.")),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Clear History')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(context.tr("Cancel"))),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(context.tr("Clear History"))),
         ],
       ),
     );
@@ -109,26 +112,30 @@ class _DownloadHistoryScreenState extends State<DownloadHistoryScreen> {
     final visible = _visibleEntries.toList(growable: false);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Download History'),
+        title: Text(context.tr("Download History")),
         actions: [
           if (_entries.isNotEmpty)
-            IconButton(onPressed: _clear, tooltip: 'Clear history', icon: const Icon(Icons.delete_sweep_rounded)),
+            IconButton(
+              onPressed: _clear,
+              tooltip: context.tr("Clear history"),
+              icon: const Icon(Icons.delete_sweep_rounded),
+            ),
         ],
       ),
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 8),
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Search title, artist, source, or path',
+                hintText: context.tr("Search title, artist, source, or path"),
                 prefixIcon: const Icon(Icons.search_rounded),
                 suffixIcon: _searchController.text.isEmpty
                     ? null
                     : IconButton(
                         onPressed: _searchController.clear,
-                        tooltip: 'Clear search',
+                        tooltip: context.tr("Clear search"),
                         icon: const Icon(Icons.close_rounded),
                       ),
               ),
@@ -140,7 +147,7 @@ class _DownloadHistoryScreenState extends State<DownloadHistoryScreen> {
                 : visible.isEmpty
                 ? _EmptyHistory(searching: _searchController.text.trim().isNotEmpty)
                 : ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+                    padding: const EdgeInsetsDirectional.fromSTEB(12, 8, 12, 24),
                     itemCount: visible.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
                     itemBuilder: (context, index) => _HistoryCard(
@@ -174,7 +181,7 @@ class _HistoryCard extends StatelessWidget {
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+        padding: const EdgeInsetsDirectional.fromSTEB(14, 12, 8, 12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -241,11 +248,11 @@ class _HistoryCard extends StatelessWidget {
             ),
             IconButton(
               onPressed: exists ? onPlay : null,
-              tooltip: 'Play downloaded track',
+              tooltip: context.tr("Play downloaded track"),
               icon: const Icon(Icons.play_arrow_rounded),
             ),
             PopupMenuButton<_HistoryAction>(
-              tooltip: 'History actions',
+              tooltip: context.tr("History actions"),
               onSelected: (action) {
                 switch (action) {
                   case _HistoryAction.openFolder:
@@ -256,13 +263,19 @@ class _HistoryCard extends StatelessWidget {
               },
               itemBuilder: (_) => [
                 if (onOpenFolder != null)
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: _HistoryAction.openFolder,
-                    child: ListTile(leading: Icon(Icons.folder_open_rounded), title: Text('Open containing folder')),
+                    child: ListTile(
+                      leading: Icon(Icons.folder_open_rounded),
+                      title: Text(context.tr("Open containing folder")),
+                    ),
                   ),
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: _HistoryAction.remove,
-                  child: ListTile(leading: Icon(Icons.delete_outline_rounded), title: Text('Remove history entry')),
+                  child: ListTile(
+                    leading: Icon(Icons.delete_outline_rounded),
+                    title: Text(context.tr("Remove history entry")),
+                  ),
                 ),
               ],
             ),
@@ -284,7 +297,7 @@ class _StatusLabel extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
     decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: resonanceBorderRadius(context, 20)),
     child: Text(
-      label,
+      context.tr(label),
       style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700),
     ),
   );
@@ -309,14 +322,14 @@ class _EmptyHistory extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            searching ? 'No matching downloads' : 'No downloads yet',
+            searching ? context.tr("No matching downloads") : context.tr("No downloads yet"),
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 5),
           Text(
             searching
-                ? 'Try another title, artist, source, or path.'
-                : 'Tracks downloaded through Resonance will appear here.',
+                ? context.tr("Try another title, artist, source, or path.")
+                : context.tr("Tracks downloaded through Resonance will appear here."),
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall,
           ),

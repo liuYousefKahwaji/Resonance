@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 
@@ -124,7 +125,9 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
     } catch (error) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not confirm source matches: $error')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.tr("Could not confirm source matches: {0}", [error]))));
       }
     }
   }
@@ -134,8 +137,12 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text(_matching ? widget.matchingTitle : widget.reviewTitle),
-        leading: IconButton(icon: const Icon(Icons.close_rounded), tooltip: widget.cancelLabel, onPressed: _cancel),
+        title: Text(context.trRendered(_matching ? widget.matchingTitle : widget.reviewTitle)),
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded),
+          tooltip: context.tr(widget.cancelLabel),
+          onPressed: _cancel,
+        ),
       ),
       body: SafeArea(
         child: Center(
@@ -164,18 +171,22 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
         const Icon(Icons.manage_search_rounded, size: 64),
         const SizedBox(height: 20),
         Text(
-          'Automatically selecting the top YouTube result',
+          context.tr("Automatically selecting the top YouTube result"),
           style: theme.textTheme.titleLarge,
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 10),
-        Text('$_completed of $total tracks checked', textAlign: TextAlign.center),
+        Text(context.tr("{0} of {1} tracks checked", [_completed, total]), textAlign: TextAlign.center),
         const SizedBox(height: 16),
         LinearProgressIndicator(value: total == 0 ? 1 : _completed / total),
         const SizedBox(height: 14),
         Text(_currentTrack, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 24),
-        TextButton.icon(onPressed: _cancel, icon: const Icon(Icons.close_rounded), label: Text(widget.cancelLabel)),
+        TextButton.icon(
+          onPressed: _cancel,
+          icon: const Icon(Icons.close_rounded),
+          label: Text(context.tr(widget.cancelLabel)),
+        ),
       ],
     );
   }
@@ -185,9 +196,9 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
     children: [
       Icon(Icons.error_outline_rounded, size: 58, color: theme.colorScheme.error),
       const SizedBox(height: 16),
-      Text(_error!, textAlign: TextAlign.center),
+      Text(context.trRendered(_error!), textAlign: TextAlign.center),
       const SizedBox(height: 18),
-      FilledButton(onPressed: _cancel, child: const Text('Close')),
+      FilledButton(onPressed: _cancel, child: Text(context.tr("Close"))),
     ],
   );
 
@@ -206,7 +217,10 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'The top result was selected automatically for $selectedCount track${selectedCount == 1 ? '' : 's'}. Review only the matches you want to replace.',
+                    context.tr(
+                      "The top result was selected automatically for {0} track{1}. Review only the matches you want to replace.",
+                      [selectedCount, selectedCount == 1 ? '' : 's'],
+                    ),
                   ),
                 ),
               ],
@@ -227,14 +241,14 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
           spacing: 12,
           runSpacing: 8,
           children: [
-            TextButton(onPressed: _saving ? null : _cancel, child: Text(widget.cancelLabel)),
-            Text('$unresolvedCount unresolved'),
+            TextButton(onPressed: _saving ? null : _cancel, child: Text(context.tr(widget.cancelLabel))),
+            Text(context.tr("{0} unresolved", [unresolvedCount])),
             FilledButton.icon(
               onPressed: _saving ? null : _finish,
               icon: _saving
                   ? const SizedBox(width: 17, height: 17, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.check_rounded),
-              label: Text(_saving ? 'Saving…' : widget.finishLabel),
+              label: Text(_saving ? context.tr("Saving…") : context.tr(widget.finishLabel)),
             ),
           ],
         ),
@@ -253,7 +267,7 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
         : 'Top result';
     return Card(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
+        padding: const EdgeInsetsDirectional.fromSTEB(14, 12, 10, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -272,17 +286,20 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
                         overflow: TextOverflow.ellipsis,
                       ),
                       if (match.track.formattedDuration.isNotEmpty)
-                        Text('Source duration ${match.track.formattedDuration}', style: theme.textTheme.bodySmall),
+                        Text(
+                          context.tr("Source duration {0}", [match.track.formattedDuration]),
+                          style: theme.textTheme.bodySmall,
+                        ),
                       if (match.track.occurrenceCount > 1)
                         Text(
-                          'Appears ${match.track.occurrenceCount} times in the playlist',
+                          context.tr("Appears {0} times in the playlist", [match.track.occurrenceCount]),
                           style: theme.textTheme.bodySmall,
                         ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
-                Chip(label: Text(status)),
+                Chip(label: Text(context.tr(status))),
               ],
             ),
             const Divider(height: 20),
@@ -294,7 +311,11 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
                 style: theme.textTheme.bodySmall,
               ),
             ] else
-              Text(match.skipped ? 'This track will not be transferred.' : match.error ?? 'No source selected.'),
+              Text(
+                match.skipped
+                    ? context.tr("This track will not be transferred.")
+                    : match.error ?? context.tr("No source selected."),
+              ),
             const SizedBox(height: 8),
             Wrap(
               alignment: WrapAlignment.end,
@@ -303,12 +324,12 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
                 TextButton.icon(
                   onPressed: () => _editMatch(match),
                   icon: const Icon(Icons.swap_horiz_rounded),
-                  label: Text(selected == null ? 'Find a match' : 'Replace'),
+                  label: Text(selected == null ? context.tr("Find a match") : context.tr("Replace")),
                 ),
                 TextButton.icon(
                   onPressed: () => setState(() => match.skipped = !match.skipped),
                   icon: Icon(match.skipped ? Icons.undo_rounded : Icons.skip_next_rounded),
-                  label: Text(match.skipped ? 'Restore' : 'Skip'),
+                  label: Text(match.skipped ? context.tr("Restore") : context.tr("Skip")),
                 ),
               ],
             ),
@@ -400,7 +421,7 @@ class _SourceMatchEditorDialogState extends State<_SourceMatchEditorDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text('Replace “${widget.track.title}”', maxLines: 2, overflow: TextOverflow.ellipsis),
+    title: Text(context.tr("Replace “{0}”", [widget.track.title]), maxLines: 2, overflow: TextOverflow.ellipsis),
     content: SizedBox(
       width: 620,
       height: (MediaQuery.sizeOf(context).height * 0.62).clamp(280, 440),
@@ -411,7 +432,7 @@ class _SourceMatchEditorDialogState extends State<_SourceMatchEditorDialog> {
             textInputAction: TextInputAction.search,
             onSubmitted: (_) => _search(),
             decoration: InputDecoration(
-              labelText: 'YouTube search',
+              labelText: context.tr("YouTube search"),
               prefixIcon: const Icon(Icons.search_rounded),
               suffixIcon: IconButton(onPressed: _loading ? null : _search, icon: const Icon(Icons.refresh_rounded)),
             ),
@@ -421,11 +442,11 @@ class _SourceMatchEditorDialogState extends State<_SourceMatchEditorDialog> {
           if (_error != null)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              child: Text(context.trRendered(_error!), style: TextStyle(color: Theme.of(context).colorScheme.error)),
             ),
           Expanded(
             child: _results.isEmpty && !_loading
-                ? const Center(child: Text('No results. Edit the query and search again.'))
+                ? Center(child: Text(context.tr("No results. Edit the query and search again.")))
                 : ListView.separated(
                     itemCount: _results.length,
                     separatorBuilder: (_, __) => const Divider(height: 1),
@@ -450,7 +471,7 @@ class _SourceMatchEditorDialogState extends State<_SourceMatchEditorDialog> {
         ],
       ),
     ),
-    actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel'))],
+    actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Cancel")))],
   );
 }
 
@@ -503,12 +524,18 @@ class _PlaylistQrDisplayScreenState extends State<PlaylistQrDisplayScreen> {
       );
       if (mounted && location != null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('QR code${widget.transfer.qrPayloads.length == 1 ? '' : 's'} saved to $location')),
+          SnackBar(
+            content: Text(
+              context.tr("QR code{0} saved to {1}", [widget.transfer.qrPayloads.length == 1 ? '' : 's', location]),
+            ),
+          ),
         );
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save QR codes: $error')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.tr("Could not save QR codes: {0}", [error]))));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -520,7 +547,7 @@ class _PlaylistQrDisplayScreenState extends State<PlaylistQrDisplayScreen> {
     final payloads = widget.transfer.qrPayloads;
     final multiple = payloads.length > 1;
     return Scaffold(
-      appBar: AppBar(title: const Text('Transfer Playlist')),
+      appBar: AppBar(title: Text(context.tr("Transfer Playlist"))),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -535,7 +562,9 @@ class _PlaylistQrDisplayScreenState extends State<PlaylistQrDisplayScreen> {
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 6),
-                  Text('${widget.transfer.manifest.youtubeVideoIds.length} transferred playlist entries'),
+                  Text(
+                    context.tr("{0} transferred playlist entries", [widget.transfer.manifest.youtubeVideoIds.length]),
+                  ),
                   const SizedBox(height: 16),
                   Container(
                     padding: const EdgeInsets.all(20),
@@ -553,12 +582,15 @@ class _PlaylistQrDisplayScreenState extends State<PlaylistQrDisplayScreen> {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  Text('${_index + 1} of ${payloads.length}', style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    context.tr("{0} of {1}", [_index + 1, payloads.length]),
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 6),
                   Text(
                     multiple
-                        ? 'Scan every code on the receiving device. Codes may be scanned in any order.'
-                        : 'Scan this code on the receiving device.',
+                        ? context.tr("Scan every code on the receiving device. Codes may be scanned in any order.")
+                        : context.tr("Scan this code on the receiving device."),
                     textAlign: TextAlign.center,
                   ),
                   if (multiple) ...[
@@ -567,7 +599,7 @@ class _PlaylistQrDisplayScreenState extends State<PlaylistQrDisplayScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         IconButton(
-                          tooltip: 'Previous QR code',
+                          tooltip: context.tr("Previous QR code"),
                           onPressed: _index > 0 ? () => _setIndex(_index - 1) : null,
                           icon: const Icon(Icons.chevron_left_rounded),
                         ),
@@ -577,10 +609,10 @@ class _PlaylistQrDisplayScreenState extends State<PlaylistQrDisplayScreen> {
                             _configureTimer();
                           },
                           icon: Icon(_autoCycle ? Icons.pause_rounded : Icons.play_arrow_rounded),
-                          label: Text(_autoCycle ? 'Pause cycling' : 'Auto cycle'),
+                          label: Text(_autoCycle ? context.tr("Pause cycling") : context.tr("Auto cycle")),
                         ),
                         IconButton(
-                          tooltip: 'Next QR code',
+                          tooltip: context.tr("Next QR code"),
                           onPressed: _index + 1 < payloads.length ? () => _setIndex(_index + 1) : null,
                           icon: const Icon(Icons.chevron_right_rounded),
                         ),
@@ -593,7 +625,7 @@ class _PlaylistQrDisplayScreenState extends State<PlaylistQrDisplayScreen> {
                     icon: _saving
                         ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.save_alt_rounded),
-                    label: Text(_saving ? 'Saving…' : 'Save QR Codes'),
+                    label: Text(_saving ? context.tr("Saving…") : context.tr("Save QR Codes")),
                   ),
                 ],
               ),

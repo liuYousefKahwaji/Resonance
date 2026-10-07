@@ -64,6 +64,36 @@ class EventSink:
 
 
 class AndroidYtdlpBridgeTests(unittest.TestCase):
+    def test_artist_identity_survives_track_and_album_normalization(self):
+        artist_id = "UCQJ-a2IzCJ-gwlHvqvOWGhw"
+        source = {"title": "Song", "videoId": "abcdefghijk", "artists": [{"name": "Artist", "id": artist_id}]}
+        self.assertEqual(bridge._normalize_music_item(source)["artistId"], artist_id)
+        album = {"title": "Album", "resultType": "album", "browseId": "MPREtest", "artists": source["artists"]}
+        self.assertEqual(bridge._normalize_music_home_item(album)["artistId"], artist_id)
+        self.assertIsNone(bridge._normalize_music_home_item(album)["track"])
+
+    def test_arabic_home_preserves_layout_kind_and_metadata(self):
+        class FakeMusic:
+            def get_account_info(self):
+                return {"accountName": "Test"}
+
+            def get_home(self, **_):
+                return [{"title": "اختيارات سريعة", "contents": [
+                    {"title": f"Original song {i}", "videoId": f"track00000{i}", "artists": [{"name": "Artist"}]}
+                    for i in range(4)
+                ]}]
+
+        with patch.object(bridge, "_build_authenticated_ytmusic", return_value=FakeMusic()) as builder:
+            response = bridge.get_music_home(6, "private-cookie-copy", "ar")
+            builder.assert_called_once_with("private-cookie-copy", "ar")
+        quick = [shelf for shelf in json.loads(response)["shelves"] if shelf.get("kind") == "quickPicks"]
+        self.assertEqual(len(quick), 1)
+        self.assertEqual(quick[0]["title"], "اختيارات سريعة")
+        self.assertEqual(quick[0]["tracks"][0]["title"], "Original song 0")
+        self.assertEqual(bridge._home_shelf_kind("الوصول السريع"), "speedDial")
+        self.assertEqual(bridge._home_shelf_kind("اقتراحات"), "suggestions")
+
+
     def test_playlist_library_reads_all_saved_playlists_independently_of_home(self):
         class FakeMusic:
             def get_library_playlists(self, limit):
@@ -80,7 +110,7 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         self_limit = []
         with patch.object(bridge, "_build_authenticated_ytmusic", return_value=FakeMusic()) as builder:
             shelf = json.loads(bridge.get_music_library("private-cookie-copy"))["shelves"][0]
-        builder.assert_called_once_with("private-cookie-copy")
+        builder.assert_called_once_with("private-cookie-copy", "en")
         self.assertEqual(self_limit, [None])
         self.assertEqual(shelf["title"], "Playlist Library")
         self.assertEqual(len(shelf["items"]), 60)

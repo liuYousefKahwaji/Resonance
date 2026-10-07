@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 // lib/platform/desktop/hotkey_settings_tile.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -99,7 +100,7 @@ class _HotkeySettingsTileState extends State<HotkeySettingsTile> {
               },
             ),
           const SizedBox(width: 8),
-          ElevatedButton(onPressed: _startRecording, child: const Text('Record')),
+          ElevatedButton(onPressed: _startRecording, child: Text(context.tr("Record"))),
         ],
       ),
     );
@@ -175,7 +176,7 @@ class _HotkeyRecorderDialogState extends State<_HotkeyRecorderDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Record Shortcut'),
+      title: Text(context.tr("Record Shortcut")),
       content: SizedBox(
         width: 300,
         height: 120,
@@ -188,29 +189,32 @@ class _HotkeyRecorderDialogState extends State<_HotkeyRecorderDialog> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Text('Press the desired key combination...'),
+                Text(context.tr("Press the desired key combination...")),
                 if (widget.requireModifier)
-                  const Text(
-                    '(Must include Ctrl, Alt, Shift, or Win)',
+                  Text(
+                    context.tr("(Must include Ctrl, Alt, Shift, or Win)"),
                     style: TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                 const SizedBox(height: 16),
                 if (_recorded != null)
-                  Text('Recorded: ${formatHotKey(_recorded!)}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text(
+                    context.tr("Recorded: {0}", [formatHotKey(_recorded!)]),
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
               ],
             ),
           ),
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context, null), child: Text(context.tr("Cancel"))),
         TextButton(
           onPressed:
               (_recorded != null &&
                   (!widget.requireModifier || (_recorded!.modifiers != null && _recorded!.modifiers!.isNotEmpty)))
               ? () => Navigator.pop(context, _recorded)
               : null,
-          child: const Text('Save'),
+          child: Text(context.tr("Save")),
         ),
       ],
     );

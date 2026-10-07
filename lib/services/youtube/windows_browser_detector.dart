@@ -87,7 +87,8 @@ class WindowsBrowserDetector {
   }
 
   Future<bool> launchBrowser(String browserId, String url) async {
-    if (!Platform.isWindows || Uri.tryParse(url)?.scheme != 'https') return false;
+    if (!Platform.isWindows || !isLaunchUrlAllowed(url)) return false;
+    final profile = browserId.contains('+connector:') ? null : browserProfile(browserId);
     browserId = baseBrowserId(browserId);
     final executableName = const {
       'edge': 'msedge.exe',
@@ -103,14 +104,23 @@ class WindowsBrowserDetector {
     final executable = await _findExecutable(executableName);
     if (executable == null) return false;
     try {
-      await Process.start(executable, [url], runInShell: false, mode: ProcessStartMode.detached);
+      await Process.start(
+        executable,
+        [if (profile != null && browserId != 'firefox') '--profile-directory=$profile', url],
+        runInShell: false,
+        mode: ProcessStartMode.detached,
+      );
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  static String baseBrowserId(String source) => source.split(':').first.trim().toLowerCase();
+  static String baseBrowserId(String source) => source.split(':').first.split('+').first.trim().toLowerCase();
+
+  static bool isLaunchUrlAllowed(String url) =>
+      Uri.tryParse(url)?.scheme == 'https' ||
+      const {'chrome://extensions/', 'edge://extensions/', 'brave://extensions/'}.contains(url);
 
   static String? browserProfile(String source) {
     final separator = source.indexOf(':');

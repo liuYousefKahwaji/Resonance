@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -65,7 +66,7 @@ class _IDontKnowPageState extends State<IDontKnowPage> {
     final motion = resonanceDuration(context, const Duration(milliseconds: 700));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('I DONT KNOW PAGE')),
+      appBar: AppBar(title: Text(context.tr("I DONT KNOW PAGE"))),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -76,19 +77,19 @@ class _IDontKnowPageState extends State<IDontKnowPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'You found the B-side of Settings.',
+                    context.tr("You found the B-side of Settings."),
                     textAlign: TextAlign.center,
                     style: theme.textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'It has no settings. It does have a record.',
+                    context.tr("It has no settings. It does have a record."),
                     textAlign: TextAlign.center,
                     style: TextStyle(color: muted),
                   ),
                   const SizedBox(height: 36),
                   Semantics(
-                    label: 'Spin the record',
+                    label: context.tr("Spin the record"),
                     button: true,
                     child: InkWell(
                       key: const Key('secret-record'),
@@ -136,7 +137,7 @@ class _IDontKnowPageState extends State<IDontKnowPage> {
                   AnimatedSwitcher(
                     duration: resonanceDuration(context, const Duration(milliseconds: 220)),
                     child: Text(
-                      answer,
+                      context.tr(answer),
                       key: ValueKey(_spins),
                       textAlign: TextAlign.center,
                       style: theme.textTheme.titleMedium,
@@ -146,11 +147,11 @@ class _IDontKnowPageState extends State<IDontKnowPage> {
                   FilledButton.icon(
                     onPressed: _askTheRecord,
                     icon: const Icon(Icons.help_outline_rounded),
-                    label: const Text('Ask the record'),
+                    label: Text(context.tr("Ask the record")),
                   ),
                   const SizedBox(height: 24),
                   Text(
-                    'No music was harmed in the making of this page.',
+                    context.tr("No music was harmed in the making of this page."),
                     textAlign: TextAlign.center,
                     style: TextStyle(color: muted, fontSize: 12),
                   ),

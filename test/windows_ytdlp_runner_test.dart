@@ -1,8 +1,37 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/services/youtube/windows_browser_detector.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
+import 'package:resonance/services/youtube/windows_chromium_connector.dart';
 
 void main() {
+  test('Chromium connections use explicit short-lived cookie files; guest requests omit them', () {
+    const source = 'brave+connector:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    expect(WindowsChromiumConnector.isSource(source), isTrue);
+    expect(WindowsBrowserDetector.baseBrowserId(source), 'brave');
+    expect(WindowsChromiumConnector.isSource('chrome+connector:../secret'), isFalse);
+    final runner = WindowsYtdlpRunner(executableDirectory: r'C:\Resonance\bin');
+    final args = runner.buildArguments(
+      ['--dump-json'],
+      overrideBrowserId: source,
+      overrideCookieFile: r'C:\private\lease.txt',
+    );
+    expect(args, containsAllInOrder(['--cookies', r'C:\private\lease.txt']));
+    expect(args, isNot(contains('--cookies-from-browser')));
+    expect(
+      runner.buildArguments(
+        ['--dump-json'],
+        overrideBrowserId: source,
+        overrideCookieFile: r'C:\private\lease.txt',
+        guest: true,
+      ),
+      isNot(contains('--cookies')),
+    );
+    expect(WindowsBrowserDetector.isLaunchUrlAllowed('chrome://extensions/'), isTrue);
+    expect(WindowsBrowserDetector.isLaunchUrlAllowed('edge://extensions/'), isTrue);
+    expect(WindowsBrowserDetector.isLaunchUrlAllowed('brave://extensions/'), isTrue);
+    expect(WindowsBrowserDetector.isLaunchUrlAllowed('chrome://flags/'), isFalse);
+    expect(WindowsBrowserDetector.isLaunchUrlAllowed('file:///C:/secret'), isFalse);
+  });
   test('Windows runner builds common and authenticated arguments without a shell', () {
     final runner = WindowsYtdlpRunner(executableDirectory: r'C:\Resonance\bin');
     final args = runner.buildArguments(['--dump-json', 'https://example.test'], overrideBrowserId: 'firefox');

@@ -1,3 +1,5 @@
+import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
@@ -446,7 +448,9 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
               })
               .catchError((Object error) {
                 if (mounted) {
-                  unawaited(showYoutubeFailure(context, error, sourceUrl: item.id, actionLabel: 'Download failed'));
+                  unawaited(
+                    showYoutubeFailure(context, error, sourceUrl: item.id, actionLabel: context.tr("Download failed")),
+                  );
                 }
               }),
         );
@@ -455,14 +459,14 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
         final added = await FileService().appendTrack(playlist, track.url);
         widget.onLibraryChanged?.call();
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(added ? 'Stream added to playlist' : 'Already in playlist')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(added ? context.tr("Stream added to playlist") : context.tr("Already in playlist"))),
+          );
         }
         return;
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Download queued')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.tr("Download queued"))));
       }
     } catch (error) {
       if (mounted) {
@@ -470,7 +474,7 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
           context,
           error,
           sourceUrl: item.id,
-          actionLabel: download ? 'Download failed' : 'Could not add stream',
+          actionLabel: download ? context.tr("Download failed") : context.tr("Could not add stream"),
         );
       }
     } finally {
@@ -555,29 +559,37 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                   centerTitle: true,
                   leading: IconButton(
                     icon: Icon(widget.syncPeer ? Icons.logout_rounded : Icons.keyboard_arrow_down_rounded),
-                    tooltip: widget.syncPeer ? 'Leave Resonance Sync' : 'Back to playlist',
+                    tooltip: widget.syncPeer ? context.tr("Leave Resonance Sync") : context.tr("Back to playlist"),
                     onPressed: widget.syncPeer ? _leaveSync : _requestPop,
                   ),
                   title: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        widget.syncPeer ? 'PLAYING WITH' : 'PLAYING FROM',
+                        widget.syncPeer ? context.tr("PLAYING WITH") : context.tr("PLAYING FROM"),
                         style: theme.textTheme.labelSmall?.copyWith(
                           fontSize: 9,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 1.3,
                         ),
                       ),
-                      Text(
-                        widget.syncPeer
-                            ? SyncSessionService.instance.hostName ?? 'Resonance Sync'
-                            : artist == null || artist.isEmpty
-                            ? 'Resonance'
-                            : artist,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                      YoutubeArtistLink(
+                        track: YoutubeTrack(
+                          title: item?.title ?? '',
+                          artist: widget.syncPeer ? '' : artist ?? '',
+                          url: item?.id ?? '',
+                        ),
+                        returnToPlayer: true,
+                        child: Text(
+                          widget.syncPeer
+                              ? SyncSessionService.instance.hostName ?? context.tr("Resonance Sync")
+                              : artist == null || artist.isEmpty
+                              ? context.tr("Resonance")
+                              : artist,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                        ),
                       ),
                     ],
                   ),
@@ -589,25 +601,25 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                         YoutubeTrack(title: '', artist: '', url: item.id).videoId != null)
                       PopupMenuButton<bool>(
                         key: const Key('standalone-stream-actions'),
-                        tooltip: 'Stream actions',
+                        tooltip: context.tr("Stream actions"),
                         enabled: !_savingStream,
                         icon: const Icon(Icons.more_horiz_rounded),
                         onSelected: (download) => unawaited(_saveStandaloneStream(item, download: download)),
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: false, child: Text('Add stream to playlist')),
-                          PopupMenuItem(value: true, child: Text('Download song')),
+                        itemBuilder: (_) => [
+                          PopupMenuItem(value: false, child: Text(context.tr("Add stream to playlist"))),
+                          PopupMenuItem(value: true, child: Text(context.tr("Download song"))),
                         ],
                       ),
                     if (Platform.isWindows)
                       IconButton(
                         key: const Key('standalone-queue-toggle'),
-                        tooltip: _queueDrawerOpen ? 'Hide queue' : 'Show queue',
+                        tooltip: _queueDrawerOpen ? context.tr("Hide queue") : context.tr("Show queue"),
                         onPressed: () => _toggleUpcomingQueue(context, handler),
                         icon: Icon(_queueDrawerOpen ? Icons.queue_music_rounded : Icons.queue_music_outlined),
                       ),
                     IconButton(
                       key: const Key('standalone-lyrics-toggle'),
-                      tooltip: _lyricsVisible ? 'Hide lyrics' : 'Show lyrics',
+                      tooltip: _lyricsVisible ? context.tr("Hide lyrics") : context.tr("Show lyrics"),
                       onPressed: () => setState(() => _lyricsVisible = !_lyricsVisible),
                       icon: AnimatedSwitcher(
                         duration: const Duration(milliseconds: 220),
@@ -655,7 +667,7 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                             ),
                           ),
                         ),
-                        _StandaloneMetadata(item: item),
+                        StandaloneMetadata(item: item),
                         PlayerControls(standalone: true, transportLocked: widget.syncPeer),
                       ],
                     ),
@@ -993,7 +1005,9 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
         _loading = false;
         _error = previous == null ? error : null;
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not use those lyrics: $error')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.tr("Could not use those lyrics: {0}", [error]))));
     }
   }
 
@@ -1144,14 +1158,14 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     if (_loading) {
-      return const _LyricsMessage(icon: Icons.graphic_eq_rounded, title: 'Finding lyrics…', loading: true);
+      return _LyricsMessage(icon: Icons.graphic_eq_rounded, title: context.tr("Finding lyrics…"), loading: true);
     }
     final document = _document;
     if (_error != null || document == null) {
       return _LyricsMessage(
         icon: Icons.lyrics_outlined,
-        title: 'Lyrics unavailable',
-        subtitle: 'No local or online lyrics were found.',
+        title: context.tr("Lyrics unavailable"),
+        subtitle: context.tr("No local or online lyrics were found."),
         action: () => _load(forceRefresh: true),
         secondaryAction: _chooseLyrics,
         secondaryActionLabel: 'Choose lyrics',
@@ -1160,8 +1174,8 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
     if (document.instrumental) {
       return _LyricsMessage(
         icon: Icons.music_note_rounded,
-        title: 'Instrumental',
-        subtitle: 'This track does not have vocals.',
+        title: context.tr("Instrumental"),
+        subtitle: context.tr("This track does not have vocals."),
         secondaryAction: _chooseLyrics,
         secondaryActionLabel: 'Choose lyrics',
       );
@@ -1176,11 +1190,11 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 20, 8),
+            padding: const EdgeInsetsDirectional.fromSTEB(24, 20, 20, 8),
             child: Row(
               children: [
                 Text(
-                  'LYRICS',
+                  context.tr("LYRICS"),
                   style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w900, letterSpacing: 1.5),
                 ),
                 const Spacer(),
@@ -1192,10 +1206,10 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
                 IconButton(
                   key: const Key('lyrics-follow-button'),
                   tooltip: document.timingQuality == LyricTimingQuality.plain
-                      ? 'Timed lyrics are required for auto-scroll'
+                      ? context.tr("Timed lyrics are required for auto-scroll")
                       : _followState == _LyricsFollowState.following
-                      ? 'Following current lyric'
-                      : 'Return to current lyric',
+                      ? context.tr("Following current lyric")
+                      : context.tr("Return to current lyric"),
                   visualDensity: VisualDensity.compact,
                   onPressed: document.timingQuality == LyricTimingQuality.plain ? null : _resumeFollowing,
                   isSelected: _followState == _LyricsFollowState.following,
@@ -1204,7 +1218,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
                 ),
                 IconButton(
                   key: const Key('change-lyrics-button'),
-                  tooltip: 'Choose different lyrics',
+                  tooltip: context.tr("Choose different lyrics"),
                   visualDensity: VisualDensity.compact,
                   onPressed: _chooseLyrics,
                   icon: const Icon(Icons.swap_horiz_rounded, size: 20),
@@ -1230,7 +1244,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
               },
               child: ListView.builder(
                 controller: _scrollController,
-                padding: const EdgeInsets.fromLTRB(20, 28, 20, 120),
+                padding: const EdgeInsetsDirectional.fromSTEB(20, 28, 20, 120),
                 itemCount: document.lines.length,
                 itemBuilder: (context, index) {
                   final line = document.lines[index];
@@ -1325,13 +1339,13 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 8, 24, 18),
+            padding: const EdgeInsetsDirectional.fromSTEB(24, 8, 24, 18),
             child: Text(
               document.timingQuality == LyricTimingQuality.word
-                  ? 'Word-synced'
+                  ? context.tr('Word-synced')
                   : document.timingQuality == LyricTimingQuality.line
-                  ? 'Line-synced · word flow estimated'
-                  : 'Unsynced lyrics',
+                  ? context.tr("Line-synced · word flow estimated")
+                  : context.tr("Unsynced lyrics"),
               style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
           ),
@@ -1511,10 +1525,14 @@ class _LyricsMessage extends StatelessWidget {
           else
             Icon(icon, size: 48, color: Theme.of(context).colorScheme.primary),
           const SizedBox(height: 16),
-          Text(title, textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleLarge),
+          Text(context.trRendered(title), textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleLarge),
           if (subtitle != null) ...[
             const SizedBox(height: 8),
-            Text(subtitle!, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
+            Text(
+              context.trRendered(subtitle!),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ],
           if (action != null || secondaryAction != null) ...[
             const SizedBox(height: 16),
@@ -1527,14 +1545,14 @@ class _LyricsMessage extends StatelessWidget {
                   TextButton.icon(
                     onPressed: action,
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Try again'),
+                    label: Text(context.tr("Try again")),
                   ),
                 if (secondaryAction != null)
                   FilledButton.tonalIcon(
                     key: const Key('choose-lyrics-button'),
                     onPressed: secondaryAction,
                     icon: const Icon(Icons.search_rounded),
-                    label: Text(secondaryActionLabel ?? 'Choose lyrics'),
+                    label: Text(context.tr(secondaryActionLabel ?? "Choose lyrics")),
                   ),
               ],
             ),
@@ -1615,11 +1633,15 @@ class _LyricsPickerState extends State<_LyricsPicker> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 12, 12),
+            padding: const EdgeInsetsDirectional.fromSTEB(20, 18, 12, 12),
             child: Row(
               children: [
-                Expanded(child: Text('Choose lyrics', style: theme.textTheme.titleLarge)),
-                IconButton(tooltip: 'Close', onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+                Expanded(child: Text(context.tr("Choose lyrics"), style: theme.textTheme.titleLarge)),
+                IconButton(
+                  tooltip: context.tr("Close"),
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
               ],
             ),
           ),
@@ -1632,16 +1654,22 @@ class _LyricsPickerState extends State<_LyricsPicker> {
               textInputAction: TextInputAction.search,
               onSubmitted: (_) => _search(),
               decoration: InputDecoration(
-                hintText: 'Artist and song title',
+                hintText: context.tr("Artist and song title"),
                 prefixIcon: const Icon(Icons.search_rounded),
-                suffixIcon: IconButton(tooltip: 'Search', onPressed: _search, icon: const Icon(Icons.arrow_forward)),
+                suffixIcon: IconButton(
+                  tooltip: context.tr("Search"),
+                  onPressed: _search,
+                  icon: const Icon(Icons.arrow_forward),
+                ),
               ),
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
+            padding: const EdgeInsetsDirectional.fromSTEB(20, 10, 20, 8),
             child: Text(
-              'Automatic matching only accepts results within 3 seconds. You can deliberately choose any version here.',
+              context.tr(
+                "Automatic matching only accepts results within 3 seconds. You can deliberately choose any version here.",
+              ),
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
           ),
@@ -1653,13 +1681,15 @@ class _LyricsPickerState extends State<_LyricsPicker> {
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Text(
-                        _searched ? 'No LRCLIB results for this search.' : 'Search LRCLIB to choose a result.',
+                        _searched
+                            ? context.tr("No LRCLIB results for this search.")
+                            : context.tr("Search LRCLIB to choose a result."),
                         textAlign: TextAlign.center,
                       ),
                     ),
                   )
                 : ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+                    padding: const EdgeInsetsDirectional.fromSTEB(12, 4, 12, 24),
                     itemCount: _results.length,
                     separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (context, index) {
@@ -1686,10 +1716,10 @@ class _LyricsPickerState extends State<_LyricsPicker> {
                               Text(_duration(candidate.duration), style: theme.textTheme.labelLarge),
                               Text(
                                 candidate.instrumental
-                                    ? 'Instrumental'
+                                    ? context.tr("Instrumental")
                                     : candidate.hasSyncedLyrics
-                                    ? 'Synced'
-                                    : 'Plain',
+                                    ? context.tr("Synced")
+                                    : context.tr("Plain"),
                                 style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary),
                               ),
                               if (difference != null)
@@ -1737,19 +1767,20 @@ class _ArtworkBox extends StatelessWidget {
   }
 }
 
-class _StandaloneMetadata extends StatelessWidget {
+@visibleForTesting
+class StandaloneMetadata extends StatelessWidget {
   final MediaItem? item;
 
-  const _StandaloneMetadata({required this.item});
+  const StandaloneMetadata({super.key, required this.item});
 
   @override
   Widget build(BuildContext context) {
     final artist = item?.artist ?? '';
     final theme = Theme.of(context);
     return Padding(
-      padding: EdgeInsets.fromLTRB(Platform.isWindows ? 32 : 24, 8, Platform.isWindows ? 32 : 24, 6),
+      padding: EdgeInsetsDirectional.fromSTEB(Platform.isWindows ? 32 : 24, 8, Platform.isWindows ? 32 : 24, 6),
       child: Align(
-        alignment: Platform.isWindows ? Alignment.centerLeft : Alignment.center,
+        alignment: Platform.isWindows ? AlignmentDirectional.centerStart : Alignment.center,
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: Platform.isWindows ? double.infinity : 720),
           child: Column(
@@ -1760,7 +1791,7 @@ class _StandaloneMetadata extends StatelessWidget {
                 height: 28,
                 width: double.infinity,
                 child: OverflowingText(
-                  text: item?.title ?? 'Nothing playing',
+                  text: item?.title ?? context.tr('Nothing playing'),
                   style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800, letterSpacing: -0.2),
                 ),
               ),
@@ -1769,11 +1800,15 @@ class _StandaloneMetadata extends StatelessWidget {
                 SizedBox(
                   height: 20,
                   width: double.infinity,
-                  child: OverflowingText(
-                    text: artist,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w500,
+                  child: YoutubeArtistLink(
+                    track: YoutubeTrack(title: item?.title ?? '', artist: artist, url: item?.id ?? ''),
+                    returnToPlayer: true,
+                    child: OverflowingText(
+                      text: artist,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ),
                 ),
@@ -1849,8 +1884,8 @@ class _StandaloneArtworkVinylRevealState extends State<StandaloneArtworkVinylRev
     return Semantics(
       button: widget.item != null,
       label: _vinylRequested
-          ? 'Album cover with vinyl revealed. Tap to tuck the vinyl away'
-          : 'Album cover. Tap to reveal the vinyl',
+          ? context.tr("Album cover with vinyl revealed. Tap to tuck the vinyl away")
+          : context.tr("Album cover. Tap to reveal the vinyl"),
       child: GestureDetector(
         key: standaloneArtworkRevealKey,
         behavior: HitTestBehavior.opaque,
@@ -1944,7 +1979,10 @@ class _LargeArtwork extends StatelessWidget {
     return AspectRatio(
       aspectRatio: 1,
       child: DecoratedBox(
-        decoration: BoxDecoration(color: primary.withValues(alpha: 0.12), borderRadius: resonanceBorderRadius(context, 28)),
+        decoration: BoxDecoration(
+          color: primary.withValues(alpha: 0.12),
+          borderRadius: resonanceBorderRadius(context, 28),
+        ),
         child: ClipRRect(borderRadius: resonanceBorderRadius(context, 28), child: image),
       ),
     );

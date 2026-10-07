@@ -6,6 +6,7 @@ import 'package:resonance/core/youtube/windows_process_output.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
+import 'package:resonance/services/youtube/windows_chromium_connector.dart';
 
 class WindowsYtdlpResult {
   const WindowsYtdlpResult({
@@ -58,12 +59,12 @@ class WindowsYtdlpRunner {
     'deno:$denoPath',
     '--force-ipv4',
     ...windowsYtDlpUtf8Arguments,
-    if (!guest && overrideBrowserId != null) ...[
-      '--cookies-from-browser',
-      overrideBrowserId,
-    ] else if (!guest && overrideCookieFile != null) ...[
+    if (!guest && overrideCookieFile != null) ...[
       '--cookies',
       overrideCookieFile,
+    ] else if (!guest && overrideBrowserId != null && !WindowsChromiumConnector.isSource(overrideBrowserId)) ...[
+      '--cookies-from-browser',
+      overrideBrowserId,
     ] else if (!guest)
       ...?_accessService?.windowsAuthArguments(),
     ...arguments,
@@ -91,22 +92,35 @@ class WindowsYtdlpRunner {
     }
     final authenticated =
         !guest && (overrideBrowserId != null || overrideCookieFile != null || _accessService?.isConfigured == true);
+    WindowsCookieLease? lease;
     try {
+      final browser = overrideBrowserId ?? _accessService?.windowsBrowserId;
+      if (!guest && overrideCookieFile == null && WindowsChromiumConnector.isSource(browser)) {
+        lease = await WindowsChromiumConnector(helperPath: ytMusicHomePath).materialize(browser!);
+      }
       final process = await Process.start(
         ytDlpPath,
         buildArguments(
           arguments,
-          overrideBrowserId: overrideBrowserId,
-          overrideCookieFile: overrideCookieFile,
+          overrideBrowserId: lease == null ? overrideBrowserId : null,
+          overrideCookieFile: lease?.path ?? overrideCookieFile,
           guest: guest,
         ),
         environment: windowsYtDlpUtf8Environment,
         includeParentEnvironment: true,
         runInShell: false,
       );
+      if (lease != null) {
+        final owned = lease;
+        unawaited(process.exitCode.then((_) => owned.close()));
+      }
       return WindowsYtdlpProcess(process: process, authenticated: authenticated);
     } on ProcessException catch (error) {
+      await lease?.close();
       throw YoutubeFailureClassifier.classify(error, authenticated: authenticated);
+    } catch (_) {
+      await lease?.close();
+      rethrow;
     }
   }
 

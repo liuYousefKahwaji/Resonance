@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
@@ -342,7 +343,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
       canPop: _stage != _ImportStage.downloading && _stage != _ImportStage.creating,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Import Playlist'),
+          title: Text(context.tr("Import Playlist")),
           leading: IconButton(
             icon: const Icon(Icons.close_rounded),
             onPressed: _stage == _ImportStage.downloading || _stage == _ImportStage.creating
@@ -378,13 +379,17 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                Platform.isAndroid ? 'Scan Resonance playlist QR codes' : 'Upload Resonance playlist QR images',
+                Platform.isAndroid
+                    ? context.tr("Scan Resonance playlist QR codes")
+                    : context.tr("Upload Resonance playlist QR images"),
                 style: Theme.of(context).textTheme.headlineSmall,
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
               Text(
-                'Decoding is fully local. Downloads or stream lookups will not begin until you review the playlist.',
+                context.tr(
+                  "Decoding is fully local. Downloads or stream lookups will not begin until you review the playlist.",
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
@@ -398,7 +403,11 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
                       errorBuilder: (context, error) => Center(
                         child: Padding(
                           padding: const EdgeInsets.all(20),
-                          child: Text('Camera unavailable: ${error.errorDetails?.message ?? error.errorCode.name}'),
+                          child: Text(
+                            context.tr("Camera unavailable: {0}", [
+                              error.errorDetails?.message ?? error.errorCode.name,
+                            ]),
+                          ),
                         ),
                       ),
                     ),
@@ -410,7 +419,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
                     child: FilledButton.icon(
                       onPressed: _processingInput ? null : _pickQrImages,
                       icon: const Icon(Icons.upload_file_rounded),
-                      label: Text(_processingInput ? 'Reading images…' : 'Upload QR Images'),
+                      label: Text(_processingInput ? context.tr("Reading images…") : context.tr("Upload QR Images")),
                     ),
                   ),
                 ),
@@ -420,7 +429,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
                   key: const Key('android-upload-qr-images'),
                   onPressed: _processingInput ? null : _pickQrImages,
                   icon: const Icon(Icons.add_photo_alternate_rounded),
-                  label: Text(_processingInput ? 'Reading images…' : 'Upload QR image(s)'),
+                  label: Text(_processingInput ? context.tr("Reading images…") : context.tr("Upload QR image(s)")),
                 ),
               ],
               const SizedBox(height: 14),
@@ -428,13 +437,24 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
               const SizedBox(height: 8),
               Text(
                 total == null
-                    ? 'Waiting for the first Resonance QR code…'
-                    : '${_session.receivedChunkCount} of $total codes received${_session.missingChunkIndexes.isEmpty ? '' : ' · missing ${_session.missingChunkIndexes.join(', ')}'}',
+                    ? context.tr("Waiting for the first Resonance QR code…")
+                    : context.tr("{0} of {1} codes received{2}", [
+                        _session.receivedChunkCount,
+                        total,
+                        _session.missingChunkIndexes.isEmpty
+                            ? ''
+                            : ' · missing ${_session.missingChunkIndexes.join(', ')}',
+                      ]),
                 textAlign: TextAlign.center,
               ),
               if (_notices.isNotEmpty) ...[
                 const SizedBox(height: 10),
-                Text(_notices.first, maxLines: 2, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+                Text(
+                  context.trRendered(_notices.first),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                ),
               ],
               if (_session.receivedChunkCount > 0) ...[
                 const SizedBox(height: 10),
@@ -445,11 +465,11 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
                       OutlinedButton.icon(
                         onPressed: _processingInput ? null : _pickQrImages,
                         icon: const Icon(Icons.add_photo_alternate_outlined),
-                        label: const Text('Add more images'),
+                        label: Text(context.tr("Add more images")),
                       ),
                       const SizedBox(width: 8),
                     ],
-                    TextButton(onPressed: _clearReceived, child: const Text('Start over')),
+                    TextButton(onPressed: _clearReceived, child: Text(context.tr("Start over"))),
                   ],
                 ),
               ],
@@ -464,7 +484,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
     final manifest = _manifest!;
     final uniqueCount = manifest.youtubeVideoIds.toSet().length;
     return _scrollingCard(
-      title: 'Import “${manifest.playlistName}”',
+      title: context.tr("Import “{0}”", [manifest.playlistName]),
       children: [
         _metric('Playlist entries', manifest.youtubeVideoIds.length.toString()),
         _metric('Unique YouTube sources', uniqueCount.toString()),
@@ -472,54 +492,59 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
         _metric('Need downloading', _missingIds.length.toString()),
         _metric('Invalid sources', '0'),
         const Divider(height: 28),
-        const Text('Download destination', style: TextStyle(fontWeight: FontWeight.w600)),
+        Text(context.tr("Download destination"), style: TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
-        SelectableText(_downloadDestination ?? 'Default download folder'),
+        SelectableText(_downloadDestination ?? context.tr("Default download folder")),
         const SizedBox(height: 20),
         FilledButton.icon(
           onPressed: _startImport,
           icon: const Icon(Icons.download_for_offline_rounded),
-          label: Text(_missingIds.isEmpty ? 'Create With Local Tracks' : 'Download Tracks'),
+          label: Text(_missingIds.isEmpty ? context.tr("Create With Local Tracks") : context.tr("Download Tracks")),
         ),
         const SizedBox(height: 10),
         OutlinedButton.icon(
           onPressed: _startStreaming,
           icon: const Icon(Icons.sensors_rounded),
-          label: const Text('Stream From Playlist'),
+          label: Text(context.tr("Stream From Playlist")),
         ),
         const SizedBox(height: 8),
         Text(
-          'Streaming adds YouTube links in the transferred order without downloading audio.',
+          context.tr("Streaming adds YouTube links in the transferred order without downloading audio."),
           style: Theme.of(context).textTheme.bodySmall,
           textAlign: TextAlign.center,
         ),
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(context.tr("Cancel"))),
       ],
     );
   }
 
   Widget _buildDownloading() {
     return _scrollingCard(
-      title: _isStreaming ? 'Preparing playlist streams' : 'Downloading missing tracks',
+      title: _isStreaming ? context.tr("Preparing playlist streams") : context.tr("Downloading missing tracks"),
       children: [
-        Text('Track $_currentDownloadIndex of ${_operationIds.length}', textAlign: TextAlign.center),
+        Text(
+          context.tr("Track {0} of {1}", [_currentDownloadIndex, _operationIds.length]),
+          textAlign: TextAlign.center,
+        ),
         const SizedBox(height: 6),
         SelectableText(_currentVideoId ?? '', textAlign: TextAlign.center),
         const SizedBox(height: 20),
         LinearProgressIndicator(value: _downloadPercentage > 0 ? _downloadPercentage / 100 : null),
         const SizedBox(height: 10),
-        Text(_downloadStatus, textAlign: TextAlign.center),
+        Text(context.trRendered(_downloadStatus), textAlign: TextAlign.center),
         const SizedBox(height: 20),
         OutlinedButton.icon(
           onPressed: _stopRequested ? null : () => setState(() => _stopRequested = true),
           icon: const Icon(Icons.stop_circle_outlined),
-          label: Text(_stopRequested ? 'Stopping after current track…' : 'Stop after current track'),
+          label: Text(
+            _stopRequested ? context.tr("Stopping after current track…") : context.tr("Stop after current track"),
+          ),
         ),
         const SizedBox(height: 8),
         Text(
           _isStreaming
-              ? 'Prepared links stay in their original playlist order.'
-              : 'Completed downloads are kept and their source records are saved.',
+              ? context.tr("Prepared links stay in their original playlist order.")
+              : context.tr("Completed downloads are kept and their source records are saved."),
           textAlign: TextAlign.center,
         ),
       ],
@@ -529,7 +554,9 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
   Widget _buildFailures() {
     final failedIds = _downloadFailures.keys.toList(growable: false);
     return _scrollingCard(
-      title: _cancelledDuringDownload ? 'Import stopped' : 'Some tracks could not be downloaded',
+      title: _cancelledDuringDownload
+          ? context.tr("Import stopped")
+          : context.tr("Some tracks could not be downloaded"),
       children: [
         _metric('Downloaded', _downloadedCount.toString()),
         _metric('Streams added', _streamedCount.toString()),
@@ -555,18 +582,18 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
             FilledButton.icon(
               onPressed: _retryFailures,
               icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Retry failed tracks'),
+              label: Text(context.tr("Retry failed tracks")),
             ),
           const SizedBox(height: 8),
         ],
         OutlinedButton.icon(
           onPressed: _resolvedById.isEmpty ? null : _createPlaylist,
           icon: const Icon(Icons.skip_next_rounded),
-          label: const Text('Skip unresolved and create playlist'),
+          label: Text(context.tr("Skip unresolved and create playlist")),
         ),
         TextButton(
           onPressed: () => Navigator.pop(context, false),
-          child: const Text('Close without creating playlist'),
+          child: Text(context.tr("Close without creating playlist")),
         ),
       ],
     );
@@ -575,11 +602,14 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
   Widget _buildComplete() {
     final resolvedEntries = _manifest!.youtubeVideoIds.where(_resolvedById.containsKey).length;
     return _scrollingCard(
-      title: 'Import complete',
+      title: context.tr("Import complete"),
       children: [
         const Icon(Icons.check_circle_rounded, size: 64, color: Colors.green),
         const SizedBox(height: 16),
-        Text('“$_createdPlaylistName” was created with $resolvedEntries entries.', textAlign: TextAlign.center),
+        Text(
+          context.tr("“{0}” was created with {1} entries.", [_createdPlaylistName, resolvedEntries]),
+          textAlign: TextAlign.center,
+        ),
         const SizedBox(height: 12),
         _metric('Downloaded', _downloadedCount.toString()),
         _metric('Streams added', _streamedCount.toString()),
@@ -590,19 +620,19 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
         _metric('Failed', _downloadFailures.length.toString()),
         _metric('Skipped entries', (_manifest!.youtubeVideoIds.length - resolvedEntries).toString()),
         const SizedBox(height: 18),
-        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Done')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(context.tr("Done"))),
       ],
     );
   }
 
   Widget _buildError() => _scrollingCard(
-    title: 'Playlist import failed',
+    title: context.tr("Playlist import failed"),
     children: [
       Icon(Icons.error_outline_rounded, size: 58, color: Theme.of(context).colorScheme.error),
       const SizedBox(height: 14),
-      Text(_fatalError ?? 'Unknown transfer error', textAlign: TextAlign.center),
+      Text(context.trRendered(_fatalError ?? context.tr("Unknown transfer error")), textAlign: TextAlign.center),
       const SizedBox(height: 18),
-      FilledButton(onPressed: () => Navigator.pop(context, false), child: const Text('Close')),
+      FilledButton(onPressed: () => Navigator.pop(context, false), child: Text(context.tr("Close"))),
     ],
   );
 
@@ -624,7 +654,11 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(title, style: Theme.of(context).textTheme.headlineSmall, textAlign: TextAlign.center),
+                Text(
+                  context.trRendered(title),
+                  style: Theme.of(context).textTheme.headlineSmall,
+                  textAlign: TextAlign.center,
+                ),
                 const SizedBox(height: 20),
                 ...children,
               ],
@@ -639,7 +673,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
     padding: const EdgeInsets.symmetric(vertical: 5),
     child: Row(
       children: [
-        Expanded(child: Text(label)),
+        Expanded(child: Text(context.trRendered(label))),
         Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
       ],
     ),

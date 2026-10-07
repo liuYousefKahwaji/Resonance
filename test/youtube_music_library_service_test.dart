@@ -40,6 +40,38 @@ void main() {
     ],
   });
 
+  test('playlist library keeps separate locale caches and snapshots', () async {
+    var englishRequests = 0;
+    var arabicRequests = 0;
+    final english = YoutubeMusicLibraryService(
+      loader: (_) async {
+        englishRequests++;
+        return payload(2);
+      },
+    );
+    final arabic = YoutubeMusicLibraryService(
+      language: 'ar',
+      loader: (_) async {
+        arabicRequests++;
+        return payload(3);
+      },
+    );
+    expect((await english.fetch()).items, hasLength(2));
+    expect((await arabic.fetch()).items, hasLength(3));
+    expect((await english.fetch()).items, hasLength(2));
+    expect((await arabic.fetch()).items, hasLength(3));
+    expect(englishRequests, 1);
+    expect(arabicRequests, 1);
+    await Future<void>.delayed(Duration.zero);
+    YoutubeMusicLibraryService.clearCache();
+    expect((await english.loadCached())!.items, hasLength(2));
+    expect((await arabic.loadCached())!.items, hasLength(3));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('youtube_music_library.snapshot_v1.ar');
+    YoutubeMusicLibraryService.clearCache();
+    expect(await arabic.loadCached(), isNull);
+  });
+
   test('reads more than the default library page and deduplicates collection cards', () {
     final shelf = const YoutubeMusicLibraryService().decodeResponse(payload(60));
     expect(shelf.items, hasLength(60));

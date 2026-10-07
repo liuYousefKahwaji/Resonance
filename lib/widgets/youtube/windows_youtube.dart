@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 
@@ -620,14 +621,14 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Row(
+            content: Row(
               children: [
                 Icon(Icons.check_circle, color: Colors.greenAccent),
 
                 SizedBox(width: 8),
 
                 Text(
-                  'Download & Import Complete!',
+                  context.tr("Download & Import Complete!"),
 
                   style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
                 ),
@@ -645,7 +646,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     } catch (e) {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);
-        await showYoutubeFailure(context, e, sourceUrl: url, actionLabel: 'Download failed');
+        await showYoutubeFailure(context, e, sourceUrl: url, actionLabel: context.tr("Download failed"));
       }
     }
   }
@@ -676,12 +677,12 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
       Navigator.pop(context);
       messenger.showSnackBar(
         SnackBar(
-          content: const Row(
+          content: Row(
             children: [
               Icon(Icons.sensors_rounded, color: Colors.greenAccent),
               SizedBox(width: 8),
               Text(
-                'Stream URL Added to Playlist!',
+                context.tr("Stream URL Added to Playlist!"),
                 style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w500),
               ),
             ],
@@ -706,7 +707,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
       if (lines.isNotEmpty) {
         final json = jsonDecode(lines.first) as Map<String, dynamic>;
         return (
-          title: json['title'] as String? ?? 'Streaming Track',
+          title: json['title'] as String? ?? context.tr("Streaming Track"),
           artist: json['uploader'] as String? ?? json['channel'] as String? ?? 'YouTube',
           thumbnailUrl: json['thumbnail']?.toString(),
         );
@@ -716,7 +717,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     } catch (_) {}
     final videoId = TrackSourceRepository.videoIdFromUrlOrId(url);
     return (
-      title: 'Streaming Track',
+      title: context.tr("Streaming Track"),
       artist: 'YouTube',
       thumbnailUrl: videoId == null ? null : TrackSourceRepository.thumbnailUrlFor(videoId),
     );
@@ -739,7 +740,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _mode = _DialogMode.input);
-      await showYoutubeFailure(context, error, sourceUrl: url, actionLabel: 'Could not read stream');
+      await showYoutubeFailure(context, error, sourceUrl: url, actionLabel: context.tr("Could not read stream"));
     }
   }
 
@@ -767,7 +768,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
     } catch (e) {
       if (mounted) {
         setState(() => _mode = _DialogMode.input);
-        await showYoutubeFailure(context, e, actionLabel: 'Search failed');
+        await showYoutubeFailure(context, e, actionLabel: context.tr("Search failed"));
       }
     }
   }
@@ -802,7 +803,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                   const SizedBox(width: 12),
 
                   Text(
-                    'YouTube · Stream or Download',
+                    context.tr("YouTube · Stream or Download"),
                     style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
                   ),
                 ],
@@ -832,10 +833,10 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
       children: [
         SegmentedButton<bool>(
-          segments: const [
-            ButtonSegment(value: true, label: Text('URL'), icon: Icon(Icons.link_rounded)),
+          segments: [
+            ButtonSegment(value: true, label: Text(context.tr("URL")), icon: Icon(Icons.link_rounded)),
 
-            ButtonSegment(value: false, label: Text('Search'), icon: Icon(Icons.search_rounded)),
+            ButtonSegment(value: false, label: Text(context.tr("Search")), icon: Icon(Icons.search_rounded)),
           ],
 
           selected: {_isUrlMode},
@@ -854,7 +855,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
             autofocus: true,
 
             decoration: InputDecoration(
-              labelText: 'Video, Track, or Playlist URL',
+              labelText: context.tr("Video, Track, or Playlist URL"),
 
               hintText: 'https://music.youtube.com/...',
 
@@ -877,7 +878,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Cancel"))),
 
               const SizedBox(width: 8),
 
@@ -894,7 +895,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                   if (url.isNotEmpty) _startStreamUrl(url);
                 },
                 icon: const Icon(Icons.sensors_rounded, size: 18),
-                label: const Text('Stream'),
+                label: Text(context.tr("Stream")),
               ),
 
               const SizedBox(width: 8),
@@ -910,7 +911,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                   if (url.isNotEmpty) _startDownload(url);
                 },
                 icon: const Icon(Icons.download_rounded, size: 18),
-                label: const Text('Download'),
+                label: Text(context.tr("Download")),
               ),
             ],
           ),
@@ -921,9 +922,9 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
             autofocus: true,
 
             decoration: InputDecoration(
-              labelText: 'Search YouTube',
+              labelText: context.tr("Search YouTube"),
 
-              hintText: 'Artist, song name, album...',
+              hintText: context.tr("Artist, song name, album..."),
 
               prefixIcon: const Icon(Icons.search_rounded),
 
@@ -940,7 +941,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Cancel"))),
 
               const SizedBox(width: 12),
 
@@ -955,7 +956,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
                 icon: const Icon(Icons.search_rounded, size: 18),
 
-                label: const Text('Search'),
+                label: Text(context.tr("Search")),
               ),
             ],
           ),
@@ -976,7 +977,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
             const SizedBox(height: 16),
 
-            Text('Searching for "${_searchController.text}"...', style: theme.textTheme.bodyMedium),
+            Text(context.tr("Searching for \"{0}\"...", [_searchController.text]), style: theme.textTheme.bodyMedium),
           ],
         ),
       ),
@@ -997,12 +998,12 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
 
               onPressed: () => setState(() => _mode = _DialogMode.input),
 
-              tooltip: 'Back',
+              tooltip: context.tr("Back"),
             ),
 
             Expanded(
               child: Text(
-                'Results for "${_searchController.text}"',
+                context.tr("Results for \"{0}\"", [_searchController.text]),
 
                 style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
 
@@ -1017,10 +1018,10 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
         const SizedBox(height: 8),
 
         if (_searchResults.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(vertical: 16),
 
-            child: Center(child: Text('No results found.')),
+            child: Center(child: Text(context.tr("No results found."))),
           )
         else
           ListView.separated(
@@ -1070,7 +1071,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                     // ── Stream button ──────────────────────────────────
                     IconButton(
                       icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary),
-                      tooltip: 'Stream Now',
+                      tooltip: context.tr("Stream Now"),
                       onPressed: () => _startStream(
                         result.url,
                         title: result.title,
@@ -1081,7 +1082,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                     // ── Download button ────────────────────────────────
                     IconButton(
                       icon: Icon(Icons.download_rounded, color: theme.colorScheme.primary),
-                      tooltip: 'Download',
+                      tooltip: context.tr("Download"),
                       onPressed: () => _startDownload(result.url, track: result),
                     ),
                   ],
@@ -1100,9 +1101,9 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
         const SizedBox(height: 8),
 
         Align(
-          alignment: Alignment.centerRight,
+          alignment: AlignmentDirectional.centerEnd,
 
-          child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          child: TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Cancel"))),
         ),
       ],
     );
@@ -1118,7 +1119,10 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
         crossAxisAlignment: CrossAxisAlignment.start,
 
         children: [
-          Text(_statusMessage, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500)),
+          Text(
+            context.trRendered(_statusMessage),
+            style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
+          ),
 
           const SizedBox(height: 12),
 
@@ -1137,7 +1141,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
           const SizedBox(height: 8),
 
           Align(
-            alignment: Alignment.centerRight,
+            alignment: AlignmentDirectional.centerEnd,
 
             child: Text(
               '${_downloadPercentage.toStringAsFixed(1)}%',

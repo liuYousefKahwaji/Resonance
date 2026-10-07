@@ -1,7 +1,8 @@
 """Small Windows-only YouTube Music home helper.
 
-The executable receives only a browser id and a shelf limit. Browser cookies are
-read in memory and are never written to stdout, disk, or Flutter.
+Firefox cookies are read live in memory. Chromium uses the user-authorized
+connector's DPAPI snapshot; only short-lived yt-dlp leases are plaintext.
+Cookie values never enter helper stdout or Flutter.
 """
 
 import argparse
@@ -10,6 +11,12 @@ import json
 import re
 import sys
 import urllib.request
+
+# Native messaging / DPAPI tools avoid importing extractors for every refresh.
+if __name__ == "__main__" and len(sys.argv) > 1 and (sys.argv[1].startswith("chrome-extension://") or sys.argv[1] == "--connector-tool"):
+    from chromium_connector import main as connector_main
+    connector_main()
+    raise SystemExit(0)
 
 from yt_dlp.cookies import extract_cookies_from_browser
 from ytmusicapi import YTMusic
@@ -78,6 +85,9 @@ def _cookie_header(browser_source, cookie_file):
     if cookie_file:
         jar = http.cookiejar.MozillaCookieJar(cookie_file)
         jar.load(ignore_discard=True, ignore_expires=True)
+    elif "+connector:" in (browser_source or ""):
+        from chromium_connector import load_cookie_jar
+        jar = load_cookie_jar(browser_source)
     else:
         browser, profile = _browser_parts(browser_source)
         jar = extract_cookies_from_browser(browser, profile=profile, logger=_Logger())
@@ -128,6 +138,7 @@ def _track(item):
     return {
         "title": str(item.get("title") or "Unknown"),
         "artist": str(artist),
+        "artistId": artists[0].get("id") if artists and isinstance(artists[0], dict) else None,
         "url": f"https://www.youtube.com/watch?v={video_id}",
         "duration_seconds": item.get("duration_seconds"),
         "thumbnail": thumbnail,
@@ -153,6 +164,7 @@ def _item(item):
     return {
         "title": title,
         "subtitle": subtitle,
+        "artistId": artists[0].get("id") if artists and isinstance(artists[0], dict) else None,
         "thumbnail": thumbnail,
         "kind": kind,
         "track": track,
@@ -161,10 +173,22 @@ def _item(item):
     }
 
 
-def _build_authenticated_ytmusic(browser_source, cookie_file):
+def _home_shelf_kind(title):
+    """Stable layout category, independent of the server's display language."""
+    value = str(title).strip().lower().replace("ـ", "")
+    if any(token in value for token in ("quick pick", "اختيارات سريعة", "مختارات سريعة", "اختياراتك السريعة")):
+        return "quickPicks"
+    if value in ("suggestions", "اقتراحات", "الاقتراحات"):
+        return "suggestions"
+    if any(token in value for token in ("speed dial", "الوصول السريع", "الاتصال السريع")):
+        return "speedDial"
+    return None
+
+
+def _build_authenticated_ytmusic(browser_source, cookie_file, language="en"):
     """Create the one authenticated YTMusic client used for an operation."""
     cookie = _cookie_header(browser_source, cookie_file)
-    return YTMusic(auth=_auth_headers(cookie), language="en")
+    return YTMusic(auth=_auth_headers(cookie), language=language)
 
 
 def _validated_video_id(video_id):
@@ -224,6 +248,7 @@ def main():
     parser.add_argument("--cookies-file")
     parser.add_argument("--action", choices=("home", "library", "history", "add-history", "search", "related"), default="home")
     parser.add_argument("--video-id")
+    parser.add_argument("--language", choices=("en", "ar"), default="en")
     parser.add_argument("--query")
     parser.add_argument("--limit", type=int, default=24)
     args = parser.parse_args()
@@ -256,7 +281,7 @@ def main():
         # Reject malformed input before touching a browser profile/cookie store
         # or making an authenticated network request.
         _validated_video_id(args.video_id)
-    ytmusic = _build_authenticated_ytmusic(args.browser, args.cookies_file)
+    ytmusic = _build_authenticated_ytmusic(args.browser, args.cookies_file, args.language)
     if args.action == "add-history":
         print(json.dumps(_add_history_item(ytmusic, args.video_id), ensure_ascii=False))
         return
@@ -286,11 +311,11 @@ def main():
                 items.append(normalized_item)
         title = str(shelf.get("title") or "").strip()
         if title and items:
-            shelves.append({"title": title, "tracks": tracks, "items": items})
+            shelves.append({"title": title, "kind": _home_shelf_kind(title), "tracks": tracks, "items": items})
     # Quick picks is the most useful personalized row and YouTube Music places
     # it prominently in its native clients. Keep it first even when the API
     # happens to return it after other continuation rows.
-    shelves.sort(key=lambda shelf: 0 if "quick pick" in shelf["title"].lower() else 1)
+    shelves.sort(key=lambda shelf: 0 if _home_shelf_kind(shelf["title"]) == "quickPicks" else 1)
 
     existing_playable = []
     for shelf in shelves:
@@ -334,18 +359,18 @@ def main():
             if fallback_tracks or resolution_attempts >= 2:
                 break
     pick_source = history_tracks or (existing_playable + [track for track in fallback_tracks if track not in existing_playable])
-    if pick_source and not any("quick pick" in shelf["title"].lower() for shelf in shelves):
+    if pick_source and not any(_home_shelf_kind(shelf["title"]) == "quickPicks" for shelf in shelves):
         picks = pick_source[:20]
         pick_items = [
             {"title": track["title"], "subtitle": track["artist"], "thumbnail": track["thumbnail"], "kind": "track", "track": track}
             for track in picks
         ]
-        shelves.insert(0, {"title": "Quick picks", "tracks": picks, "items": pick_items})
+        shelves.insert(0, {"title": "Quick picks", "kind": "quickPicks", "tracks": picks, "items": pick_items})
 
     # Some accounts do not expose a literally named Suggestions row. Build one
     # from the personalized feed without inventing recommendations or exposing
     # raw response data. This also gives Resonance a stable, queueable section.
-    if not any("suggest" in shelf["title"].lower() for shelf in shelves):
+    if not any(_home_shelf_kind(shelf["title"]) == "suggestions" for shelf in shelves):
         seen = set()
         suggestions = []
         seed = next((track for shelf in shelves for track in shelf["tracks"]), None)
@@ -362,7 +387,7 @@ def main():
             except Exception:
                 pass
         for shelf in shelves:
-            if "quick pick" in shelf["title"].lower():
+            if _home_shelf_kind(shelf["title"]) == "quickPicks":
                 continue
             for track in shelf["tracks"]:
                 if track["url"] not in seen:
@@ -378,7 +403,7 @@ def main():
                 {"title": track["title"], "subtitle": track["artist"], "thumbnail": track["thumbnail"], "kind": "track", "track": track}
                 for track in suggestions
             ]
-            shelves.insert(1 if shelves else 0, {"title": "Suggestions", "tracks": suggestions, "items": suggestion_items})
+            shelves.insert(1 if shelves else 0, {"title": "Suggestions", "kind": "suggestions", "tracks": suggestions, "items": suggestion_items})
 
     speed_dial = []
     seen_speed_dial = set()
@@ -398,12 +423,12 @@ def main():
             speed_dial.append(track)
         if len(speed_dial) >= 12:
             break
-    if speed_dial and not any("speed dial" in shelf["title"].lower() for shelf in shelves):
+    if speed_dial and not any(_home_shelf_kind(shelf["title"]) == "speedDial" for shelf in shelves):
         speed_items = [
             {"title": track["title"], "subtitle": track["artist"], "thumbnail": track["thumbnail"], "kind": "track", "track": track}
             for track in speed_dial
         ]
-        shelves.insert(min(2, len(shelves)), {"title": "Speed dial", "tracks": speed_dial, "items": speed_items})
+        shelves.insert(min(2, len(shelves)), {"title": "Speed dial", "kind": "speedDial", "tracks": speed_dial, "items": speed_items})
 
     print(json.dumps({"shelves": shelves}, ensure_ascii=False))
 

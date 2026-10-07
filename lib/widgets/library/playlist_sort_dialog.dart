@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/core/storage/file_service.dart';
 
@@ -16,7 +17,7 @@ Future<bool> showPlaylistSortDialog(NavigatorState navigator, int number, {FileS
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
-        title: const Text('Sort tracks'),
+        title: Text(context.tr("Sort tracks")),
         content: SizedBox(
           width: 320,
           child: Column(
@@ -24,42 +25,42 @@ Future<bool> showPlaylistSortDialog(NavigatorState navigator, int number, {FileS
             children: [
               DropdownButtonFormField<PlaylistSortMode>(
                 initialValue: mode,
-                decoration: const InputDecoration(labelText: 'Order'),
-                items: const [
-                  DropdownMenuItem(value: PlaylistSortMode.dateAdded, child: Text('Date added')),
-                  DropdownMenuItem(value: PlaylistSortMode.title, child: Text('Alphanumeric')),
-                  DropdownMenuItem(value: PlaylistSortMode.random, child: Text('Random')),
-                  DropdownMenuItem(value: PlaylistSortMode.custom, child: Text('Manual order')),
+                decoration: InputDecoration(labelText: context.tr("Order")),
+                items: [
+                  DropdownMenuItem(value: PlaylistSortMode.dateAdded, child: Text(context.tr("Date added"))),
+                  DropdownMenuItem(value: PlaylistSortMode.title, child: Text(context.tr("Alphanumeric"))),
+                  DropdownMenuItem(value: PlaylistSortMode.random, child: Text(context.tr("Random"))),
+                  DropdownMenuItem(value: PlaylistSortMode.custom, child: Text(context.tr("Manual order"))),
                 ],
                 onChanged: (value) => setState(() => mode = value!),
               ),
               CheckboxListTile(
                 key: const Key('favorites-first-sort'),
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Favorites first'),
-                subtitle: const Text('Keep favorites at the top in either direction.'),
+                title: Text(context.tr("Favorites first")),
+                subtitle: Text(context.tr("Keep favorites at the top in either direction.")),
                 value: favoritesFirst,
                 onChanged: (value) => setState(() => favoritesFirst = value!),
               ),
               if (mode != PlaylistSortMode.custom)
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Descending'),
+                  title: Text(context.tr("Descending")),
                   subtitle: Text(
                     mode == PlaylistSortMode.dateAdded
-                        ? 'Newest first'
+                        ? context.tr("Newest first")
                         : mode == PlaylistSortMode.title
-                        ? 'Z → A'
-                        : 'Reverse random order',
+                        ? context.tr("Z → A")
+                        : context.tr("Reverse random order"),
                   ),
                   value: descending,
                   onChanged: (value) => setState(() => descending = value),
                 ),
               if (mode == PlaylistSortMode.random) ...[
-                const Text('Keeps this order until you change it. Playback shuffle is separate.'),
+                Text(context.tr("Keeps this order until you change it. Playback shuffle is separate.")),
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Generate a new random order'),
+                  title: Text(context.tr("Generate a new random order")),
                   value: reroll,
                   onChanged: (value) => setState(() => reroll = value!),
                 ),
@@ -68,8 +69,8 @@ Future<bool> showPlaylistSortDialog(NavigatorState navigator, int number, {FileS
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Apply')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(context.tr("Cancel"))),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(context.tr("Apply"))),
         ],
       ),
     ),

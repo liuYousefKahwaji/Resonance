@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 // lib/widgets/library/track_list.dart
 // Scroll smoothness improvements:
 //  1. Platform-tuned cache extent — desktop prebuilds farther ahead while
@@ -127,7 +128,7 @@ class _TrackListState extends State<TrackList> {
       child: !expanded
           ? const SizedBox.shrink()
           : Padding(
-              padding: EdgeInsets.fromLTRB(12, Platform.isWindows ? 14 : 4, 12, 8),
+              padding: EdgeInsetsDirectional.fromSTEB(12, Platform.isWindows ? 14 : 4, 12, 8),
               child: SizedBox(
                 height: Platform.isWindows ? 48 : 44,
                 child: TextField(
@@ -143,7 +144,7 @@ class _TrackListState extends State<TrackList> {
                   style: const TextStyle(fontSize: 13),
                   decoration: InputDecoration(
                     isDense: true,
-                    hintText: 'Search this playlist',
+                    hintText: context.tr("Search this playlist"),
                     prefixIcon: const Icon(Icons.search_rounded, size: 18),
                     prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 36),
                     suffixIconConstraints: const BoxConstraints(minHeight: 36),
@@ -155,7 +156,7 @@ class _TrackListState extends State<TrackList> {
                       borderSide: BorderSide.none,
                     ),
                     suffixIcon: Padding(
-                      padding: const EdgeInsets.only(right: 4),
+                      padding: const EdgeInsetsDirectional.only(end: 4),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -168,7 +169,9 @@ class _TrackListState extends State<TrackList> {
                             IconButton(
                               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
                               padding: EdgeInsets.zero,
-                              tooltip: Platform.isAndroid ? 'Close playlist search' : 'Clear search',
+                              tooltip: Platform.isAndroid
+                                  ? context.tr("Close playlist search")
+                                  : context.tr("Clear search"),
                               icon: const Icon(Icons.close_rounded, size: 18),
                               onPressed: () => setState(() {
                                 _search.clear();
@@ -273,7 +276,7 @@ class _TrackListState extends State<TrackList> {
           child: indices.isEmpty
               ? Center(
                   child: Text(
-                    _indexing ? 'Searching tracks…' : 'No matching tracks',
+                    _indexing ? context.tr("Searching tracks…") : context.tr("No matching tracks"),
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 )
@@ -336,7 +339,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            'Your library is empty',
+            context.tr("Your library is empty"),
             style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w600,
@@ -345,7 +348,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Import tracks or search YouTube',
+            context.tr("Import tracks or search YouTube"),
             style: TextStyle(fontSize: 12, color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8)),
           ),
         ],

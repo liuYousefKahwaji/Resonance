@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 // lib/widgets/player/seek_bar.dart
 //
@@ -213,7 +214,9 @@ class _SeekBarState extends State<SeekBar> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => Directionality(textDirection: TextDirection.ltr, child: _buildBar(context));
+
+  Widget _buildBar(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = Theme.of(context).colorScheme.primary;
@@ -253,7 +256,7 @@ class _SeekBarState extends State<SeekBar> {
         // Spinner: only shown while a genuinely new track is loading.
         if (_isLoadingNewTrack)
           Padding(
-            padding: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsetsDirectional.only(end: 8),
             child: SizedBox(
               width: 12,
               height: 12,
@@ -389,7 +392,7 @@ class _SeekStepButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
     return Tooltip(
-      message: '$label seconds',
+      message: context.tr("{0} seconds", [label]),
       child: SizedBox(
         width: 36,
         height: 30,

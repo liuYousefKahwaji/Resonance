@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:provider/provider.dart';
@@ -13,7 +14,7 @@ class PlaybackSettings extends StatelessWidget {
     final handler = Provider.of<PlayerHandler>(context);
     return IconButton(
       icon: const Icon(Icons.settings_overscan), // or Icons.speed
-      tooltip: 'Playback Settings',
+      tooltip: context.tr("Playback Settings"),
       onPressed: () {
         showDialog(
           context: context,
@@ -64,7 +65,7 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Playback Settings'),
+      title: Text(context.tr("Playback Settings")),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 380),
         child: SingleChildScrollView(
@@ -77,22 +78,22 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'Apply settings to',
+                      context.tr("Apply settings to"),
                       style: Theme.of(context).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 8),
                     SegmentedButton<PlaybackSettingsScope>(
                       key: const Key('playback-scope-selector'),
                       showSelectedIcon: false,
-                      segments: const [
+                      segments: [
                         ButtonSegment<PlaybackSettingsScope>(
                           value: PlaybackSettingsScope.global,
-                          label: Text('All tracks'),
+                          label: Text(context.tr("All tracks")),
                           icon: Icon(Icons.library_music_rounded),
                         ),
                         ButtonSegment<PlaybackSettingsScope>(
                           value: PlaybackSettingsScope.perTrack,
-                          label: Text('Per track'),
+                          label: Text(context.tr("Per track")),
                           icon: Icon(Icons.music_note_rounded),
                         ),
                       ],
@@ -104,8 +105,8 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
                       duration: const Duration(milliseconds: 180),
                       child: Text(
                         scope == PlaybackSettingsScope.global
-                            ? 'Use the same speed, pitch, and equalizer for every track.'
-                            : 'Remember these settings separately for each track.',
+                            ? context.tr("Use the same speed, pitch, and equalizer for every track.")
+                            : context.tr("Remember these settings separately for each track."),
                         key: ValueKey(scope),
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
@@ -117,7 +118,7 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
               // Speed control
               Row(
                 children: [
-                  const Text('Speed', style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text(context.tr("Speed"), style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Slider(
@@ -141,7 +142,7 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
               // Pitch control
               Row(
                 children: [
-                  const Text('Pitch', style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text(context.tr("Pitch"), style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Slider(
@@ -180,12 +181,15 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
                       children: [
                         Row(
                           children: [
-                            const Expanded(
-                              child: Text('This track’s volume', style: TextStyle(fontWeight: FontWeight.bold)),
+                            Expanded(
+                              child: Text(
+                                context.tr("This track’s volume"),
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
                             ),
                             Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
                             IconButton(
-                              tooltip: 'Reset track volume',
+                              tooltip: context.tr("Reset track volume"),
                               onPressed: track == null || percent == 0
                                   ? null
                                   : () => widget.handler.setTrackVolumePercent(0),
@@ -194,7 +198,7 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
                           ],
                         ),
                         Text(
-                          track?.title ?? 'Play a track to adjust its volume.',
+                          track?.title ?? context.tr("Play a track to adjust its volume."),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodySmall,
@@ -210,8 +214,12 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
                         ),
                         Text(
                           boosted
-                              ? 'Main volume boost is active. Positive track boosts are paused; reductions still apply.'
-                              : 'Saved for this song only. −100% mutes it; +100% matches the maximum volume boost.',
+                              ? context.tr(
+                                  "Main volume boost is active. Positive track boosts are paused; reductions still apply.",
+                                )
+                              : context.tr(
+                                  "Saved for this song only. −100% mutes it; +100% matches the maximum volume boost.",
+                                ),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                         const SizedBox(height: 20),
@@ -224,13 +232,13 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
                 valueListenable: widget.handler.equalizerNotifier,
                 builder: (context, equalizer, _) => Semantics(
                   button: true,
-                  label: 'Open equalizer, current preset ${equalizer.preset.label}',
+                  label: context.tr("Open equalizer, current preset {0}", [context.tr(equalizer.preset.label)]),
                   child: ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.equalizer_rounded),
-                    title: const Text('Equalizer', style: TextStyle(fontWeight: FontWeight.bold)),
+                    title: Text(context.tr("Equalizer"), style: TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: Text(
-                      equalizer.enabled ? equalizer.preset.label : 'Off',
+                      equalizer.enabled ? context.tr(equalizer.preset.label) : context.tr("Off"),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -259,9 +267,9 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
             await widget.handler.resetPlaybackAdjustments();
             await widget.handler.setTrackVolumePercent(0);
           },
-          child: const Text('Reset'),
+          child: Text(context.tr("Reset")),
         ),
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(context.tr("Close"))),
       ],
     );
   }

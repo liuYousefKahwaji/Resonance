@@ -15,15 +15,21 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// fetching every library page cannot delay the first playable Home shelves.
 class YoutubeMusicLibraryService {
   static const _channel = MethodChannel('resonance/android_youtube');
-  static const _snapshotKey = 'youtube_music_library.snapshot_v1';
-  static ({YoutubeAccessService access, int revision, DateTime storedAt, YoutubeMusicHomeShelf shelf})? _cache;
+  String get _snapshotKey =>
+      language == 'en' ? 'youtube_music_library.snapshot_v1' : 'youtube_music_library.snapshot_v1.$language';
+  final String language;
+  static final Map<
+    String,
+    ({YoutubeAccessService access, int revision, String language, DateTime storedAt, YoutubeMusicHomeShelf shelf})
+  >
+  _caches = {};
   static final _inFlight = <String, Future<YoutubeMusicHomeShelf>>{};
   final Future<String> Function(YoutubeAccessService access)? loader;
 
-  const YoutubeMusicLibraryService({this.loader});
+  const YoutubeMusicLibraryService({this.loader, this.language = 'en'});
 
   static void clearCache() {
-    _cache = null;
+    _caches.clear();
     _inFlight.clear();
   }
 
@@ -46,10 +52,11 @@ class YoutubeMusicLibraryService {
     final access = YoutubeAccessService.active;
     if (access == null || !_available(access)) return null;
     final revision = access.revision;
-    final cache = _cache;
+    final cache = _caches[language];
     if (cache != null &&
         identical(cache.access, access) &&
         cache.revision == revision &&
+        cache.language == language &&
         DateTime.now().difference(cache.storedAt) < const Duration(hours: 24)) {
       return cache.shelf;
     }
@@ -77,15 +84,16 @@ class YoutubeMusicLibraryService {
         userMessage: 'Connect YouTube access to view your playlist library.',
       );
     }
-    final cache = _cache;
+    final cache = _caches[language];
     if (!forceRefresh &&
         cache != null &&
         identical(cache.access, access) &&
         cache.revision == access.revision &&
+        cache.language == language &&
         DateTime.now().difference(cache.storedAt) < const Duration(minutes: 3)) {
       return cache.shelf;
     }
-    final key = '${identityHashCode(access)}:${access.revision}';
+    final key = '${identityHashCode(access)}:${access.revision}:$language';
     final pending = _inFlight.putIfAbsent(key, () => _fetchFresh(access, access.revision));
     try {
       return await pending;
@@ -99,9 +107,9 @@ class YoutubeMusicLibraryService {
       final raw = loader != null
           ? await loader!(access)
           : Platform.isAndroid
-          ? await _channel.invokeMethod<String>('getMusicLibrary')
+          ? await _channel.invokeMethod<String>('getMusicLibrary', {'language': language})
           : Platform.isWindows
-          ? await const WindowsYtMusicHelper().invoke(action: 'library', access: access)
+          ? await const WindowsYtMusicHelper().invoke(action: 'library', access: access, language: language)
           : throw UnsupportedError('YouTube Music library is available on Windows and Android.');
       if (raw == null) throw const FormatException('Empty playlist library response.');
       final shelf = decodeResponse(raw);
@@ -112,7 +120,13 @@ class YoutubeMusicLibraryService {
       if (access.revision != revision || !_available(access) || !identical(access, YoutubeAccessService.active)) {
         throw StateError('YouTube access changed during the request.');
       }
-      _cache = (access: access, revision: revision, storedAt: DateTime.now(), shelf: shelf);
+      _caches[language] = (
+        access: access,
+        revision: revision,
+        language: language,
+        storedAt: DateTime.now(),
+        shelf: shelf,
+      );
       unawaited(_storeSnapshot(access, revision, raw));
       return shelf;
     } catch (error) {

@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
@@ -154,7 +155,12 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
       if (mounted && route.isCurrent) Navigator.pop(context);
       await page;
       if (mounted) {
-        await showYoutubeFailure(context, error, sourceUrl: selected.url, actionLabel: 'Could not play stream');
+        await showYoutubeFailure(
+          context,
+          error,
+          sourceUrl: selected.url,
+          actionLabel: context.tr("Could not play stream"),
+        );
       }
       return;
     }
@@ -178,23 +184,29 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              added ? '${track.title} added to ${widget.playlistName}' : 'Already in ${widget.playlistName}',
+              added
+                  ? context.tr("{0} added to {1}", [track.title, widget.playlistName])
+                  : context.tr("Already in {0}", [widget.playlistName]),
             ),
           ),
         );
       }
     } catch (error) {
-      if (mounted) await showYoutubeFailure(context, error, sourceUrl: track.url, actionLabel: 'Could not add stream');
+      if (mounted) {
+        await showYoutubeFailure(context, error, sourceUrl: track.url, actionLabel: context.tr("Could not add stream"));
+      }
     }
   }
 
   Future<void> _download(YoutubeTrack track) async {
     final queue = DownloadQueueController.instance;
     if (queue.pendingEntryFor(track.url, widget.playlistNumber) != null) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${track.title} queued')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.tr("{0} queued", [track.title]))));
     unawaited(
       queue.enqueue(track, widget.playlistNumber).catchError((error) async {
-        if (mounted) await showYoutubeFailure(context, error, sourceUrl: track.url, actionLabel: 'Download failed');
+        if (mounted) {
+          await showYoutubeFailure(context, error, sourceUrl: track.url, actionLabel: context.tr("Download failed"));
+        }
         return null;
       }),
     );
@@ -203,7 +215,9 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
   Future<void> _playLocal(ListeningHistoryEntry entry) async {
     if (!await File(entry.trackPath).exists()) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This audio file is unavailable.')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.tr("This audio file is unavailable."))));
       }
       return;
     }
@@ -214,11 +228,11 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Clear Resonance history?'),
-        content: const Text('This removes listening history only. Audio files and playlists are unaffected.'),
+        title: Text(context.tr("Clear Resonance history?")),
+        content: Text(context.tr("This removes listening history only. Audio files and playlists are unaffected.")),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Clear')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(context.tr("Cancel"))),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(context.tr("Clear"))),
         ],
       ),
     );
@@ -230,32 +244,32 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
     final showSearch = !Platform.isAndroid || _searchOpen;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('History'),
+        title: Text(context.tr("History")),
         actions: [
           if (Platform.isAndroid)
             IconButton(
               onPressed: () => setState(() => _searchOpen = !_searchOpen),
-              tooltip: 'Search history',
+              tooltip: context.tr("Search history"),
               icon: Icon(_searchOpen ? Icons.close_rounded : Icons.search_rounded),
             ),
           if (_tabs.index == 0)
             IconButton(
               onPressed: _loadingYoutube ? null : () => _loadYoutube(refresh: true),
-              tooltip: 'Refresh',
+              tooltip: context.tr("Refresh"),
               icon: const Icon(Icons.refresh_rounded),
             ),
           if (_tabs.index == 1 && ListeningHistoryRepository.instance.entries.isNotEmpty)
             IconButton(
               onPressed: _clearLocal,
-              tooltip: 'Clear Resonance history',
+              tooltip: context.tr("Clear Resonance history"),
               icon: const Icon(Icons.delete_sweep_rounded),
             ),
         ],
         bottom: TabBar(
           controller: _tabs,
-          tabs: const [
+          tabs: [
             Tab(text: 'YouTube Music'),
-            Tab(text: 'Resonance'),
+            Tab(text: context.tr('Resonance')),
           ],
         ),
       ),
@@ -267,12 +281,12 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
               duration: const Duration(milliseconds: 180),
               child: showSearch
                   ? Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                      padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 8),
                       child: TextField(
                         controller: _search,
                         autofocus: Platform.isAndroid,
                         decoration: InputDecoration(
-                          hintText: 'Search title or artist',
+                          hintText: context.tr("Search title or artist"),
                           prefixIcon: const Icon(Icons.search_rounded),
                           suffixIcon: _search.text.isEmpty
                               ? null
@@ -296,8 +310,8 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
     if (_youtubeError != null) {
       return _HistoryMessage(
         icon: Icons.cloud_off_rounded,
-        title: 'Could not load YouTube Music history',
-        message: 'Reconnect YouTube access if your session expired.',
+        title: context.tr("Could not load YouTube Music history"),
+        message: context.tr("Reconnect YouTube access if your session expired."),
         primaryLabel: 'Retry',
         onPrimary: () => _loadYoutube(refresh: true),
         secondaryLabel: 'YouTube access',
@@ -309,10 +323,10 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
     if (tracks.isEmpty) {
       return _HistoryMessage(
         icon: Icons.history_rounded,
-        title: _search.text.isEmpty ? 'No YouTube Music history' : 'No matching tracks',
+        title: _search.text.isEmpty ? context.tr("No YouTube Music history") : context.tr("No matching tracks"),
         message: _search.text.isEmpty
-            ? 'Tracks you play on YouTube Music will appear here.'
-            : 'Try a different title or artist.',
+            ? context.tr("Tracks you play on YouTube Music will appear here.")
+            : context.tr("Try a different title or artist."),
       );
     }
     return RefreshIndicator(
@@ -338,10 +352,10 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
     if (entries.isEmpty) {
       return _HistoryMessage(
         icon: Icons.library_music_rounded,
-        title: _search.text.isEmpty ? 'No Resonance history yet' : 'No matching tracks',
+        title: _search.text.isEmpty ? context.tr("No Resonance history yet") : context.tr("No matching tracks"),
         message: _search.text.isEmpty
-            ? 'Local tracks will appear after three seconds of playback.'
-            : 'Try a different title or artist.',
+            ? context.tr("Local tracks will appear after three seconds of playback.")
+            : context.tr("Try a different title or artist."),
       );
     }
     return ListView.builder(
@@ -363,7 +377,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
           onTap: () => _playLocal(entry),
           trailing: PopupMenuButton<String>(
             onSelected: (_) => ListeningHistoryRepository.instance.remove(entry.trackPath),
-            itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
+            itemBuilder: (_) => [PopupMenuItem(value: 'remove', child: Text(context.tr("Remove from history")))],
           ),
         );
       },
@@ -407,7 +421,10 @@ class _YoutubeHistoryTile extends StatelessWidget {
         Text(track.artist, maxLines: 1, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 3),
         Text(
-          '${track.viewCount == null ? '—' : track.formattedViewCount} views  ·  ${track.likeCount == null ? '—' : track.formattedLikeCount} likes',
+          context.tr("{0} views  ·  {1} likes", [
+            track.viewCount == null ? '—' : track.formattedViewCount,
+            track.likeCount == null ? '—' : track.formattedLikeCount,
+          ]),
           style: Theme.of(context).textTheme.labelSmall,
         ),
       ],
@@ -415,9 +432,9 @@ class _YoutubeHistoryTile extends StatelessWidget {
     onTap: onPlay,
     trailing: PopupMenuButton<String>(
       onSelected: (value) => value == 'stream' ? onStream() : onDownload(),
-      itemBuilder: (_) => const [
-        PopupMenuItem(value: 'stream', child: Text('Add stream to playlist')),
-        PopupMenuItem(value: 'download', child: Text('Download')),
+      itemBuilder: (_) => [
+        PopupMenuItem(value: 'stream', child: Text(context.tr("Add stream to playlist"))),
+        PopupMenuItem(value: 'download', child: Text(context.tr("Download"))),
       ],
     ),
   );
@@ -484,14 +501,14 @@ class _HistoryMessage extends StatelessWidget {
         children: [
           Icon(icon, size: 42, color: Theme.of(context).colorScheme.primary),
           const SizedBox(height: 14),
-          Text(title, style: Theme.of(context).textTheme.titleMedium, textAlign: TextAlign.center),
+          Text(context.trRendered(title), style: Theme.of(context).textTheme.titleMedium, textAlign: TextAlign.center),
           const SizedBox(height: 6),
-          Text(message, style: Theme.of(context).textTheme.bodySmall, textAlign: TextAlign.center),
+          Text(context.trRendered(message), style: Theme.of(context).textTheme.bodySmall, textAlign: TextAlign.center),
           if (primaryLabel != null) ...[
             const SizedBox(height: 16),
-            FilledButton(onPressed: onPrimary, child: Text(primaryLabel!)),
+            FilledButton(onPressed: onPrimary, child: Text(context.tr(primaryLabel!))),
           ],
-          if (secondaryLabel != null) TextButton(onPressed: onSecondary, child: Text(secondaryLabel!)),
+          if (secondaryLabel != null) TextButton(onPressed: onSecondary, child: Text(context.tr(secondaryLabel!))),
         ],
       ),
     ),

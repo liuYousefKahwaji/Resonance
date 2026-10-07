@@ -323,11 +323,12 @@ class MainActivity : AudioServiceFragmentActivity() {
 
                     // ── getMusicHome ──────────────────────────────────────
                     "getMusicHome" -> {
+                        val language = if (call.argument<String>("language") == "ar") "ar" else "en"
                         val limit = (call.argument<Int>("limit") ?: 24).coerceIn(1, 80)
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
                                 val json = withYoutubeCookieCopy { cookiePath ->
-                                    bridge.callAttr("get_music_home", limit, cookiePath).toString()
+                                    bridge.callAttr("get_music_home", limit, cookiePath, language).toString()
                                 }
                                 withContext(Dispatchers.Main) { result.success(json) }
                             } catch (e: Exception) {
@@ -339,10 +340,11 @@ class MainActivity : AudioServiceFragmentActivity() {
                     }
 
                     "getMusicLibrary" -> {
+                        val language = if (call.argument<String>("language") == "ar") "ar" else "en"
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
                                 val json = withYoutubeCookieCopy { cookiePath ->
-                                    bridge.callAttr("get_music_library", cookiePath).toString()
+                                    bridge.callAttr("get_music_library", cookiePath, language).toString()
                                 }
                                 withContext(Dispatchers.Main) { result.success(json) }
                             } catch (e: Exception) {

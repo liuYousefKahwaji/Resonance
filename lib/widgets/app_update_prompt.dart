@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -15,7 +16,7 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
   final accept = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      title: Text('Resonance ${update.version} is available'),
+      title: Text(context.tr("Resonance {0} is available", [update.version])),
       content: SizedBox(
         width: 460,
         child: ConstrainedBox(
@@ -26,32 +27,43 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Download: ${formatUpdateBytes(update.asset.size)}',
+                  context.tr("Download: {0}", [formatUpdateBytes(update.asset.size)]),
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
                 if (update.savedDownloadBytes > 0)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
-                      '${update.downloadSavingsPercent}% smaller than the full ${formatUpdateBytes(update.fullDownloadBytes)} download.',
+                      context.tr("{0}% smaller than the full {1} download.", [
+                        update.downloadSavingsPercent,
+                        formatUpdateBytes(update.fullDownloadBytes),
+                      ]),
                     ),
                   ),
                 const SizedBox(height: 6),
                 Text(
                   Platform.isAndroid
-                      ? 'Downloads in the background. Android may ask you to approve installation. Follow progress in Settings.'
-                      : 'Resonance will close briefly and reopen after installation. Your library and settings are kept.',
+                      ? context.tr(
+                          "Downloads in the background. Android may ask you to approve installation. Follow progress in Settings.",
+                        )
+                      : context.tr(
+                          "Resonance will close briefly and reopen after installation. Your library and settings are kept.",
+                        ),
                 ),
                 if (update.delta != null)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(top: 4),
                     child: Text(
-                      'If the smaller update cannot be applied, the full package will be downloaded instead.',
+                      context.tr(
+                        "If the smaller update cannot be applied, the full package will be downloaded instead.",
+                      ),
                     ),
                   ),
                 const Divider(height: 28),
                 MarkdownBody(
-                  data: update.notes.trim().isEmpty ? 'A new version is ready to install.' : update.notes.trim(),
+                  data: update.notes.trim().isEmpty
+                      ? context.tr('A new version is ready to install.')
+                      : update.notes.trim(),
                   shrinkWrap: true,
                   selectable: true,
                   onTapLink: (_, href, __) {
@@ -67,10 +79,10 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Later')),
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(context.tr("Later"))),
         FilledButton(
           onPressed: () => Navigator.pop(context, true),
-          child: Text(Platform.isAndroid ? 'Download update' : 'Update and restart'),
+          child: Text(Platform.isAndroid ? context.tr("Download update") : context.tr("Update and restart")),
         ),
       ],
     ),
@@ -88,7 +100,7 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
         builder: (dialogContext) => PopScope(
           canPop: false,
           child: AlertDialog(
-            title: Text('Updating Resonance to ${update.version}'),
+            title: Text(context.tr("Updating Resonance to {0}", [update.version])),
             content: SizedBox(
               width: 400,
               child: ValueListenableBuilder<UpdateDownloadProgress>(
@@ -103,7 +115,9 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
                     children: [
                       Text(
                         value.message ??
-                            (value.verifying ? 'Verifying the download…' : 'Downloading $downloadedMb of $totalMb MB'),
+                            (value.verifying
+                                ? context.tr("Verifying the download…")
+                                : context.tr("Downloading {0} of {1} MB", [downloadedMb, totalMb])),
                       ),
                       const SizedBox(height: 12),
                       LinearProgressIndicator(value: value.verifying ? null : fraction),
@@ -123,7 +137,7 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
                   controller.cancel();
                   Navigator.of(dialogContext).pop();
                 },
-                child: const Text('Cancel'),
+                child: Text(context.tr("Cancel")),
               ),
             ],
           ),
@@ -142,8 +156,10 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
     );
     if (context.mounted && Platform.isAndroid) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Update is downloading in the background. Android will install it or ask for approval.'),
+        SnackBar(
+          content: Text(
+            context.tr("Update is downloading in the background. Android will install it or ask for approval."),
+          ),
         ),
       );
     }
@@ -153,19 +169,23 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
     if (context.mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Download paused. Try again to resume.')));
+      ).showSnackBar(SnackBar(content: Text(context.tr("Download paused. Try again to resume."))));
     }
   } on PlatformException catch (error) {
     if (progressShown && context.mounted) Navigator.of(context, rootNavigator: true).pop();
     progressShown = false;
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message ?? 'Update could not start')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message ?? context.tr("Update could not start"))));
     }
   } catch (error) {
     if (progressShown && context.mounted) Navigator.of(context, rootNavigator: true).pop();
     progressShown = false;
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update could not start: $error')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.tr("Update could not start: {0}", [error]))));
     }
   }
 }

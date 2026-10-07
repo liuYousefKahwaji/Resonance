@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -237,7 +238,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
       canPop: !busy,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Cross-Website Playlist Import'),
+          title: Text(context.tr("Cross-Website Playlist Import")),
           leading: IconButton(
             icon: const Icon(Icons.close_rounded),
             onPressed: busy ? null : () => Navigator.pop(context, _stage == _ExternalImportStage.complete),
@@ -252,7 +253,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
     _ExternalImportStage.input => _buildInput(),
     _ExternalImportStage.fetching => _progressCard(
       icon: Icons.cloud_download_outlined,
-      title: 'Reading playlist metadata',
+      title: context.tr("Reading playlist metadata"),
       status: 'Connecting to the playlist website…',
     ),
     _ExternalImportStage.choosing => _buildChoice(),
@@ -262,12 +263,14 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
   };
 
   Widget _buildInput() => _card(
-    title: 'YouTube, Spotify, or Audiomack',
+    title: context.tr("YouTube, Spotify, or Audiomack"),
     children: [
       const Icon(Icons.library_music_rounded, size: 62),
       const SizedBox(height: 16),
-      const Text(
-        'Paste a public playlist link. YouTube and YouTube Music playlists keep their exact videos and order. Spotify and Audiomack tracks are matched on YouTube for your review.',
+      Text(
+        context.tr(
+          "Paste a public playlist link. YouTube and YouTube Music playlists keep their exact videos and order. Spotify and Audiomack tracks are matched on YouTube for your review.",
+        ),
         textAlign: TextAlign.center,
       ),
       const SizedBox(height: 20),
@@ -277,8 +280,8 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
         keyboardType: TextInputType.url,
         textInputAction: TextInputAction.go,
         onSubmitted: (_) => _fetchAndReview(),
-        decoration: const InputDecoration(
-          labelText: 'Playlist link',
+        decoration: InputDecoration(
+          labelText: context.tr("Playlist link"),
           hintText: 'https://music.youtube.com/playlist?list=…',
           prefixIcon: Icon(Icons.link_rounded),
         ),
@@ -287,9 +290,9 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
       FilledButton.icon(
         onPressed: _fetchAndReview,
         icon: const Icon(Icons.manage_search_rounded),
-        label: const Text('Find Tracks'),
+        label: Text(context.tr("Find Tracks")),
       ),
-      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+      TextButton(onPressed: () => Navigator.pop(context, false), child: Text(context.tr("Cancel"))),
     ],
   );
 
@@ -297,7 +300,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
     final playlist = _playlist!;
     final selected = _matches.where((match) => !match.skipped && match.selected != null).length;
     return _card(
-      title: 'Import “${playlist.name}”',
+      title: context.tr("Import “{0}”", [playlist.name]),
       children: [
         _metric('Source', playlist.kind.label),
         _metric('Playlist entries', playlist.tracks.length.toString()),
@@ -307,17 +310,19 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
         FilledButton.icon(
           onPressed: () => _startImport(YoutubePlaylistImportMode.download),
           icon: const Icon(Icons.download_for_offline_rounded),
-          label: const Text('Download Tracks'),
+          label: Text(context.tr("Download Tracks")),
         ),
         const SizedBox(height: 10),
         OutlinedButton.icon(
           onPressed: () => _startImport(YoutubePlaylistImportMode.stream),
           icon: const Icon(Icons.sensors_rounded),
-          label: const Text('Stream From Playlist'),
+          label: Text(context.tr("Stream From Playlist")),
         ),
         const SizedBox(height: 8),
         Text(
-          'Downloads reuse matching local files when possible. Streaming adds YouTube URLs without downloading audio.',
+          context.tr(
+            "Downloads reuse matching local files when possible. Streaming adds YouTube URLs without downloading audio.",
+          ),
           style: Theme.of(context).textTheme.bodySmall,
           textAlign: TextAlign.center,
         ),
@@ -329,7 +334,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
     final overall = _progressTotal == 0 ? null : _progressCompleted / _progressTotal;
     return _progressCard(
       icon: Icons.sync_rounded,
-      title: 'Creating Resonance playlist',
+      title: context.tr("Creating Resonance playlist"),
       status: _progressStatus,
       detail: _progressTrack,
       overall: overall,
@@ -337,7 +342,9 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
       action: OutlinedButton.icon(
         onPressed: _stopRequested ? null : () => setState(() => _stopRequested = true),
         icon: const Icon(Icons.stop_circle_outlined),
-        label: Text(_stopRequested ? 'Stopping after current track…' : 'Stop after current track'),
+        label: Text(
+          _stopRequested ? context.tr("Stopping after current track…") : context.tr("Stop after current track"),
+        ),
       ),
     );
   }
@@ -345,7 +352,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
   Widget _buildComplete() {
     final result = _result!;
     return _card(
-      title: 'Import complete',
+      title: context.tr("Import complete"),
       children: [
         Icon(
           result.cancelled ? Icons.stop_circle_rounded : Icons.check_circle_rounded,
@@ -355,8 +362,8 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
         const SizedBox(height: 14),
         Text(
           result.cancelled
-              ? 'Import stopped; “${result.playlistName}” was created with the tracks already prepared.'
-              : '“${result.playlistName}” was created.',
+              ? context.tr("Import stopped; “{0}” was created with the tracks already prepared.", [result.playlistName])
+              : context.tr("“{0}” was created.", [result.playlistName]),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 16),
@@ -368,7 +375,10 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
         if (result.failures.isNotEmpty) ...[
           const SizedBox(height: 10),
           Text(
-            '${result.failures.length} unique track${result.failures.length == 1 ? '' : 's'} failed; the rest were imported.',
+            context.tr("{0} unique track{1} failed; the rest were imported.", [
+              result.failures.length,
+              result.failures.length == 1 ? '' : 's',
+            ]),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
@@ -382,24 +392,24 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
             ),
         ],
         const SizedBox(height: 18),
-        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Done')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(context.tr("Done"))),
       ],
     );
   }
 
   Widget _buildError() => _card(
-    title: 'Import could not continue',
+    title: context.tr("Import could not continue"),
     children: [
       Icon(Icons.error_outline_rounded, size: 58, color: Theme.of(context).colorScheme.error),
       const SizedBox(height: 14),
-      Text(_error ?? 'Unknown import error', textAlign: TextAlign.center),
+      Text(context.trRendered(_error ?? context.tr("Unknown import error")), textAlign: TextAlign.center),
       const SizedBox(height: 18),
       FilledButton(
         onPressed: () =>
             setState(() => _stage = _playlist == null ? _ExternalImportStage.input : _ExternalImportStage.choosing),
-        child: const Text('Try Again'),
+        child: Text(context.tr("Try Again")),
       ),
-      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Close')),
+      TextButton(onPressed: () => Navigator.pop(context, false), child: Text(context.tr("Close"))),
     ],
   );
 
@@ -419,10 +429,10 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
       LinearProgressIndicator(value: overall),
       if (itemProgress != null) ...[const SizedBox(height: 8), LinearProgressIndicator(value: itemProgress)],
       const SizedBox(height: 14),
-      Text(status, textAlign: TextAlign.center),
+      Text(context.trRendered(status), textAlign: TextAlign.center),
       if (detail.isNotEmpty) ...[
         const SizedBox(height: 6),
-        Text(detail, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+        Text(context.trRendered(detail), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
       ],
       if (action != null) ...[const SizedBox(height: 18), action],
     ],
@@ -439,7 +449,11 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(title, style: Theme.of(context).textTheme.headlineSmall, textAlign: TextAlign.center),
+                Text(
+                  context.trRendered(title),
+                  style: Theme.of(context).textTheme.headlineSmall,
+                  textAlign: TextAlign.center,
+                ),
                 const SizedBox(height: 20),
                 ...children,
               ],
@@ -454,7 +468,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
     padding: const EdgeInsets.symmetric(vertical: 5),
     child: Row(
       children: [
-        Expanded(child: Text(label)),
+        Expanded(child: Text(context.trRendered(label))),
         Flexible(
           child: Text(
             value,

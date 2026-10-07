@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
@@ -15,7 +16,9 @@ Future<void> showYoutubeFailure(BuildContext context, Object error, {String? sou
     context: context,
     builder: (dialogContext) => AlertDialog(
       title: Text(
-        failure.isAccessFailure ? 'YouTube verification required' : (actionLabel ?? 'YouTube request failed'),
+        failure.isAccessFailure
+            ? context.tr("YouTube verification required")
+            : (actionLabel ?? context.tr("YouTube request failed")),
       ),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
@@ -25,17 +28,19 @@ Future<void> showYoutubeFailure(BuildContext context, Object error, {String? sou
           children: [
             Text(
               failure.kind == YoutubeFailureKind.sessionRejected
-                  ? 'Your saved YouTube session was rejected or expired. Reconnect the browser session or replace cookies.txt, then retry.'
+                  ? context.tr(
+                      "Your saved YouTube session was rejected or expired. Reconnect the browser session or replace cookies.txt, then retry.",
+                    )
                   : failure.kind == YoutubeFailureKind.verificationRequired
-                  ? 'YouTube blocked this request until a signed-in session is provided.'
-                  : failure.userMessage,
+                  ? context.tr("YouTube blocked this request until a signed-in session is provided.")
+                  : context.tr(failure.userMessage),
             ),
             if (!failure.isAccessFailure && failure.technicalSummary.isNotEmpty) ...[
               const SizedBox(height: 8),
               ExpansionTile(
                 tilePadding: EdgeInsets.zero,
                 childrenPadding: EdgeInsets.zero,
-                title: const Text('Details'),
+                title: Text(context.tr("Details")),
                 children: [
                   SelectableText(
                     failure.technicalSummary,
@@ -51,7 +56,7 @@ Future<void> showYoutubeFailure(BuildContext context, Object error, {String? sou
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(dialogContext),
-          child: Text(failure.isAccessFailure ? 'Not now' : 'Close'),
+          child: Text(failure.isAccessFailure ? context.tr("Not now") : context.tr("Close")),
         ),
         if (failure.isAccessFailure)
           FilledButton(
@@ -62,7 +67,7 @@ Future<void> showYoutubeFailure(BuildContext context, Object error, {String? sou
                 MaterialPageRoute<void>(builder: (_) => YoutubeAccessScreen(sourceUrl: failure.sourceUrl)),
               );
             },
-            child: const Text('Open YouTube access'),
+            child: Text(context.tr("Open YouTube access")),
           ),
       ],
     ),

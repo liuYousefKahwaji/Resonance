@@ -6,11 +6,7 @@ class DropZone extends StatelessWidget {
   final Widget child;
   final Function(String) onFileAdded;
 
-  const DropZone({
-    super.key,
-    required this.child,
-    required this.onFileAdded,
-  });
+  const DropZone({super.key, required this.child, required this.onFileAdded});
 
   @override
   Widget build(BuildContext context) {

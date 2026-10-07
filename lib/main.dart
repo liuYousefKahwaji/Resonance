@@ -7,6 +7,10 @@ import 'dart:math' as math;
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:resonance/l10n/app_strings.dart';
+import 'package:resonance/widgets/library/listening_focus_tab.dart';
+import 'package:resonance/providers/language_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -166,6 +170,8 @@ Future<void> main(List<String> args) async {
     );
   }
   final themeProvider = ThemeProvider();
+  final languageProvider = LanguageProvider();
+  await languageProvider.initialize();
   SyncSessionService.instance.initialize(handler);
   if (Platform.isAndroid) {
     unawaited(AndroidPlaybackWidgetService.instance.attach(handler, themeProvider));
@@ -205,8 +211,22 @@ Future<void> main(List<String> args) async {
       }
     }
     if (trayMode != TrayMode.noTray && !updateTestMode) {
-      await TrayService.init();
+      await TrayService.init(locale: languageProvider.locale);
     }
+  }
+
+  if (_isDesktop && !updateTestMode) {
+    Future<void> syncLanguage() async {
+      try {
+        await windowManager.setTitle(AppStrings(languageProvider.locale).text('Resonance'));
+        await TrayService.updateLocale(languageProvider.locale);
+      } catch (error) {
+        _shutdownLog('Desktop language update failed: $error');
+      }
+    }
+
+    await syncLanguage();
+    languageProvider.addListener(() => unawaited(syncLanguage()));
   }
 
   final prefs = await SharedPreferences.getInstance();
@@ -227,6 +247,7 @@ Future<void> main(List<String> args) async {
         ChangeNotifierProvider<DownloadQueueController>.value(value: DownloadQueueController.instance),
         ChangeNotifierProvider<SyncSessionService>.value(value: SyncSessionService.instance),
         ChangeNotifierProvider<ThemeProvider>.value(value: themeProvider),
+        ChangeNotifierProvider<LanguageProvider>.value(value: languageProvider),
       ],
       child: MainApp(handler: handler),
     ),
@@ -239,7 +260,11 @@ Future<void> main(List<String> args) async {
   // Start the small first Home page while the launch animation is visible.
   // The Discover screen joins this request or paints the saved shelves.
   if (youtubeAccessService.isConfigured && prefs.getString('listening_focus') == ListeningFocus.stream.name) {
-    unawaited(const YoutubeMusicHomeService().fetch(limit: 6).then<void>((_) {}, onError: (Object _) {}));
+    unawaited(
+      YoutubeMusicHomeService(
+        language: languageProvider.locale.languageCode,
+      ).fetch(limit: 6).then<void>((_) {}, onError: (Object _) {}),
+    );
   }
 
   if (Platform.isWindows && !updateTestMode) {
@@ -493,7 +518,7 @@ class _MainAppState extends State<MainApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final messenger = ScaffoldMessenger.maybeOf(context);
-      messenger?.showSnackBar(SnackBar(content: Text(message)));
+      messenger?.showSnackBar(SnackBar(content: Text(context.trRendered(message))));
     });
   }
 
@@ -612,9 +637,9 @@ class _MainAppState extends State<MainApp> {
 
   Future<void> _transferCurrentPlaylist(BuildContext navigatorContext) async {
     if (playlist.isEmpty) {
-      ScaffoldMessenger.of(
-        navigatorContext,
-      ).showSnackBar(const SnackBar(content: Text('Add at least one track before transferring this playlist.')));
+      ScaffoldMessenger.of(navigatorContext).showSnackBar(
+        SnackBar(content: Text(navigatorContext.tr("Add at least one track before transferring this playlist."))),
+      );
       return;
     }
     PlaylistSourceScan scan;
@@ -629,7 +654,7 @@ class _MainAppState extends State<MainApp> {
       if (mounted) {
         ScaffoldMessenger.of(
           navigatorContext,
-        ).showSnackBar(SnackBar(content: Text('Could not prepare transfer: $error')));
+        ).showSnackBar(SnackBar(content: Text(navigatorContext.tr("Could not prepare transfer: {0}", [error]))));
       }
       return;
     }
@@ -648,19 +673,25 @@ class _MainAppState extends State<MainApp> {
     final confirmed = await showDialog<bool>(
       context: navigatorContext,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Generate playlist QR codes?'),
+        title: Text(navigatorContext.tr("Generate playlist QR codes?")),
         content: Text(
-          'Playlist: ${scan.playlistName}\n\n'
-          'Tracks in playlist: ${scan.playlistTracks.length}\n'
-          'Sources resolved: $resolved\n'
-          'Skipped: ${scan.skippedEntryCount}\n\n'
-          '${scan.skippedEntryCount == 0 ? 'Every playlist entry will be transferred.' : 'Skipped tracks will not be transferred.'}',
+          context.tr('Playlist: {0}\n\nTracks in playlist: {1}\nSources resolved: {2}\nSkipped: {3}\n\n{4}', [
+            scan.playlistName,
+            scan.playlistTracks.length,
+            resolved,
+            scan.skippedEntryCount,
+            context.tr(
+              scan.skippedEntryCount == 0
+                  ? 'Every playlist entry will be transferred.'
+                  : 'Skipped tracks will not be transferred.',
+            ),
+          ]),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(navigatorContext.tr("Cancel"))),
           FilledButton(
             onPressed: resolved == 0 ? null : () => Navigator.pop(dialogContext, true),
-            child: const Text('Generate QR Codes'),
+            child: Text(navigatorContext.tr("Generate QR Codes")),
           ),
         ],
       ),
@@ -681,7 +712,7 @@ class _MainAppState extends State<MainApp> {
       if (mounted) {
         ScaffoldMessenger.of(
           navigatorContext,
-        ).showSnackBar(SnackBar(content: Text('Could not generate QR codes: $error')));
+        ).showSnackBar(SnackBar(content: Text(navigatorContext.tr("Could not generate QR codes: {0}", [error]))));
       }
     }
   }
@@ -714,7 +745,7 @@ class _MainAppState extends State<MainApp> {
               children: [
                 const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5)),
                 const SizedBox(width: 18),
-                Expanded(child: Text(message)),
+                Expanded(child: Text(context.trRendered(message))),
               ],
             ),
           ),
@@ -738,19 +769,19 @@ class _MainAppState extends State<MainApp> {
           controller: controller,
           autofocus: true,
           maxLength: FileService.maxPlaylistNameLength,
-          decoration: const InputDecoration(labelText: 'Playlist name'),
+          decoration: InputDecoration(labelText: context.tr("Playlist name")),
           onSubmitted: (value) {
             if (value.trim().isNotEmpty) Navigator.pop(dialogContext, value.trim());
           },
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: Text(context.tr("Cancel"))),
           FilledButton(
             onPressed: () {
               final value = controller.text.trim();
               if (value.isNotEmpty) Navigator.pop(dialogContext, value);
             },
-            child: const Text('Save'),
+            child: Text(context.tr("Save")),
           ),
         ],
       ),
@@ -783,18 +814,20 @@ class _MainAppState extends State<MainApp> {
     }
     final navigatorContext = _navigatorKey.currentState?.overlay?.context;
     if (navigatorContext == null) return;
-    final name = playlistNames[number] ?? 'Playlist $number';
+    final name = FileService.isFavoritesPlaylist(number)
+        ? context.tr('Favorites')
+        : playlistNames[number] ?? 'Playlist $number';
     final confirmed = await showDialog<bool>(
       context: navigatorContext,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete playlist?'),
-        content: Text('Delete "$name"? Your audio files will not be deleted.'),
+        title: Text(context.tr("Delete playlist?")),
+        content: Text(context.tr("Delete \"{0}\"? Your audio files will not be deleted.", [name])),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(context.tr("Cancel"))),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
             style: FilledButton.styleFrom(backgroundColor: Theme.of(dialogContext).colorScheme.error),
-            child: const Text('Delete'),
+            child: Text(context.tr("Delete")),
           ),
         ],
       ),
@@ -808,7 +841,9 @@ class _MainAppState extends State<MainApp> {
   Future<void> _showPlaylistActions(int number) async {
     final navigatorContext = _navigatorKey.currentState?.overlay?.context;
     if (navigatorContext == null) return;
-    final name = playlistNames[number] ?? 'Playlist $number';
+    final name = FileService.isFavoritesPlaylist(number)
+        ? context.tr('Favorites')
+        : playlistNames[number] ?? 'Playlist $number';
     final action = await showModalBottomSheet<_PlaylistActionType>(
       context: navigatorContext,
       showDragHandle: true,
@@ -826,12 +861,12 @@ class _MainAppState extends State<MainApp> {
                     ? const TextStyle(color: FavoritesRepository.gold)
                     : null,
               ),
-              subtitle: const Text('Playlist actions'),
+              subtitle: Text(context.tr("Playlist actions")),
             ),
             ListTile(
               enabled: !FileService.isFavoritesPlaylist(number),
               leading: const Icon(Icons.edit_rounded),
-              title: const Text('Rename'),
+              title: Text(context.tr("Rename")),
               onTap: FileService.isFavoritesPlaylist(number)
                   ? null
                   : () => Navigator.pop(sheetContext, _PlaylistActionType.rename),
@@ -839,7 +874,7 @@ class _MainAppState extends State<MainApp> {
             ListTile(
               enabled: !FileService.isFavoritesPlaylist(number) && playlistNumbers.length > 2,
               leading: const Icon(Icons.delete_outline_rounded),
-              title: const Text('Delete'),
+              title: Text(context.tr("Delete")),
               onTap: !FileService.isFavoritesPlaylist(number) && playlistNumbers.length > 2
                   ? () => Navigator.pop(sheetContext, _PlaylistActionType.delete)
                   : null,
@@ -875,7 +910,9 @@ class _MainAppState extends State<MainApp> {
     );
     if (!mounted) return;
     if (containingPlaylist == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This track is not in any playlist.')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.tr("This track is not in any playlist."))));
       return;
     }
     if (containingPlaylist != activePlaylistNumber) {
@@ -960,7 +997,7 @@ class _MainAppState extends State<MainApp> {
     if (targets.isEmpty) {
       ScaffoldMessenger.of(
         navigatorContext,
-      ).showSnackBar(const SnackBar(content: Text('Create another playlist first.')));
+      ).showSnackBar(SnackBar(content: Text(context.tr("Create another playlist first."))));
       return null;
     }
     return showModalBottomSheet<int>(
@@ -972,13 +1009,17 @@ class _MainAppState extends State<MainApp> {
           children: [
             ListTile(
               leading: const Icon(Icons.queue_music_rounded),
-              title: Text('$actionLabel ${_selectedTrackIndices.length} selected tracks'),
-              subtitle: const Text('Choose a destination playlist'),
+              title: Text(context.tr("{0} {1} selected tracks", [actionLabel, _selectedTrackIndices.length])),
+              subtitle: Text(context.tr("Choose a destination playlist")),
             ),
             for (final number in targets)
               ListTile(
                 leading: const Icon(Icons.playlist_play_rounded),
-                title: Text(playlistNames[number] ?? 'Playlist $number'),
+                title: Text(
+                  FileService.isFavoritesPlaylist(number)
+                      ? context.tr("Favorites")
+                      : playlistNames[number] ?? context.tr("Playlist {0}", [number]),
+                ),
                 onTap: () => Navigator.pop(sheetContext, number),
               ),
             const SizedBox(height: 8),
@@ -1019,14 +1060,26 @@ class _MainAppState extends State<MainApp> {
       if (mounted) {
         final targetName = playlistNames[target] ?? 'Playlist $target';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${move ? 'Moved' : 'Copied'} ${tracks.length} tracks to “$targetName”.')),
+          SnackBar(
+            content: Text(
+              context.tr("{0} {1} tracks to “{2}”.", [
+                context.tr(move ? 'Moved' : 'Copied'),
+                tracks.length,
+                targetName,
+              ]),
+            ),
+          ),
         );
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Could not ${move ? 'move' : 'copy'} the selected tracks: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.tr("Could not {0} the selected tracks: {1}", [context.tr(move ? 'move' : 'copy'), error]),
+            ),
+          ),
+        );
       }
     }
   }
@@ -1039,13 +1092,16 @@ class _MainAppState extends State<MainApp> {
     final confirmed = await showDialog<bool>(
       context: navigatorContext,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Remove selected tracks?'),
+        title: Text(context.tr("Remove selected tracks?")),
         content: Text(
-          'Remove $count ${count == 1 ? 'track' : 'tracks'} from this playlist? The audio files will be kept.',
+          context.tr("Remove {0} {1} from this playlist? The audio files will be kept.", [
+            count,
+            context.tr(count == 1 ? 'track' : 'tracks'),
+          ]),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Remove')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(context.tr("Cancel"))),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: Text(context.tr("Remove"))),
         ],
       ),
     );
@@ -1062,7 +1118,9 @@ class _MainAppState extends State<MainApp> {
       _selectedTrackIndices.clear();
       _trackItemKeys.clear();
     });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Removed $count tracks from this playlist.')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(context.tr("Removed {0} tracks from this playlist.", [count]))));
   }
 
   List<String> _uniqueTrackPaths(Iterable<String> paths) {
@@ -1083,17 +1141,19 @@ class _MainAppState extends State<MainApp> {
       context: navigatorContext,
       builder: (dialogContext) => AlertDialog(
         icon: Icon(Icons.delete_forever_rounded, color: Theme.of(dialogContext).colorScheme.error),
-        title: const Text('Delete selected tracks everywhere?'),
+        title: Text(context.tr("Delete selected tracks everywhere?")),
         content: Text(
-          '${tracks.length} ${tracks.length == 1 ? 'track' : 'tracks'} will be removed from every Resonance playlist. '
-          'Local audio files will be permanently deleted. This cannot be undone.',
+          context.tr(
+            '{0} {1} will be removed from every Resonance playlist. Local audio files will be permanently deleted. This cannot be undone.',
+            [tracks.length, context.tr(tracks.length == 1 ? 'track' : 'tracks')],
+          ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(context.tr("Cancel"))),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
             style: FilledButton.styleFrom(backgroundColor: Theme.of(dialogContext).colorScheme.error),
-            child: const Text('Delete Permanently'),
+            child: Text(context.tr("Delete Permanently")),
           ),
         ],
       ),
@@ -1116,14 +1176,14 @@ class _MainAppState extends State<MainApp> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Deleted ${tracks.length} tracks everywhere.')));
+        ).showSnackBar(SnackBar(content: Text(context.tr("Deleted {0} tracks everywhere.", [tracks.length]))));
       }
     } catch (error) {
       await _loadPlaylistFromDisk();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Could not delete every selected track: $error'),
+            content: Text(context.tr("Could not delete every selected track: {0}", [error])),
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );
@@ -1142,16 +1202,19 @@ class _MainAppState extends State<MainApp> {
       context: navigatorContext,
       builder: (dialogContext) => AlertDialog(
         icon: Icon(Icons.delete_forever_rounded, color: Theme.of(dialogContext).colorScheme.error),
-        title: const Text('Delete track everywhere?'),
+        title: Text(context.tr("Delete track everywhere?")),
         content: Text(
-          '“$displayName” will be deleted from this device and removed from every Resonance playlist, metadata cache, and saved source reference.\n\nThis cannot be undone.',
+          context.tr(
+            "“{0}” will be deleted from this device and removed from every Resonance playlist, metadata cache, and saved source reference.\n\nThis cannot be undone.",
+            [displayName],
+          ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(context.tr("Cancel"))),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
             style: FilledButton.styleFrom(backgroundColor: Theme.of(dialogContext).colorScheme.error),
-            child: const Text('Delete Permanently'),
+            child: Text(context.tr("Delete Permanently")),
           ),
         ],
       ),
@@ -1167,13 +1230,15 @@ class _MainAppState extends State<MainApp> {
       await const TrackSourceRepository().removeSourceForTrack(trackPath);
       await _loadPlaylistFromDisk();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Deleted “$displayName” everywhere.')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.tr("Deleted “{0}” everywhere.", [displayName]))));
       }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Could not delete the track: $error'),
+            content: Text(context.tr("Could not delete the track: {0}", [error])),
             backgroundColor: Theme.of(context).colorScheme.error,
           ),
         );
@@ -1285,7 +1350,11 @@ class _MainAppState extends State<MainApp> {
             unawaited(_openRecognitionSearch(navigatorContext, match, pendingResultId: resultId));
           } else {
             ScaffoldMessenger.of(navigatorContext).showSnackBar(
-              SnackBar(content: Text(action['message']?.toString() ?? 'Music recognition did not return a result.')),
+              SnackBar(
+                content: Text(
+                  action['message']?.toString() ?? context.tr("Music recognition did not return a result."),
+                ),
+              ),
             );
             await AndroidEntrypointService.clearPendingRecognitionResult(resultId);
           }
@@ -1306,7 +1375,7 @@ class _MainAppState extends State<MainApp> {
       }
       ScaffoldMessenger.maybeOf(
         context,
-      )?.showSnackBar(SnackBar(content: Text('Could not read the shared content: $error')));
+      )?.showSnackBar(SnackBar(content: Text(context.tr("Could not read the shared content: {0}", [error]))));
       return;
     }
 
@@ -1376,11 +1445,20 @@ class _MainAppState extends State<MainApp> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<ThemeProvider>(
-      builder: (context, themeProvider, child) {
+    return Consumer2<ThemeProvider, LanguageProvider>(
+      builder: (context, themeProvider, languageProvider, child) {
         final windowsNativeControls = Platform.isWindows && themeProvider.windowsNativeControls;
         _syncWindowsChrome(windowsNativeControls);
         return MaterialApp(
+          locale: languageProvider.locale,
+          supportedLocales: AppStrings.supportedLocales,
+          localizationsDelegates: const [
+            AppStrings.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          onGenerateTitle: (context) => context.tr('Resonance'),
           navigatorKey: _navigatorKey,
           debugShowCheckedModeBanner: false,
           builder: (context, child) {
@@ -1398,7 +1476,7 @@ class _MainAppState extends State<MainApp> {
                       children: [
                         Icon(Icons.graphic_eq_rounded, size: 15, color: theme.colorScheme.primary),
                         const SizedBox(width: 7),
-                        const Text('Resonance', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                        Text(context.tr("Resonance"), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                       ],
                     ),
                   ),
@@ -1534,7 +1612,7 @@ class _MainAppState extends State<MainApp> {
           color: surface,
           child: Container(
             height: 46,
-            padding: const EdgeInsets.only(left: 14, right: 8),
+            padding: const EdgeInsetsDirectional.only(start: 14, end: 8),
             decoration: BoxDecoration(
               border: Border(bottom: BorderSide(color: border)),
             ),
@@ -1550,7 +1628,7 @@ class _MainAppState extends State<MainApp> {
                     ),
                   ),
                   child: Text(
-                    isStreamFocus ? 'Discover' : 'Library',
+                    isStreamFocus ? context.tr("Discover") : context.tr("Library"),
                     key: ValueKey(focus),
                     style: theme.appBarTheme.titleTextStyle,
                   ),
@@ -1570,13 +1648,13 @@ class _MainAppState extends State<MainApp> {
                   key: const Key('windows-history-command'),
                   onPressed: () => _openHistory(context),
                   icon: const Icon(Icons.history_rounded, size: 18),
-                  tooltip: 'History',
+                  tooltip: context.tr("History"),
                 ),
                 IconButton(
                   key: const Key('windows-settings-command'),
                   onPressed: () => _openSettings(context),
                   icon: const Icon(Icons.settings_outlined, size: 18),
-                  tooltip: 'Settings',
+                  tooltip: context.tr("Settings"),
                 ),
               ],
             ),
@@ -1625,7 +1703,7 @@ class _MainAppState extends State<MainApp> {
                 ),
               ),
               child: Text(
-                isStreamFocus ? 'Discover' : 'Resonance',
+                isStreamFocus ? context.tr("Discover") : context.tr("Resonance"),
                 key: ValueKey(focus),
                 style: TextStyle(
                   fontSize: 18,
@@ -1644,12 +1722,12 @@ class _MainAppState extends State<MainApp> {
         IconButton(
           onPressed: () => _openHistory(context),
           icon: Icon(Icons.history_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-          tooltip: 'History',
+          tooltip: context.tr("History"),
         ),
         IconButton(
           onPressed: () => _openSettings(context),
           icon: Icon(Icons.tune_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-          tooltip: 'Settings',
+          tooltip: context.tr("Settings"),
         ),
       ],
     );
@@ -1661,39 +1739,12 @@ class _MainAppState extends State<MainApp> {
     ListeningFocus option,
     String label,
     IconData icon,
-  ) {
-    final colors = Theme.of(context).colorScheme;
-    final selected = current == option;
-    return Semantics(
-      selected: selected,
-      button: true,
-      child: InkWell(
-        onTap: () => context.read<ThemeProvider>().setListeningFocus(option),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: selected ? colors.primary : Colors.transparent, width: 2)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 17, color: selected ? colors.primary : colors.onSurfaceVariant),
-              const SizedBox(width: 7),
-              Text(
-                label,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: selected ? colors.onSurface : colors.onSurfaceVariant,
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  ) => ListeningFocusTab(
+    label: label,
+    icon: icon,
+    selected: current == option,
+    onTap: () => context.read<ThemeProvider>().setListeningFocus(option),
+  );
 
   Widget _buildRootDownloadQueueToggle({bool compact = false}) => AnimatedBuilder(
     animation: DownloadQueueController.instance,
@@ -1701,7 +1752,7 @@ class _MainAppState extends State<MainApp> {
       final queue = DownloadQueueController.instance;
       return IconButton(
         key: const Key('root-download-queue-toggle'),
-        tooltip: queue.queueMode ? 'Disable download queue' : 'Enable download queue',
+        tooltip: queue.queueMode ? context.tr("Disable download queue") : context.tr("Enable download queue"),
         onPressed: () => queue.setQueueMode(!queue.queueMode),
         icon: Badge(
           isLabelVisible: queue.pendingCount > 0,
@@ -1756,7 +1807,7 @@ class _MainAppState extends State<MainApp> {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'Loading library...',
+                  nestedContext.tr("Loading library..."),
                   style: TextStyle(color: const Color(0xFF64748B), fontSize: 13, letterSpacing: 0.3),
                 ),
               ],
@@ -1878,7 +1929,7 @@ class _MainAppState extends State<MainApp> {
                   ),
                   if (!_streamControlsExpanded) ...[
                     const SizedBox(width: 4),
-                    Text('Show player', style: TextStyle(color: colors.onSurfaceVariant)),
+                    Text(context.tr("Show player"), style: TextStyle(color: colors.onSurfaceVariant)),
                   ],
                 ],
               ),
@@ -1934,7 +1985,9 @@ class _MainAppState extends State<MainApp> {
     final windowsNative = Platform.isWindows && useWindowsNativeControls(context);
     final trackCount = playlist.length;
     return Container(
-      padding: windowsNative ? const EdgeInsets.fromLTRB(14, 5, 8, 5) : const EdgeInsets.fromLTRB(16, 4, 8, 8),
+      padding: windowsNative
+          ? const EdgeInsetsDirectional.fromSTEB(14, 5, 8, 5)
+          : const EdgeInsetsDirectional.fromSTEB(16, 4, 8, 8),
       decoration: windowsNative
           ? BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
@@ -1948,7 +2001,7 @@ class _MainAppState extends State<MainApp> {
             children: [
               Expanded(
                 child: Text(
-                  '${playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber'} - ${trackCount == 0 ? 'No tracks' : '$trackCount ${trackCount == 1 ? 'track' : 'tracks'}'}',
+                  '${FileService.isFavoritesPlaylist(activePlaylistNumber) ? context.tr('Favorites') : playlistNames[activePlaylistNumber] ?? context.tr('Playlist {0}', [activePlaylistNumber])} - ${trackCount == 0 ? context.tr('No tracks') : context.tr('{0} tracks', [trackCount])}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -1969,11 +2022,11 @@ class _MainAppState extends State<MainApp> {
                 key: const Key('music-recognition-button'),
                 onPressed: () => _identifySong(context),
                 icon: const Icon(Icons.graphic_eq_rounded),
-                tooltip: 'Shazam / Identify a song',
+                tooltip: context.tr("Shazam / Identify a song"),
               ),
               if (Platform.isAndroid)
                 PopupMenuButton<bool>(
-                  tooltip: 'Search',
+                  tooltip: context.tr("Search"),
                   icon: const Icon(Icons.search_rounded),
                   onSelected: (inPlaylist) {
                     if (inPlaylist) {
@@ -1986,11 +2039,14 @@ class _MainAppState extends State<MainApp> {
                     PopupMenuItem(
                       value: true,
                       enabled: playlist.isNotEmpty,
-                      child: const _ToolbarMenuLabel(icon: Icons.queue_music_rounded, label: 'Search this playlist'),
+                      child: _ToolbarMenuLabel(
+                        icon: Icons.queue_music_rounded,
+                        label: context.tr("Search this playlist"),
+                      ),
                     ),
-                    const PopupMenuItem(
+                    PopupMenuItem(
                       value: false,
-                      child: _ToolbarMenuLabel(icon: Icons.travel_explore_rounded, label: 'Search YouTube'),
+                      child: _ToolbarMenuLabel(icon: Icons.travel_explore_rounded, label: context.tr("Search YouTube")),
                     ),
                   ],
                 )
@@ -1998,7 +2054,7 @@ class _MainAppState extends State<MainApp> {
                 IconButton(
                   onPressed: () => _openSearch(context),
                   icon: const Icon(Icons.search_rounded),
-                  tooltip: 'Search YouTube',
+                  tooltip: context.tr("Search YouTube"),
                 ),
               if (!compact && !Platform.isAndroid) ..._wideLibraryActions(context),
               if (compact || Platform.isAndroid) _buildCompactActionsMenu(context),
@@ -2014,7 +2070,9 @@ class _MainAppState extends State<MainApp> {
     final allSelected = _selectedTrackIndices.length == playlist.length;
     return Container(
       key: const Key('track-selection-toolbar'),
-      padding: windowsNative ? const EdgeInsets.fromLTRB(8, 5, 8, 5) : const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      padding: windowsNative
+          ? const EdgeInsetsDirectional.fromSTEB(8, 5, 8, 5)
+          : const EdgeInsetsDirectional.fromSTEB(8, 4, 8, 8),
       decoration: windowsNative
           ? BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
@@ -2029,11 +2087,11 @@ class _MainAppState extends State<MainApp> {
               IconButton(
                 onPressed: _clearTrackSelection,
                 icon: const Icon(Icons.close_rounded),
-                tooltip: 'Cancel selection',
+                tooltip: context.tr("Cancel selection"),
               ),
               Expanded(
                 child: Text(
-                  '${_selectedTrackIndices.length} selected',
+                  context.tr("{0} selected", [_selectedTrackIndices.length]),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
@@ -2042,7 +2100,7 @@ class _MainAppState extends State<MainApp> {
               IconButton(
                 onPressed: allSelected ? _clearTrackSelection : _selectAllTracks,
                 icon: Icon(allSelected ? Icons.deselect_rounded : Icons.select_all_rounded),
-                tooltip: allSelected ? 'Select none' : 'Select all',
+                tooltip: allSelected ? context.tr("Select none") : context.tr("Select all"),
               ),
               FavoriteTracksButton(
                 key: const Key('favorite-selected-tracks'),
@@ -2054,48 +2112,54 @@ class _MainAppState extends State<MainApp> {
                 IconButton(
                   onPressed: playlistNumbers.length > 1 ? () => _copyOrMoveSelected(move: false) : null,
                   icon: const Icon(Icons.copy_all_rounded),
-                  tooltip: 'Copy to playlist',
+                  tooltip: context.tr("Copy to playlist"),
                 ),
                 IconButton(
                   onPressed: playlistNumbers.length > 1 ? () => _copyOrMoveSelected(move: true) : null,
                   icon: const Icon(Icons.drive_file_move_rounded),
-                  tooltip: 'Move to playlist',
+                  tooltip: context.tr("Move to playlist"),
                 ),
                 IconButton(
                   onPressed: _removeSelectedFromPlaylist,
                   icon: const Icon(Icons.playlist_remove_rounded),
-                  tooltip: 'Remove from playlist',
+                  tooltip: context.tr("Remove from playlist"),
                 ),
                 IconButton(
                   onPressed: _deleteSelectedTracks,
                   icon: Icon(Icons.delete_forever_rounded, color: Theme.of(context).colorScheme.error),
-                  tooltip: 'Delete everywhere',
+                  tooltip: context.tr("Delete everywhere"),
                 ),
               ] else
                 PopupMenuButton<_SelectionAction>(
-                  tooltip: 'Selected track actions',
+                  tooltip: context.tr("Selected track actions"),
                   icon: const Icon(Icons.more_vert_rounded),
                   onSelected: _handleSelectionAction,
                   itemBuilder: (_) => [
                     PopupMenuItem(
                       value: _SelectionAction.copy,
                       enabled: playlistNumbers.length > 1,
-                      child: const _ToolbarMenuLabel(icon: Icons.copy_all_rounded, label: 'Copy to playlist'),
+                      child: _ToolbarMenuLabel(icon: Icons.copy_all_rounded, label: context.tr("Copy to playlist")),
                     ),
                     PopupMenuItem(
                       value: _SelectionAction.move,
                       enabled: playlistNumbers.length > 1,
-                      child: const _ToolbarMenuLabel(icon: Icons.drive_file_move_rounded, label: 'Move to playlist'),
+                      child: _ToolbarMenuLabel(
+                        icon: Icons.drive_file_move_rounded,
+                        label: context.tr("Move to playlist"),
+                      ),
                     ),
-                    const PopupMenuItem(
+                    PopupMenuItem(
                       value: _SelectionAction.remove,
-                      child: _ToolbarMenuLabel(icon: Icons.playlist_remove_rounded, label: 'Remove from playlist'),
+                      child: _ToolbarMenuLabel(
+                        icon: Icons.playlist_remove_rounded,
+                        label: context.tr("Remove from playlist"),
+                      ),
                     ),
                     PopupMenuItem(
                       value: _SelectionAction.delete,
                       child: _ToolbarMenuLabel(
                         icon: Icons.delete_forever_rounded,
-                        label: 'Delete everywhere',
+                        label: context.tr("Delete everywhere"),
                         color: Theme.of(context).colorScheme.error,
                       ),
                     ),
@@ -2125,22 +2189,22 @@ class _MainAppState extends State<MainApp> {
     IconButton(
       onPressed: () => setState(() => _artworkRevision++),
       icon: const Icon(Icons.refresh_rounded, size: 20),
-      tooltip: 'Refresh track covers',
+      tooltip: context.tr("Refresh track covers"),
     ),
     IconButton(
       onPressed: () => _transferCurrentPlaylist(context),
       icon: const Icon(Icons.qr_code_2_rounded, size: 21),
-      tooltip: 'Transfer current playlist',
+      tooltip: context.tr("Transfer current playlist"),
     ),
     IconButton(
       onPressed: () => _importTransferredPlaylist(context),
       icon: const Icon(Icons.qr_code_scanner_rounded, size: 21),
-      tooltip: 'Import playlist from another device',
+      tooltip: context.tr("Import playlist from another device"),
     ),
     IconButton(
       onPressed: () => _importExternalPlaylist(context),
       icon: const Icon(Icons.playlist_add_rounded, size: 22),
-      tooltip: 'Cross-website playlist import',
+      tooltip: context.tr("Cross-website playlist import"),
     ),
   ];
 
@@ -2148,41 +2212,43 @@ class _MainAppState extends State<MainApp> {
     IconButton(
       onPressed: () => _importLocalTracks(context),
       icon: const Icon(Icons.add_rounded),
-      tooltip: 'Import local tracks',
+      tooltip: context.tr("Import local tracks"),
     ),
   ];
 
   Widget _buildCompactActionsMenu(BuildContext context) => PopupMenuButton<_ToolbarAction>(
-    tooltip: 'More playlist actions',
+    tooltip: context.tr("More playlist actions"),
     icon: const Icon(Icons.more_vert_rounded),
     onSelected: (action) => _handleToolbarAction(context, action),
     itemBuilder: (_) => [
-      const PopupMenuItem(
+      PopupMenuItem(
         value: _ToolbarAction.refresh,
-        child: _ToolbarMenuLabel(icon: Icons.refresh_rounded, label: 'Refresh track covers'),
+        child: _ToolbarMenuLabel(icon: Icons.refresh_rounded, label: context.tr("Refresh track covers")),
       ),
-      const PopupMenuItem(
+      PopupMenuItem(
         value: _ToolbarAction.transfer,
-        child: _ToolbarMenuLabel(icon: Icons.qr_code_2_rounded, label: 'Transfer current playlist'),
+        child: _ToolbarMenuLabel(icon: Icons.qr_code_2_rounded, label: context.tr("Transfer current playlist")),
       ),
-      const PopupMenuItem(
+      PopupMenuItem(
         value: _ToolbarAction.importTransfer,
-        child: _ToolbarMenuLabel(icon: Icons.qr_code_scanner_rounded, label: 'Import playlist QR'),
+        child: _ToolbarMenuLabel(icon: Icons.qr_code_scanner_rounded, label: context.tr("Import playlist QR")),
       ),
-      const PopupMenuItem(
+      PopupMenuItem(
         value: _ToolbarAction.importExternal,
-        child: _ToolbarMenuLabel(icon: Icons.playlist_add_rounded, label: 'Cross-website playlist import'),
+        child: _ToolbarMenuLabel(icon: Icons.playlist_add_rounded, label: context.tr("Cross-website playlist import")),
       ),
-      const PopupMenuItem(
+      PopupMenuItem(
         value: _ToolbarAction.importLocal,
-        child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: 'Import local tracks'),
+        child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: context.tr("Import local tracks")),
       ),
       if (Platform.isAndroid)
         PopupMenuItem(
           value: _ToolbarAction.sync,
           child: _ToolbarMenuLabel(
             icon: SyncSessionService.instance.active ? Icons.spatial_audio_rounded : Icons.spatial_audio_off_rounded,
-            label: SyncSessionService.instance.active ? 'Resonance Sync · Active' : 'Resonance Sync',
+            label: SyncSessionService.instance.active
+                ? context.tr("Resonance Sync · Active")
+                : context.tr("Resonance Sync"),
             color: SyncSessionService.instance.active ? Theme.of(context).colorScheme.primary : null,
           ),
         ),
@@ -2354,7 +2420,7 @@ class _MainAppState extends State<MainApp> {
     final favorites = context.watch<FavoritesRepository?>();
     final allFavorited = favorites?.allFavorite(playlist) ?? false;
     return PopupMenuButton<_PlaylistMenuAction>(
-      tooltip: 'Switch playlist',
+      tooltip: context.tr("Switch playlist"),
       icon: const Icon(Icons.queue_music_rounded),
       onSelected: (action) {
         switch (action.type) {
@@ -2396,7 +2462,9 @@ class _MainAppState extends State<MainApp> {
                   const SizedBox(width: 8),
                   Flexible(
                     child: Text(
-                      playlistNames[number] ?? 'Playlist $number',
+                      FileService.isFavoritesPlaylist(number)
+                          ? context.tr("Favorites")
+                          : playlistNames[number] ?? context.tr("Playlist {0}", [number]),
                       overflow: TextOverflow.ellipsis,
                       style: FileService.isFavoritesPlaylist(number)
                           ? const TextStyle(color: FavoritesRepository.gold)
@@ -2411,31 +2479,31 @@ class _MainAppState extends State<MainApp> {
         PopupMenuItem(
           enabled: playlist.isNotEmpty,
           value: const _PlaylistMenuAction(_PlaylistActionType.sort),
-          child: const _ToolbarMenuLabel(icon: Icons.sort_rounded, label: 'Sort tracks'),
+          child: _ToolbarMenuLabel(icon: Icons.sort_rounded, label: context.tr("Sort tracks")),
         ),
         PopupMenuItem(
           enabled: playlist.isNotEmpty,
           value: const _PlaylistMenuAction(_PlaylistActionType.favoriteAll),
           child: _ToolbarMenuLabel(
             icon: allFavorited ? Icons.star_rounded : Icons.star_outline_rounded,
-            label: allFavorited ? 'Unfavorite all tracks' : 'Favorite all tracks',
+            label: allFavorited ? context.tr("Unfavorite all tracks") : context.tr("Favorite all tracks"),
             color: FavoritesRepository.gold,
           ),
         ),
-        const PopupMenuItem(
+        PopupMenuItem(
           value: _PlaylistMenuAction(_PlaylistActionType.create),
-          child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: 'New playlist'),
+          child: _ToolbarMenuLabel(icon: Icons.add_rounded, label: context.tr("New playlist")),
         ),
         if (!FileService.isFavoritesPlaylist(activePlaylistNumber))
-          const PopupMenuItem(
+          PopupMenuItem(
             value: _PlaylistMenuAction(_PlaylistActionType.rename),
-            child: _ToolbarMenuLabel(icon: Icons.edit_rounded, label: 'Rename current'),
+            child: _ToolbarMenuLabel(icon: Icons.edit_rounded, label: context.tr("Rename current")),
           ),
         if (!FileService.isFavoritesPlaylist(activePlaylistNumber))
           PopupMenuItem(
             value: const _PlaylistMenuAction(_PlaylistActionType.delete),
             enabled: playlistNumbers.length > 2,
-            child: const _ToolbarMenuLabel(icon: Icons.delete_outline_rounded, label: 'Delete current'),
+            child: _ToolbarMenuLabel(icon: Icons.delete_outline_rounded, label: context.tr("Delete current")),
           ),
       ],
     );
@@ -2451,7 +2519,7 @@ class _MainAppState extends State<MainApp> {
       if (mounted && promptContext != null && promptContext.mounted) {
         ScaffoldMessenger.maybeOf(
           promptContext,
-        )?.showSnackBar(SnackBar(content: Text('Could not sort tracks: $error')));
+        )?.showSnackBar(SnackBar(content: Text(context.tr("Could not sort tracks: {0}", [error]))));
       }
     }
   }
@@ -2474,12 +2542,18 @@ class _MainAppState extends State<MainApp> {
       }
       if (mounted && promptContext != null && promptContext.mounted) {
         ScaffoldMessenger.of(promptContext).showSnackBar(
-          SnackBar(content: Text(favorite ? 'Tracks added to Favorites.' : 'Tracks removed from Favorites.')),
+          SnackBar(
+            content: Text(
+              favorite ? context.tr("Tracks added to Favorites.") : context.tr("Tracks removed from Favorites."),
+            ),
+          ),
         );
       }
     } catch (error) {
       if (mounted && promptContext != null && promptContext.mounted) {
-        ScaffoldMessenger.of(promptContext).showSnackBar(SnackBar(content: Text('Could not change favorites: $error')));
+        ScaffoldMessenger.of(
+          promptContext,
+        ).showSnackBar(SnackBar(content: Text(context.tr("Could not change favorites: {0}", [error]))));
       }
     }
   }
@@ -2610,13 +2684,13 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
                               opacity: wordReveal,
                               child: Transform.translate(
                                 offset: Offset(0, 10 * (1 - wordReveal)),
-                                child: const Text(
-                                  'RESONANCE',
+                                child: Text(
+                                  context.tr("RESONANCE"),
                                   style: TextStyle(
                                     color: Color(0xFFF4F1FA),
                                     fontSize: 15,
                                     fontWeight: FontWeight.w700,
-                                    letterSpacing: 6.2,
+                                    letterSpacing: AppStrings.of(context).locale.languageCode == 'ar' ? 0 : 6.2,
                                     decoration: TextDecoration.none,
                                   ),
                                 ),
@@ -2631,8 +2705,8 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
                     bottom: math.max(22, MediaQuery.paddingOf(context).bottom + 14),
                     child: Opacity(
                       opacity: 0.34 * wordReveal,
-                      child: const Text(
-                        'tap to skip',
+                      child: Text(
+                        context.tr("tap to skip"),
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 10,

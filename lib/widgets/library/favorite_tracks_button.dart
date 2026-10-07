@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/services/favorites_repository.dart';
@@ -16,7 +17,7 @@ class FavoriteTracksButton extends StatelessWidget {
     return IconButton(
       onPressed: tracks.isEmpty ? null : () => onPressed(!remove),
       icon: Icon(remove ? Icons.star_rounded : Icons.star_outline_rounded, color: FavoritesRepository.gold),
-      tooltip: remove ? 'Remove selected from favorites' : 'Add selected to favorites',
+      tooltip: remove ? context.tr("Remove selected from favorites") : context.tr("Add selected to favorites"),
     );
   }
 }

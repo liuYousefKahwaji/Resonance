@@ -1,3 +1,4 @@
+import 'package:resonance/l10n/app_strings.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -65,9 +66,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     children: [
                       Icon(Icons.graphic_eq_rounded, color: theme.colorScheme.primary),
                       const SizedBox(width: 8),
-                      const Text('RESONANCE', style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2)),
+                      Text(context.tr("RESONANCE"), style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2)),
                       const Spacer(),
-                      TextButton(onPressed: _finishing ? null : _finish, child: const Text('Skip tour')),
+                      TextButton(onPressed: _finishing ? null : _finish, child: Text(context.tr("Skip tour"))),
                     ],
                   ),
                   const SizedBox(height: 22),
@@ -116,11 +117,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               ),
                               const SizedBox(height: 28),
                               Text(
-                                _title,
+                                context.tr(_title),
                                 style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800),
                               ),
                               const SizedBox(height: 10),
-                              Text(_description, style: theme.textTheme.bodyLarge?.copyWith(height: 1.45)),
+                              Text(context.tr(_description), style: theme.textTheme.bodyLarge?.copyWith(height: 1.45)),
                               const SizedBox(height: 28),
                               _content(context),
                             ],
@@ -135,13 +136,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         TextButton.icon(
                           onPressed: () => setState(() => _page--),
                           icon: const Icon(Icons.arrow_back_rounded),
-                          label: const Text('Back'),
+                          label: Text(context.tr("Back")),
                         ),
                       const Spacer(),
                       FilledButton.icon(
                         onPressed: _finishing ? null : _next,
                         icon: Icon(_page == 4 ? Icons.check_rounded : Icons.arrow_forward_rounded),
-                        label: Text(_page == 4 ? 'Start listening' : 'Continue'),
+                        label: Text(_page == 4 ? context.tr("Start listening") : context.tr("Continue")),
                       ),
                     ],
                   ),
@@ -188,16 +189,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           children: [
             _FocusOption(
               icon: Icons.library_music_rounded,
-              title: 'Library first',
-              description: 'Your files and playlists are ready on launch.',
+              title: context.tr("Library first"),
+              description: context.tr("Your files and playlists are ready on launch."),
               selected: provider.listeningFocus == ListeningFocus.local,
               onTap: () => provider.setListeningFocus(ListeningFocus.local),
             ),
             const SizedBox(height: 12),
             _FocusOption(
               icon: Icons.explore_rounded,
-              title: 'Discover first',
-              description: 'Open with YouTube search and music suggestions.',
+              title: context.tr("Discover first"),
+              description: context.tr("Open with YouTube search and music suggestions."),
               selected: provider.listeningFocus == ListeningFocus.stream,
               onTap: () => provider.setListeningFocus(ListeningFocus.stream),
             ),
@@ -221,7 +222,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               onPressed: () =>
                   Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const YoutubeAccessScreen())),
               icon: const Icon(Icons.settings_rounded),
-              label: Text(access.isConfigured ? 'Manage YouTube access' : 'Set up YouTube access'),
+              label: Text(
+                access.isConfigured ? context.tr("Manage YouTube access") : context.tr("Set up YouTube access"),
+              ),
             ),
           ],
         );
@@ -230,10 +233,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             DropdownMenu<ResonanceThemeStyle>(
-              label: const Text('Color style'),
+              label: Text(context.tr("Color style")),
               initialSelection: provider.themeStyle,
               dropdownMenuEntries: [
-                for (final style in ResonanceThemeStyle.values) DropdownMenuEntry(value: style, label: style.label),
+                for (final style in ResonanceThemeStyle.values)
+                  DropdownMenuEntry(value: style, label: context.tr(style.label)),
               ],
               onSelected: (style) {
                 if (style != null) provider.setThemeStyle(style);
@@ -242,13 +246,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             const SizedBox(height: 12),
             SwitchListTile.adaptive(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Dark appearance'),
+              title: Text(context.tr("Dark appearance")),
               value: provider.themeMode == ThemeMode.dark,
               onChanged: provider.toggleTheme,
             ),
             SwitchListTile.adaptive(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Use album art colors in the player'),
+              title: Text(context.tr("Use album art colors in the player")),
               value: provider.artworkPlayerColors,
               onChanged: provider.setArtworkPlayerColors,
             ),
@@ -257,7 +261,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       default:
         return Column(
           children: [
-            Text('Try it: tap the square cover below.', style: Theme.of(context).textTheme.labelLarge),
+            Text(context.tr("Try it: tap the square cover below."), style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 10),
             Card(
               clipBehavior: Clip.antiAlias,
@@ -290,12 +294,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             ),
                           ),
                           const SizedBox(width: 14),
-                          const Expanded(
+                          Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Now playing', style: TextStyle(fontWeight: FontWeight.w700)),
-                                Text('Tap the artwork to open the full player'),
+                                Text(context.tr("Now playing"), style: TextStyle(fontWeight: FontWeight.w700)),
+                                Text(context.tr("Tap the artwork to open the full player")),
                               ],
                             ),
                           ),
@@ -304,7 +308,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       if (_demoOpen) ...[
                         const SizedBox(height: 18),
                         const Icon(Icons.keyboard_arrow_down_rounded),
-                        const Text('Full player', style: TextStyle(fontWeight: FontWeight.w800)),
+                        Text(context.tr("Full player"), style: TextStyle(fontWeight: FontWeight.w800)),
                         const SizedBox(height: 12),
                         const Row(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -317,7 +321,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           ],
                         ),
                         const SizedBox(height: 8),
-                        const Text('The queue and lyrics controls live here.'),
+                        Text(context.tr("The queue and lyrics controls live here.")),
                       ],
                     ],
                   ),
@@ -352,7 +356,7 @@ class _TourNote extends StatelessWidget {
         children: [
           Icon(icon, color: Theme.of(context).colorScheme.primary),
           const SizedBox(width: 16),
-          Expanded(child: Text(text)),
+          Expanded(child: Text(context.tr(text))),
         ],
       ),
     ),
@@ -391,7 +395,7 @@ class _FocusOption extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title, style: Theme.of(context).textTheme.titleMedium),
+                    Text(context.trRendered(title), style: Theme.of(context).textTheme.titleMedium),
                     Text(description),
                   ],
                 ),
