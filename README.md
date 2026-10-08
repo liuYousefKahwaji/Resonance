@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-The current source version is **3.4.8**. Packaged builds are available on the [GitHub Releases page](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
+The current source version is **3.5.0** (build **17**), matching `version: 3.5.0+17` in [`pubspec.yaml`](pubspec.yaml). Packaged builds are available on the [GitHub Releases page](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 
@@ -44,6 +44,7 @@ The working tree may contain features intended for the next release. See the rel
 - Apply playback settings globally or per track.
 - Normalize local tracks toward -14 LUFS using cached, peak-safe analysis.
 - Crossfade automatic track changes and resume long tracks from their saved position.
+- Handle Android audio interruptions so music resumes only when appropriate, and pause when headphones disconnect.
 - Select a Windows audio output device; Android continues to use system audio routing.
 - Control playback from Android notifications, widgets, Quick Settings, Windows media keys, taskbar controls, tray controls, hotkeys, and Discord Companion shortcuts.
 - Browse saved playlists and control playback through Android Auto on a connected phone.
@@ -56,7 +57,8 @@ The working tree may contain features intended for the next release. See the rel
 - Display streamed artwork immediately at thumbnail quality, then crossfade to a higher-resolution version when it is ready.
 - Browse authenticated YouTube Music Home shelves such as Quick Picks, Suggestions, and Speed Dial.
 - Browse your saved YouTube Music playlists in **Playlist Library**, above Quick Picks. This shelf loads independently and uses the same playback and import actions as other collections.
-- Open YouTube Music albums and playlists as session queues or import them for streaming or download.
+- Browse songs inside Discover albums and playlists, choose where playback starts, or use **Play** and **Shuffle**. Open collections as session queues or import them for streaming or download.
+- Open an artist/author page by clicking their name in Discover or the streamed player. Browse songs and videos, sort by **Newest**, **Oldest**, or **Popular** where available, and play or shuffle the loaded tracks. Views and likes appear when available.
 - Recover stalled Windows streams by resolving a fresh media URL once.
 - Optionally report genuine Resonance YouTube plays to YouTube Music after three seconds. This is off by default.
 - Browse a two-tab listening History page: recent YouTube Music plays and up to 100 recent local Resonance plays. YouTube rows appear before view and like counts finish loading.
@@ -76,8 +78,9 @@ The working tree may contain features intended for the next release. See the rel
 - Use Resonance Sync on Android to host or join a local-network listening session.
 - Pair the Android Companion with Windows for authenticated LAN playback control.
 
-### Appearance
+### Appearance and language
 
+- Choose **English** or **Arabic** in Settings. Arabic includes translated menus and right-to-left layouts.
 - Choose Obsidian, Quartz, Aurum, and other theme styles independently from light/dark mode.
 - Pick a Custom theme color from ready-made choices or a visual color picker, adjust its shade, and optionally use rounder corners throughout the app.
 - Use artwork-derived player colors, reduced motion, optional tracklist motion blur, and Windows native controls.
@@ -105,7 +108,16 @@ Most public operations work without an account. When YouTube requires verificati
 
 ### Windows
 
-Connect a supported signed-in browser profile or select a Netscape `cookies.txt` file. Resonance reads the chosen source locally for each operation. Cookie values never enter Flutter preferences, UI, logs, or diagnostics.
+Choose **Connect browser session** to try your default browser, or choose another supported browser such as Firefox, Chrome, Edge, or Brave. Sign in to YouTube/YouTube Music in that browser first. You can also select a Netscape `cookies.txt` file.
+
+Resonance first attempts to read the selected browser profile locally. If a Chromium browser protects its session or keeps it locked, the app offers retry guidance or the optional **Resonance YouTube Connector**:
+
+1. Follow the in-app setup prompt to open your browser's extensions page and enable **Developer mode**.
+2. Choose **Load unpacked** and select the connector folder shown by Resonance; the setup dialog can copy its path.
+3. Sign in to YouTube Music, open the connector from the browser's extensions menu, and press **Connect**.
+4. Return to Resonance and test access. Keep the connector enabled to refresh the session automatically.
+
+The connector keeps an encrypted session copy on this PC and supplies temporary cookie files for operations. Your Google password is never saved. Cookie values never enter Flutter preferences, UI, logs, or diagnostics. Disconnecting in Resonance revokes its connector authorization.
 
 ### Android
 
@@ -113,14 +125,27 @@ Use the in-app Firefox guide to export the current YouTube site as `cookies.txt`
 
 Treat exported cookies like a password. Export only the current YouTube site, delete the original file after import, and reconnect when the session expires.
 
+### Troubleshooting access
+
+- **Session rejected or expired:** reconnect the browser or import a fresh YouTube-only cookies file, then test access again.
+- **Windows browser profile locked or protected:** follow the retry prompt; close browser windows if instructed, or use the optional connector for a supported Chromium browser.
+- **Connector access fails:** check that the extension is enabled, sign in to YouTube Music, press **Connect** in the extension, and test again in Resonance.
+- **Connector/helper missing:** extract the complete Windows release ZIP again, keeping its `bin/` directory beside the executable.
+
 ## Download
 
 Download packaged builds from [GitHub Releases](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
 
 - **Windows:** extract the complete ZIP and run `resonance.exe`. Keep `data/`, DLLs, and `bin/` beside the executable.
-- **Android:** install the APK. Android may ask permission because the package is installed outside Google Play.
+- **Android:** Android 7.0+ on an ARM64 device. Install the APK. Android may ask permission because the package is installed outside Google Play.
 
 The app stores playlists and preferences in platform application data. Downloaded audio remains in the location selected by the platform downloader.
+
+## Updates
+
+Resonance checks GitHub Releases for in-app updates. Smaller delta downloads are used when available, with a full-download fallback. Downloads are verified against signed release information, and the update prompt shows download sizes and savings.
+
+Windows can restore the previous version if an update fails to start. Android can prepare updates in the background when enabled; follow progress and continue installation from Settings. Android may still require system approval to install.
 
 ## Quick start
 
@@ -134,18 +159,23 @@ The app stores playlists and preferences in platform application data. Downloade
 
 ### Requirements
 
-- Flutter with Dart compatible with `pubspec.yaml` (currently Dart `^3.9.2`).
+- Flutter with Dart compatible with `pubspec.yaml` (currently Dart `^3.9.2`). The release workflow pins Flutter **3.44.2**.
 - Windows: Visual Studio with **Desktop development with C++** and the Windows SDK.
-- Android: Android SDK, a compatible JDK, and the NDK/Gradle versions resolved by the project.
-- The licensed runtime tools expected under `assets/bin/` for Windows packaging.
+- Android: Android SDK, **JDK 17**, **Python 3.10** available for Chaquopy's build step, and the NDK/Gradle versions resolved by the project. Release APKs target **arm64-v8a**.
+- Windows packaging requires the runtime tools under `assets/bin/`: `yt-dlp.exe`, `ffmpeg.exe`, `deno.exe`, and `resonance-ytmusic-home.exe`. Keep their applicable licenses/notices with distributions.
+- Rebuilding the Windows YouTube Music helper uses **Python 3.13**, PyInstaller, and the helper's Python dependencies. See [`tool/windows_ytmusic_home/build.ps1`](tool/windows_ytmusic_home/build.ps1). The packaged helper is already included in the repository.
 
 ```powershell
 flutter pub get
 flutter analyze
 flutter test
-flutter build apk --release
+flutter build apk --release --target-platform android-arm64
 flutter build windows --release
 ```
+
+Run only the build command for your target platform; Windows builds require Windows. For Android builds, ensure Chaquopy can find Python 3.10, or configure `buildPython` as described in [`android/app/build.gradle.kts`](android/app/build.gradle.kts).
+
+The Android release configuration uses the debug signing key for local builds unless the existing release-keystore environment variables are supplied. Official releases preserve the existing signing key through CI; a differently signed local APK cannot replace an official installation in place.
 
 Android packages pinned Python/yt-dlp dependencies through Chaquopy and includes its required QuickJS runtime. Windows release builds copy yt-dlp, FFmpeg, Deno, and the packaged YouTube Music helper into `bin/`. Do not distribute only `resonance.exe`.
 
@@ -155,22 +185,34 @@ Android packages pinned Python/yt-dlp dependencies through Chaquopy and includes
 lib/main.dart                         App composition and library UI
 lib/core/audio/                       Playback, queues, effects, and recovery
 lib/core/storage/                     Playlist persistence and mutations
+lib/l10n/                             English/Arabic strings and locale definitions
 lib/screens/                          Full-page player, history, settings, import, and Sync UI
 lib/services/                         YouTube, history, metadata, transfer, lyrics, and LAN services
 lib/widgets/                          Library, player, YouTube, and common UI components
 android/app/src/main/kotlin/          Android channels, widgets, services, and cookie boundary
 android/app/src/main/python/          Android yt-dlp/YouTube Music bridge
 windows/runner/                       Windows runner and native media integrations
-tool/windows_ytmusic_home/            Source and build script for the packaged Windows helper
+tool/windows_ytmusic_home/            Windows YouTube Music helper and browser connector backend
+assets/browser_connector/            Optional Chromium browser extension
+release/                             Versioned release notes
+tool/release/                        Release packaging, verification, and publishing
 test/                                 Flutter and host-side regression tests
 ```
 
-Architecture and session notes live under `docs/` in development checkouts.
+Release notes live under [`release/`](release/); the automated build and publishing pipeline is defined in [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
 ## Recent releases
 
 | Release | Highlights |
 | --- | --- |
+| [v3.5.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.5.0) | Artist/author pages, Arabic interface and RTL layouts, default-browser connections, and an optional Windows browser connector. |
+| [v3.4.9](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.9) | Better Android call handling, failed-stream playback fixes, and browsable Discover playlists with Play and Shuffle. |
+| [v3.4.8](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.8) | Permanent Favorites playlist, bulk favoriting, gold indicators, Favorites-first sorting, and YouTube Music Playlist Library. |
+| [v3.4.7](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.7) | Reliable repeated stream seeking and corrected seekbar loading colors. |
+| [v3.4.6](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.6) | Playlist sorting, saved per-song volume adjustments, update sizes/savings, Android update progress, and more reliable Windows restarts. |
+| [v3.4.5](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.5) | Signed update verification, smaller update downloads, Windows rollback, and Android background update preparation. |
+| [v3.4.4](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.4) | Windows restore fixes, better stream switching/recovery, and stable shuffle order when adding songs. |
+| [v3.4.3](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.3) | Android Auto, visual custom-color selection, softer corners, smoother navigation, and Windows volume-drag fixes. |
 | [v3.4.2](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.2) | In-app updates from GitHub Releases and a customizable color theme. |
 | [v3.4.1](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.1) | Faster shared-link details, more dependable stream switching, related-song radio, first-run guide, and Windows playback card. |
 | v3.4.0 | Main-window Discover and listening focus, faster YouTube search and streaming, up to 120 search results loaded as you scroll, more reliable stream switching, Android Discover controls and refresh, and right-to-left lyrics. |
