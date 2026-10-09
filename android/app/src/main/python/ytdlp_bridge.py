@@ -262,6 +262,48 @@ def get_music_related(video_id: str, limit: int = 25) -> str:
     return json.dumps({"tracks": tracks[: max(1, min(int(limit), 50))]}, ensure_ascii=False)
 
 
+def _music_collection(ytmusic, url):
+    # Music and regular YouTube can expose different renditions of one song.
+    # Keep the exact Music catalog IDs and ordered occurrences, never title-search.
+    from urllib.parse import urlparse, parse_qs
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "music.youtube.com":
+        raise RuntimeError("The YouTube Music collection URL is invalid")
+    playlist_id = parse_qs(parsed.query).get("list", [""])[0]
+    browse_id = parsed.path.removeprefix("/browse/")
+    if playlist_id and re.fullmatch(r"[A-Za-z0-9_-]+", playlist_id):
+        collection = ytmusic.get_playlist(playlist_id, limit=1000)
+    elif parsed.path.startswith("/browse/") and re.fullmatch(r"MPRE[A-Za-z0-9_-]+", browse_id):
+        collection = ytmusic.get_album(browse_id)
+    else:
+        raise RuntimeError("The YouTube Music collection ID is invalid")
+    entries = []
+    for item in (collection or {}).get("tracks") or []:
+        if not isinstance(item, dict):
+            continue
+        video_id = str(item.get("videoId") or "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            continue
+        artists = item.get("artists") or (collection or {}).get("artists") or []
+        entries.append({
+            "id": video_id,
+            "title": str(item.get("title") or "Unknown"),
+            "artist": " & ".join(str(a["name"]) for a in artists if isinstance(a, dict) and a.get("name")) or "Unknown",
+            "duration": item.get("duration_seconds"),
+            "thumbnail": _normalize_music_thumbnail(item, video_id),
+        })
+        if len(entries) >= 1000:
+            break
+    return {"title": (collection or {}).get("title") or "YouTube Music", "entries": entries}
+
+
+def get_music_playlist(url, cookie_file=None, language="en") -> str:
+    from ytmusicapi import YTMusic
+    client = (_build_authenticated_ytmusic(cookie_file, language)
+              if cookie_file else YTMusic(language=language))
+    return json.dumps(_music_collection(client, url), ensure_ascii=False)
+
+
 def get_music_library(cookie_file=None, language="en") -> str:
     """Read all saved playlists separately, without delaying the Home feed."""
     ytmusic = _build_authenticated_ytmusic(cookie_file, language)

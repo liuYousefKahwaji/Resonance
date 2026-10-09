@@ -5,6 +5,8 @@ import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart' as signing;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resonance/services/app_update_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 void main() {
   late signing.SimpleKeyPair pair;
@@ -13,6 +15,7 @@ void main() {
   late Map<String, dynamic> manifest;
   final algorithm = signing.Ed25519();
   final zero = '0' * 64;
+  TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() async {
     pair = await algorithm.newKeyPairFromSeed(List.generate(32, (i) => i));
     keys = {'test': base64Encode((await pair.extractPublicKey()).bytes)};
@@ -97,6 +100,64 @@ void main() {
   });
   test('modified metadata fails even when JSON remains valid', () async {
     await expectLater(verify(tamper: true), throwsFormatException);
+  });
+  test('cooldown retains verified availability across restart and rejects altered cache', () async {
+    final bytes = utf8.encode(jsonEncode(manifest));
+    final signature = await algorithm.sign(bytes, keyPair: pair);
+    final signatureBytes = utf8.encode(jsonEncode({'keyId': 'test', 'signature': base64Encode(signature.bytes)}));
+    for (final name in ['resonance-v3.4.6-update.json', 'resonance-v3.4.6-update.sig']) {
+      assets[name] = UpdateAsset(
+        name: name,
+        sha256: zero,
+        size: 100,
+        url: Uri.parse('https://github.com/liuYousefKahwaji/Resonance/releases/download/v3.4.6/$name'),
+      );
+    }
+    PackageInfo.setMockInitialValues(
+      appName: 'Resonance',
+      packageName: 'com.example.resonance',
+      version: '3.4.5',
+      buildNumber: '12',
+      buildSignature: '',
+    );
+    SharedPreferences.setMockInitialValues({
+      'update_last_checked': DateTime.now().millisecondsSinceEpoch,
+      'update_release_json': jsonEncode({
+        'tag_name': 'v3.4.6',
+        'assets': [
+          for (final asset in assets.values)
+            {
+              'name': asset.name,
+              'size': asset.size,
+              'digest': 'sha256:${asset.sha256}',
+              'browser_download_url': '${asset.url}',
+            },
+        ],
+      }),
+      'update_verified_manifest': base64Encode(bytes),
+      'update_verified_signature': base64Encode(signatureBytes),
+    });
+    AppUpdateService.available.value = null;
+    var loads = 0;
+    final service = AppUpdateService(
+      keyLoader: () async {
+        loads++;
+        return keys;
+      },
+    );
+    final first = service.check(), overlapping = service.check();
+    expect((await first)!.version.toString(), '3.4.6');
+    expect(await overlapping, same(await first));
+    expect(loads, 1);
+    expect((await service.check())!.notes, '# New release');
+    expect(loads, 1);
+    AppUpdateService.available.value = null;
+    expect((await service.check())!.version.toString(), '3.4.6');
+    expect(loads, 2);
+    AppUpdateService.available.value = null;
+    await (await SharedPreferences.getInstance()).setString('update_verified_manifest', base64Encode([...bytes, 32]));
+    await expectLater(service.check(), throwsFormatException);
+    AppUpdateService.available.value = null;
   });
   test('unknown signing key fails closed', () async {
     await expectLater(verify(keyId: 'attacker'), throwsFormatException);

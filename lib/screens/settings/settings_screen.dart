@@ -42,6 +42,8 @@ import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 import 'package:resonance/widgets/app_update_prompt.dart';
 import 'package:resonance/services/app_update_service.dart';
+import 'package:resonance/screens/settings/backup_screen.dart';
+import 'package:resonance/screens/settings/listening_statistics_screen.dart';
 
 String _youtubeAccessSubtitle(BuildContext context, YoutubeAccessService service) {
   final status = service.status;
@@ -110,6 +112,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    AppUpdateService.available.addListener(_updateAvailabilityChanged);
     _loadDownloadDirectory();
     _loadSeekStep();
     _loadPlaybackPreferences();
@@ -120,6 +123,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _loadTrayMode();
       _loadDiscordPreference();
     }
+  }
+
+  void _updateAvailabilityChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    AppUpdateService.available.removeListener(_updateAvailabilityChanged);
+    super.dispose();
   }
 
   Future<void> _loadIntroPreference() async {
@@ -143,7 +156,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_checkingUpdate) return;
     setState(() => _checkingUpdate = true);
     try {
-      final update = await AppUpdateService().check(force: true);
+      final update = AppUpdateService.available.value ?? await AppUpdateService().check(force: true);
       if (!mounted) return;
       if (update == null) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.tr("Resonance is up to date."))));
@@ -1147,6 +1160,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SettingsCard(
               children: [
                 _SettingsTile(
+                  icon: Icons.insights_outlined,
+                  title: context.tr('Resonance Wrapped'),
+                  subtitle: context.tr('Listening statistics and your recap'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.push<void>(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ListeningStatisticsScreen()),
+                  ),
+                ),
+                _Divider(),
+                _SettingsTile(
+                  icon: Icons.backup_outlined,
+                  title: context.tr('Backup and restore'),
+                  subtitle: context.tr('Export settings or your complete library'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () async {
+                    await Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const BackupScreen()));
+                    if (!mounted) return;
+                    await _loadPlaybackPreferences();
+                    await _loadIntroPreference();
+                    await _loadSeekStep();
+                    if (_isDesktop) {
+                      await _loadTrayMode();
+                      await _loadDiscordPreference();
+                    }
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _SettingsCard(
+              children: [
+                _SettingsTile(
                   icon: Icons.auto_stories_rounded,
                   title: context.tr("Getting started tour"),
                   subtitle: context.tr("Review the controls and setup choices"),
@@ -1174,8 +1220,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.system_update_rounded,
-                  title: context.tr("Check for updates"),
-                  subtitle: context.tr("Compare with the latest GitHub release"),
+                  title: context.tr(
+                    AppUpdateService.available.value == null ? 'Check for updates' : 'Update available',
+                  ),
+                  subtitle: AppUpdateService.available.value == null
+                      ? context.tr('Compare with the latest GitHub release')
+                      : context.tr('Version {0} is available', [AppUpdateService.available.value!.version]),
                   trailing: _checkingUpdate
                       ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.chevron_right_rounded),
@@ -1188,7 +1238,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.downloading_rounded,
                     title: context.tr("Background updates"),
                     subtitle: context.tr(
-                      "Download newer GitHub releases automatically. Android may ask you to approve installation.",
+                      "Prepare updates discovered while Resonance is open. Android may ask you to approve installation.",
                     ),
                     trailing: Switch(value: _androidAutoUpdates, onChanged: _setAndroidAutoUpdates),
                   ),

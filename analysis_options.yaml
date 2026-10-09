@@ -1,5 +1,7 @@
 include: package:flutter_lints/flutter.yaml
 analyzer:
+  exclude:
+    - build/**
   errors:
     use_build_context_synchronously: ignore
     deprecated_member_use: ignore

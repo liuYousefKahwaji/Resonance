@@ -12,7 +12,31 @@ import 'package:resonance/widgets/android_update_status.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 
+Future<void>? _activeUpdateFlow;
+UpdateDownloadController? _activeDownload;
+bool get isUpdatePromptActive => _activeUpdateFlow != null;
+
 Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) async {
+  final previous = _activeUpdateFlow;
+  if (previous != null) {
+    if (_activeDownload?.isCancelled != true) return;
+    await previous;
+    if (!context.mounted) return;
+    if (_activeUpdateFlow != null && !identical(_activeUpdateFlow, previous)) return;
+  }
+  final task = _showAppUpdatePrompt(context, update);
+  _activeUpdateFlow = task;
+  try {
+    await task;
+  } finally {
+    if (identical(_activeUpdateFlow, task)) {
+      _activeUpdateFlow = null;
+      _activeDownload = null;
+    }
+  }
+}
+
+Future<void> _showAppUpdatePrompt(BuildContext context, AvailableUpdate update) async {
   final accept = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
@@ -89,6 +113,7 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
   );
   if (accept != true || !context.mounted) return;
   final controller = UpdateDownloadController();
+  _activeDownload = controller;
   final progress = Platform.isWindows ? ValueNotifier(UpdateDownloadProgress(0, update.asset.size)) : null;
   var progressShown = false;
   if (Platform.isWindows) {

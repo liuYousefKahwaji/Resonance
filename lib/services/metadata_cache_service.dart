@@ -112,6 +112,17 @@ class MetadataCacheService {
     });
   }
 
+  static Future<void> flush() async {
+    _persistDebounce?.cancel(); _persistDebounce = null;
+    await _loadingFuture; await _pendingPersist; await _persist();
+  }
+
+  static Future<void> reloadAfterRestore() async {
+    _persistDebounce?.cancel(); _persistDebounce = null;
+    await _pendingPersist; _cache = null; _loadingFuture = null;
+    await _ensureLoaded();
+  }
+
   static bool _isStreamUrl(String path) => path.startsWith('http://') || path.startsWith('https://');
 
   /// Returns cached metadata for [filePath] if present and still valid

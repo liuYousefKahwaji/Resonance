@@ -66,35 +66,67 @@ class AvailableUpdate {
 }
 
 class AppUpdateService {
+  AppUpdateService({Future<Map<String, String>> Function()? keyLoader})
+    : _keyLoader = keyLoader ?? SignedUpdateManifest.loadKeys;
+  final Future<Map<String, String>> Function() _keyLoader;
+  static final available = ValueNotifier<AvailableUpdate?>(null);
+  static Future<AvailableUpdate?>? _checkInFlight;
+  static const checkInterval = Duration(hours: 6);
   static final androidUpdateRevision = ValueNotifier<int>(0);
   static const _androidChannel = MethodChannel('resonance/app_update');
 
-  Future<AvailableUpdate?> check({bool force = false}) async {
+  Future<AvailableUpdate?> check({bool force = false}) {
+    final pending = _checkInFlight;
+    if (pending != null) return pending;
+    final task = _check(force: force).then((value) {
+      available.value = value;
+      return value;
+    });
+    _checkInFlight = task;
+    return task.whenComplete(() {
+      if (identical(_checkInFlight, task)) _checkInFlight = null;
+    });
+  }
+
+  Future<AvailableUpdate?> _check({bool force = false}) async {
     if (!Platform.isAndroid && !Platform.isWindows) return null;
     final package = await PackageInfo.fromPlatform();
     final installed = AppVersion.parse(package.version);
     if (installed == null) return null;
     final prefs = await SharedPreferences.getInstance();
     final checked = prefs.getInt('update_last_checked') ?? 0;
-    if (!force &&
-        !updateTestMode &&
-        DateTime.now().millisecondsSinceEpoch - checked < const Duration(hours: 6).inMilliseconds) {
-      return null;
+    final coolingDown =
+        !force && !updateTestMode && DateTime.now().millisecondsSinceEpoch - checked < checkInterval.inMilliseconds;
+    if (coolingDown && available.value != null && available.value!.version.compareTo(installed) > 0) {
+      return available.value;
     }
+    final useCached =
+        coolingDown &&
+        prefs.getString('update_release_json') != null &&
+        prefs.getString('update_verified_manifest') != null &&
+        prefs.getString('update_verified_signature') != null;
+    if (coolingDown && !useCached) return null;
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
-      final request = await client.getUrl(Uri.parse(updateTestMode ? updateTestFeed : latestResonanceReleaseUrl));
-      request.headers.set(HttpHeaders.userAgentHeader, 'Resonance/${package.version}');
-      request.headers.set(HttpHeaders.acceptHeader, 'application/vnd.github+json');
-      final etag = prefs.getString('update_release_etag');
-      if (!updateTestMode && etag != null) request.headers.set(HttpHeaders.ifNoneMatchHeader, etag);
-      final response = await request.close().timeout(const Duration(seconds: 12));
-      if (response.statusCode != HttpStatus.ok && response.statusCode != HttpStatus.notModified) {
-        throw HttpException('Update server returned ${response.statusCode}');
+      String body;
+      String? newEtag;
+      if (useCached) {
+        body = prefs.getString('update_release_json')!;
+      } else {
+        final request = await client.getUrl(Uri.parse(updateTestMode ? updateTestFeed : latestResonanceReleaseUrl));
+        request.headers.set(HttpHeaders.userAgentHeader, 'Resonance/${package.version}');
+        request.headers.set(HttpHeaders.acceptHeader, 'application/vnd.github+json');
+        final etag = prefs.getString('update_release_etag');
+        if (!updateTestMode && etag != null) request.headers.set(HttpHeaders.ifNoneMatchHeader, etag);
+        final response = await request.close().timeout(const Duration(seconds: 12));
+        if (response.statusCode != HttpStatus.ok && response.statusCode != HttpStatus.notModified) {
+          throw HttpException('Update server returned ${response.statusCode}');
+        }
+        body = response.statusCode == HttpStatus.notModified
+            ? prefs.getString('update_release_json') ?? ''
+            : utf8.decode(await _readBounded(response, 512 * 1024));
+        newEtag = response.headers.value(HttpHeaders.etagHeader);
       }
-      final body = response.statusCode == HttpStatus.notModified
-          ? prefs.getString('update_release_json') ?? ''
-          : utf8.decode(await _readBounded(response, 512 * 1024));
       final release = jsonDecode(body);
       if (release is! Map<String, dynamic>) throw const FormatException('Invalid release data');
       final latest = AppVersion.parse('${release['tag_name'] ?? ''}');
@@ -118,10 +150,16 @@ class AppUpdateService {
       if (manifestAsset == null || signatureAsset == null) {
         throw const FormatException('This release is missing signed update metadata');
       }
+      final manifestBytes = useCached
+          ? base64Decode(prefs.getString('update_verified_manifest')!)
+          : await _fetchMetadata(client, manifestAsset, 512 * 1024);
+      final signatureBytes = useCached
+          ? base64Decode(prefs.getString('update_verified_signature')!)
+          : await _fetchMetadata(client, signatureAsset, 1024);
       final manifest = await SignedUpdateManifest.verify(
-        bytes: await _fetchMetadata(client, manifestAsset, 512 * 1024),
-        signatureBytes: await _fetchMetadata(client, signatureAsset, 1024),
-        trustedKeys: await SignedUpdateManifest.loadKeys(),
+        bytes: manifestBytes,
+        signatureBytes: signatureBytes,
+        trustedKeys: await _keyLoader(),
         assets: assets,
         android: Platform.isAndroid,
       );
@@ -156,9 +194,10 @@ class AppUpdateService {
         }
         break;
       }
-      if (!updateTestMode) {
+      if (!updateTestMode && !useCached) {
         await prefs.setString('update_release_json', body);
-        final newEtag = response.headers.value(HttpHeaders.etagHeader);
+        await prefs.setString('update_verified_manifest', base64Encode(manifestBytes));
+        await prefs.setString('update_verified_signature', base64Encode(signatureBytes));
         if (newEtag != null) await prefs.setString('update_release_etag', newEtag);
         await prefs.setInt('update_last_checked', DateTime.now().millisecondsSinceEpoch);
       }

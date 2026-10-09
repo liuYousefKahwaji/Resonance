@@ -118,6 +118,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   String? _playlistLibraryError;
   int _refreshGeneration = 0;
   int _searchGeneration = 0;
+  final FocusNode _searchFocus = FocusNode();
   int _suggestionGeneration = 0;
   int _homeGeneration = 0;
   int _statsGeneration = 0;
@@ -179,6 +180,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     _homeGeneration++;
     _statsGeneration++;
     _controller.dispose();
+    _searchFocus.dispose();
     _resultsScrollController.dispose();
     super.dispose();
   }
@@ -972,6 +974,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
                   child: TextField(
                     key: const Key('youtube-search-field'),
                     controller: _controller,
+                    focusNode: _searchFocus,
                     autofocus: !widget.embedded,
                     textInputAction: TextInputAction.search,
                     onSubmitted: (_) => _submit(),
@@ -980,9 +983,29 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
                       hintText: context.tr("Search YouTube or paste a link"),
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: IconButton(
-                        onPressed: _loading ? null : _submit,
-                        tooltip: context.tr("Search"),
-                        icon: const Icon(Icons.arrow_forward_rounded),
+                        key: const Key('youtube-search-action'),
+                        onPressed: _controller.text.isNotEmpty
+                            ? () {
+                                _controller.clear();
+                                _searchFocus.requestFocus();
+                              }
+                            : _loading
+                            ? null
+                            : _submit,
+                        tooltip: context.tr(_controller.text.isNotEmpty ? 'Clear search' : 'Search'),
+                        icon: AnimatedSwitcher(
+                          duration: MediaQuery.disableAnimationsOf(context)
+                              ? Duration.zero
+                              : const Duration(milliseconds: 160),
+                          transitionBuilder: (child, animation) => FadeTransition(
+                            opacity: animation,
+                            child: ScaleTransition(scale: animation, child: child),
+                          ),
+                          child: Icon(
+                            _controller.text.isNotEmpty ? Icons.close_rounded : Icons.arrow_forward_rounded,
+                            key: ValueKey(_controller.text.isNotEmpty),
+                          ),
+                        ),
                       ),
                     ),
                   ),

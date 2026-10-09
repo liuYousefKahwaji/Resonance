@@ -11,6 +11,38 @@ import 'package:resonance/services/suggested_music_service.dart';
 import 'package:resonance/services/download/download_queue_controller.dart';
 
 void main() {
+  testWidgets('clear search retains focus and rejects a late preview', (tester) async {
+    final pending = Completer<List<YoutubeTrack>>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: YoutubeSearchScreen(
+          playlistNumber: 1,
+          playlistName: 'Library',
+          previewDelay: const Duration(milliseconds: 100),
+          searchLoader: (query, limit) => pending.future,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final field = find.byType(TextField).first;
+    final action = find.byKey(const Key('youtube-search-action'));
+    final original = tester.getRect(action);
+    await tester.enterText(field, 'pending');
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byTooltip('Clear search'), findsOneWidget);
+    expect(tester.getRect(action), original);
+    await tester.tap(action);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+    expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+    pending.complete([
+      const YoutubeTrack(title: 'Obsolete song', artist: 'Artist', url: 'https://www.youtube.com/watch?v=abcdefghijk'),
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.text('Obsolete song'), findsNothing);
+    expect(find.byTooltip('Search'), findsOneWidget);
+    expect(tester.getRect(action), original);
+  });
   testWidgets('playlist library appears above Quick picks without blocking Home', (tester) async {
     await tester.binding.setSurfaceSize(const Size(900, 1200));
     addTearDown(() => tester.binding.setSurfaceSize(null));

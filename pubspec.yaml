@@ -1,12 +1,13 @@
 name: resonance
 description: "A local music player with youtube support"
 publish_to: 'none'
-version: 3.5.0+17
+version: 3.6.0+18
 
 environment:
   sdk: ^3.9.2
 
 dependencies:
+  archive: ^4.0.9
   flutter:
     sdk: flutter
   flutter_localizations:

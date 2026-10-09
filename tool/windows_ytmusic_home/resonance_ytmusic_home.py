@@ -242,11 +242,47 @@ def _playlist_library(ytmusic):
     return {"shelves": [{"title": "Playlist Library", "tracks": [], "items": items}]}
 
 
+def _music_collection(ytmusic, url):
+    # Music and regular YouTube can expose different renditions of one song.
+    # Keep the exact Music catalog IDs and ordered occurrences, never title-search.
+    from urllib.parse import urlparse, parse_qs
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "music.youtube.com":
+        raise RuntimeError("The YouTube Music collection URL is invalid")
+    playlist_id = parse_qs(parsed.query).get("list", [""])[0]
+    browse_id = parsed.path.removeprefix("/browse/")
+    if playlist_id and re.fullmatch(r"[A-Za-z0-9_-]+", playlist_id):
+        collection = ytmusic.get_playlist(playlist_id, limit=1000)
+    elif parsed.path.startswith("/browse/") and re.fullmatch(r"MPRE[A-Za-z0-9_-]+", browse_id):
+        collection = ytmusic.get_album(browse_id)
+    else:
+        raise RuntimeError("The YouTube Music collection ID is invalid")
+    entries = []
+    for item in (collection or {}).get("tracks") or []:
+        if not isinstance(item, dict):
+            continue
+        video_id = str(item.get("videoId") or "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            continue
+        artists = item.get("artists") or (collection or {}).get("artists") or []
+        entries.append({
+            "id": video_id,
+            "title": str(item.get("title") or "Unknown"),
+            "artist": " & ".join(str(a["name"]) for a in artists if isinstance(a, dict) and a.get("name")) or "Unknown",
+            "duration": item.get("duration_seconds"),
+            "thumbnail": _thumbnail(item, video_id),
+        })
+        if len(entries) >= 1000:
+            break
+    return {"title": (collection or {}).get("title") or "YouTube Music", "entries": entries}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser")
     parser.add_argument("--cookies-file")
-    parser.add_argument("--action", choices=("home", "library", "history", "add-history", "search", "related"), default="home")
+    parser.add_argument("--action", choices=("home", "library", "playlist", "history", "add-history", "search", "related"), default="home")
+    parser.add_argument("--playlist-url")
     parser.add_argument("--video-id")
     parser.add_argument("--language", choices=("en", "ar"), default="en")
     parser.add_argument("--query")
@@ -274,6 +310,11 @@ def main():
                     seen.add(candidate_id)
                     normalized.append(track)
         print(json.dumps({"tracks": normalized[: max(1, min(args.limit, 50))]}, ensure_ascii=False))
+        return
+    if args.action == "playlist":
+        client = (_build_authenticated_ytmusic(args.browser, args.cookies_file, args.language)
+                  if args.browser or args.cookies_file else YTMusic(language=args.language))
+        print(json.dumps(_music_collection(client, args.playlist_url or ""), ensure_ascii=False))
         return
     if not args.browser and not args.cookies_file:
         parser.error("one of --browser or --cookies-file is required")

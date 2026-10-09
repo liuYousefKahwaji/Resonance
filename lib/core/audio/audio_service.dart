@@ -1,6 +1,7 @@
 // lib/core/audio/audio_service.dart
 
 import 'dart:async';
+import 'package:resonance/services/listening_statistics.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -409,7 +410,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   final List<String> _loudnessQueue = <String>[];
   final Set<String> _queuedLoudnessPaths = <String>{};
   bool _loudnessWorkerRunning = false;
-  late final Future<PlaybackPreferenceStore> _playbackPreferenceStore;
+  late Future<PlaybackPreferenceStore> _playbackPreferenceStore;
   PlaybackAdjustments _globalPlaybackAdjustments = PlaybackAdjustments.neutral;
   PlaybackAdjustments _requestedPlaybackAdjustments = PlaybackAdjustments.neutral;
   Future<void> _playbackAdjustmentQueue = Future<void>.value();
@@ -784,6 +785,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       await _clearCurrentPlaybackPosition();
       if (_loadGeneration != genAtCompletion) return;
       if (currentLoopMode == LoopMode.one) {
+        ListeningStatistics.instance.onSessionEnded();
         await player.seek(Duration.zero);
         if (_loadGeneration != genAtCompletion) return;
         await player.play();
@@ -928,6 +930,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         await _clearCurrentPlaybackPosition();
         if (_loadGeneration != genAtCompletion || !_playbackRequested) return;
         if (currentLoopMode == LoopMode.one) {
+          ListeningStatistics.instance.onSessionEnded();
           await player.seek(Duration.zero);
           if (_loadGeneration != genAtCompletion) return;
           unawaited(_startJustAudioPlayer(player, genAtCompletion));
@@ -1384,6 +1387,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final playing =
         !_playbackUnavailable && !streamSourcePending && (Platform.isWindows ? _isWindowsPlaying : _player.playing);
     final currentItem = mediaItem.value;
+    ListeningStatistics.instance.observe(
+      item: currentItem,
+      playing: playing,
+      position: _currentPosition,
+      speed: speedNotifier.value,
+      playlist: _standalonePlaylistNumber ?? (isStandaloneMode ? null : FileService.activePlaylistNumber),
+      loading: streamSourcePending || _playbackUnavailable,
+    );
     if (currentItem == null) {
       _youtubeHistoryCoordinator?.onSessionEnded();
       _localHistoryCoordinator?.onSessionEnded();
@@ -1456,7 +1467,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   // ─── Saved state ──────────────────────────────────────────────────
-  Future<void> _initSavedState() async {
+  Future<void> reloadPortablePreferences() async {
+    _playbackPreferenceStore = PlaybackPreferenceStore.load();
+    await _initSavedState(preload: false);
+  }
+
+  Future<void> _initSavedState({bool preload = true}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       if (Platform.isWindows) {
@@ -1509,7 +1525,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       final trackArtist = prefs.getString('last_track_artist');
       final trackWasExternal = prefs.getBool('last_track_external_source');
 
-      if (trackPath != null && trackTitle != null && trackArtist != null) {
+      if (preload && trackPath != null && trackTitle != null && trackArtist != null) {
         await _preloadTrack(trackPath, trackTitle, trackArtist, externalSource: trackWasExternal);
       }
       if (volumeNormalizationEnabledNotifier.value) {
@@ -2708,11 +2724,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }) async {
     if (_syncControlLocked) return;
     final interruptSource =
+        // Each explicit track load begins a new listening session.
         _activeTrackLoadGeneration != null ||
         _currentTrackIsStream ||
         filePath.startsWith('http://') ||
         filePath.startsWith('https://');
     final outgoingPositionSave = saveCurrentPlaybackPosition();
+    ListeningStatistics.instance.onSessionEnded();
     final generation = ++_loadGeneration;
     _cancelPendingSeeks();
     // Invalidate transitions before the first await: a newer selection owns
@@ -3644,6 +3662,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> saveState() async {
+    await ListeningStatistics.instance.flush();
     await saveCurrentPlaybackPosition();
     await _playbackAdjustmentQueue;
     final prefs = await SharedPreferences.getInstance();

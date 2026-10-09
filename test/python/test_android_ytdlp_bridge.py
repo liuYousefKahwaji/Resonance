@@ -64,6 +64,28 @@ class EventSink:
 
 
 class AndroidYtdlpBridgeTests(unittest.TestCase):
+    def test_music_collection_uses_catalog_ids_preserves_order_and_duplicates(self):
+        class Music:
+            def get_playlist(self, playlist_id, limit):
+                self_args.append((playlist_id, limit))
+                return {"title": "Favs v5", "tracks": [
+                    {"videoId": "hI_DYWCKyp0", "title": "MONEY ON THE DASH", "artists": [{"name": "Elley Duhé"}, {"name": "Whethan"}]},
+                    {"videoId": "abcdefghijk", "title": "Second"},
+                    {"videoId": "hI_DYWCKyp0", "title": "MONEY ON THE DASH"},
+                    {"title": "Missing ID"},
+                ]}
+            def get_album(self, browse_id):
+                return {"title": "Album", "tracks": [{"videoId": "abcdefghijk", "title": "Album song"}]}
+        self_args = []
+        data = bridge._music_collection(Music(), "https://music.youtube.com/playlist?list=PLtest&si=ignored")
+        self.assertEqual(self_args, [("PLtest", 1000)])
+        self.assertEqual([entry["id"] for entry in data["entries"]], ["hI_DYWCKyp0", "abcdefghijk", "hI_DYWCKyp0"])
+        self.assertEqual(data["entries"][0]["artist"], "Elley Duhé & Whethan")
+        self.assertEqual(bridge._music_collection(Music(), "https://music.youtube.com/browse/MPREtest")["title"], "Album")
+        for invalid in ["https://example.com/playlist?list=PLtest", "https://music.youtube.com/playlist", "https://music.youtube.com/browse/UCtest"]:
+            with self.assertRaises(RuntimeError):
+                bridge._music_collection(Music(), invalid)
+
     def test_artist_identity_survives_track_and_album_normalization(self):
         artist_id = "UCQJ-a2IzCJ-gwlHvqvOWGhw"
         source = {"title": "Song", "videoId": "abcdefghijk", "artists": [{"name": "Artist", "id": artist_id}]}

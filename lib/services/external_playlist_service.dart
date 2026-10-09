@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
+import 'package:resonance/services/youtube/windows_ytmusic_helper.dart';
 import 'package:resonance/models/external_playlist.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
@@ -497,7 +498,9 @@ Future<String> _fetchYoutubePlaylistJson(Uri uri) async {
     const channel = MethodChannel('resonance/android_youtube');
     try {
       final result = await channel
-          .invokeMethod<String>('getPlaylistMetadata', {'url': uri.toString()})
+          .invokeMethod<String>(uri.host == 'music.youtube.com' ? 'getMusicPlaylist' : 'getPlaylistMetadata', {
+            'url': uri.toString(),
+          })
           .timeout(const Duration(seconds: 60));
       if (result == null || result.trim().isEmpty) {
         throw const ExternalPlaylistException('YouTube did not return readable playlist metadata.');
@@ -515,7 +518,12 @@ Future<String> _fetchYoutubePlaylistJson(Uri uri) async {
       throw failure;
     }
   }
-  if (Platform.isWindows) return _fetchWindowsYoutubePlaylistJson(uri);
+  if (Platform.isWindows) {
+    if (uri.host == 'music.youtube.com') {
+      return const WindowsYtMusicHelper().invoke(action: 'playlist', playlistUrl: uri.toString());
+    }
+    return _fetchWindowsYoutubePlaylistJson(uri);
+  }
   throw const ExternalPlaylistException('YouTube playlist import is supported on Windows and Android.');
 }
 

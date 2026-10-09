@@ -77,7 +77,12 @@ class PlaylistSortState {
     return copyWith(addedOrder: added);
   }
 
-  List<String> sorted(List<String> tracks, {Map<String, String> titles = const {}, Set<String> favorites = const {}}) {
+  List<String> sorted(
+    List<String> tracks, {
+    Map<String, String> titles = const {},
+    Set<String> favorites = const {},
+    Map<String, String> randomIdentities = const {},
+  }) {
     final indices = List.generate(tracks.length, (i) => i);
     final slots = <String, List<int>>{};
     for (var i = 0; i < addedOrder.length; i++) {
@@ -88,8 +93,10 @@ class PlaylistSortState {
         slots[tracks[i]]?.isNotEmpty == true ? slots[tracks[i]]!.removeAt(0) : addedOrder.length + i,
     ];
     final randomRanks = <String, String>{};
-    String randomRank(String track) =>
-        randomRanks.putIfAbsent(track, () => sha256.convert(utf8.encode('$seed\u0000$track')).toString());
+    String randomRank(String track) => randomRanks.putIfAbsent(
+      track,
+      () => sha256.convert(utf8.encode('$seed\u0000${randomIdentities[track] ?? track}')).toString(),
+    );
     indices.sort((a, b) {
       if (favoritesFirst) {
         final favoriteOrder = (favorites.contains(tracks[b]) ? 1 : 0) - (favorites.contains(tracks[a]) ? 1 : 0);

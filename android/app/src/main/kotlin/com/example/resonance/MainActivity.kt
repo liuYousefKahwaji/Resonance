@@ -58,6 +58,7 @@ class MainActivity : AudioServiceFragmentActivity() {
     private var activeRecognitionRequest: RecognitionRequest? = null
     private var androidEntrypointChannel: MethodChannel? = null
     private var activityResumed = false
+    private val portableExport = PortableFileExportBridge(this)
     private var entrypointDispatchScheduled = false
     private var minimizedTileLaunch = false
     private val streamRequests = ConcurrentHashMap<Long, AtomicBoolean>()
@@ -119,6 +120,7 @@ class MainActivity : AudioServiceFragmentActivity() {
         AndroidBassBoostBridge.register(flutterEngine)
         ResonancePlaybackWidgetBridge.register(flutterEngine, applicationContext)
         ResonanceUpdateBridge.register(this, flutterEngine)
+        portableExport.register(flutterEngine)
 
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(this))
@@ -334,6 +336,23 @@ class MainActivity : AudioServiceFragmentActivity() {
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     result.error("MUSIC_HOME_ERROR", e.message, null)
+                                }
+                            }
+                        }
+                    }
+
+                    "getMusicPlaylist" -> {
+                        val url = call.argument<String>("url") ?: ""
+                        val language = if (call.argument<String>("language") == "ar") "ar" else "en"
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr("get_music_playlist", url, cookiePath, language).toString()
+                                }
+                                withContext(Dispatchers.Main) { result.success(json) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("MUSIC_PLAYLIST_ERROR", e.message, null)
                                 }
                             }
                         }
@@ -734,6 +753,7 @@ class MainActivity : AudioServiceFragmentActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (portableExport.onActivityResult(requestCode, resultCode, data)) return
         if (requestCode != MEDIA_PROJECTION_REQUEST) return
 
         val request = activeRecognitionRequest

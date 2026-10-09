@@ -17,6 +17,7 @@ class WindowsYtMusicHelper {
     int? limit,
     String? videoId,
     String? language,
+    String? playlistUrl,
     String? overrideBrowserSource,
     YoutubeAccessService? access,
   }) async {
@@ -32,7 +33,8 @@ class WindowsYtMusicHelper {
     final configuredAccess = access ?? YoutubeAccessService.active;
     final browser = overrideBrowserSource ?? configuredAccess?.windowsBrowserId;
     final cookiePath = configuredAccess?.windowsCookiePath;
-    if (action != 'related' && browser == null && cookiePath == null) {
+    final authenticated = browser != null || cookiePath != null;
+    if (action != 'related' && action != 'playlist' && !authenticated) {
       throw const YoutubeFailure(
         kind: YoutubeFailureKind.verificationRequired,
         userMessage: 'Connect YouTube access before using YouTube Music.',
@@ -40,13 +42,14 @@ class WindowsYtMusicHelper {
     }
 
     final process = await Process.start(helper, [
-      if (action != 'related')
+      if (action != 'related' && authenticated)
         if (browser != null) ...['--browser', browser] else ...['--cookies-file', cookiePath!],
       '--action',
       action,
       if (limit != null) ...['--limit', '$limit'],
       if (language != null) ...['--language', language],
       if (videoId != null) ...['--video-id', videoId],
+      if (playlistUrl != null) ...['--playlist-url', playlistUrl],
     ], runInShell: false);
     late final String stdout;
     late final String stderr;
@@ -67,7 +70,7 @@ class WindowsYtMusicHelper {
     if (exitCode != 0 || stdout.trim().isEmpty) {
       throw YoutubeFailureClassifier.classify(
         stderr.isEmpty ? 'YouTube Music helper exited with code $exitCode' : stderr,
-        authenticated: true,
+        authenticated: authenticated,
       );
     }
     return stdout;

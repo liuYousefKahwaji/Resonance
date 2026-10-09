@@ -27,6 +27,28 @@ finally:
 
 
 class WindowsYoutubeMusicHomeTests(unittest.TestCase):
+    def test_music_collection_uses_catalog_ids_preserves_order_and_duplicates(self):
+        class Music:
+            def get_playlist(self, playlist_id, limit):
+                self_args.append((playlist_id, limit))
+                return {"title": "Favs v5", "tracks": [
+                    {"videoId": "hI_DYWCKyp0", "title": "MONEY ON THE DASH", "artists": [{"name": "Elley Duhé"}, {"name": "Whethan"}]},
+                    {"videoId": "abcdefghijk", "title": "Second"},
+                    {"videoId": "hI_DYWCKyp0", "title": "MONEY ON THE DASH"},
+                    {"title": "Missing ID"},
+                ]}
+            def get_album(self, browse_id):
+                return {"title": "Album", "tracks": [{"videoId": "abcdefghijk", "title": "Album song"}]}
+        self_args = []
+        data = helper._music_collection(Music(), "https://music.youtube.com/playlist?list=PLtest&si=ignored")
+        self.assertEqual(self_args, [("PLtest", 1000)])
+        self.assertEqual([entry["id"] for entry in data["entries"]], ["hI_DYWCKyp0", "abcdefghijk", "hI_DYWCKyp0"])
+        self.assertEqual(data["entries"][0]["artist"], "Elley Duhé & Whethan")
+        self.assertEqual(helper._music_collection(Music(), "https://music.youtube.com/browse/MPREtest")["title"], "Album")
+        for invalid in ["https://example.com/playlist?list=PLtest", "https://music.youtube.com/playlist", "https://music.youtube.com/browse/UCtest"]:
+            with self.assertRaises(RuntimeError):
+                helper._music_collection(Music(), invalid)
+
     def test_chromium_connector_uses_the_authorized_jar_without_reading_browser_databases(self):
         jar = http.cookiejar.CookieJar()
         jar.set_cookie(http.cookiejar.Cookie(0, "__Secure-3PAPISID", "fake", None, False, ".youtube.com", True, True, "/", True, True, None, True, None, None, {}))

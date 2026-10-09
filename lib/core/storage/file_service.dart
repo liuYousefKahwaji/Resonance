@@ -33,6 +33,8 @@ class FileService {
   static final Map<String, Future<void>> _writeTails = {};
   static final Map<String, Future<File>> _initializingFiles = {};
   static final Map<String, int> _revisions = {};
+  static Future<void> _dateWrites = Future.value();
+  static int activePlaylistNumber = defaultPlaylistNumber;
 
   static Stream<PlaylistMutation> get mutations => _mutations.stream;
 
@@ -51,6 +53,8 @@ class FileService {
     final path = await _localPath;
     return File('$path/r_playlist_$number.m3u8');
   }
+
+  Future<String> get documentsDirectory => _localPath;
 
   Future<File> _ensurePlaylistFile(int number) async {
     final safeNumber = number < 0 ? defaultPlaylistNumber : number;
@@ -80,13 +84,14 @@ class FileService {
 
   Future<int> getActivePlaylistNumber() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_activePlaylistKey) ?? defaultPlaylistNumber;
+    return activePlaylistNumber = prefs.getInt(_activePlaylistKey) ?? defaultPlaylistNumber;
   }
 
   Future<void> setActivePlaylistNumber(int number) async {
     final safeNumber = number < 0 ? defaultPlaylistNumber : number;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_activePlaylistKey, safeNumber);
+    activePlaylistNumber = safeNumber;
     await _ensurePlaylistFile(safeNumber);
   }
 
@@ -383,6 +388,7 @@ class FileService {
   /// A track removed while downloading must not be added back.
   Future<void> replaceStreamWithDownload(int playlistNumber, String stream, String localPath) async {
     await _serialize(playlistNumber, () async {
+      if (!await (await _playlistFile(playlistNumber)).exists()) return;
       final tracks = await readPlaylistTracks(playlistNumber);
       final sources = isFavoritesPlaylist(playlistNumber) ? await favoriteSourceIds() : const <String, String>{};
       bool matches(String track) => isFavoritesPlaylist(playlistNumber)
@@ -479,16 +485,31 @@ class FileService {
     await _publish(number, PlaylistMutationKind.reordered);
   });
 
+  Future<void> restorePlaylistSortState(int number, PlaylistSortState state, {List<String>? tracks}) =>
+      _serialize(number, () async {
+        await _writeTracks(
+          number,
+          await _ensurePlaylistFile(number),
+          tracks ?? await readPlaylistTracks(number),
+          state: state,
+          preserveOrder: true,
+        );
+        await _publish(number, PlaylistMutationKind.reordered);
+      });
+
   Future<void> _writeTracks(
     int number,
     File file,
     List<String> tracks, {
     bool manual = false,
     PlaylistSortState? state,
+    bool preserveOrder = false,
   }) async {
     Map<String, String> sourceIds = const {};
     var selected = (state ?? await playlistSortState(number)).reconcile(tracks);
-    if (isFavoritesPlaylist(number) || selected.favoritesFirst) sourceIds = await favoriteSourceIds();
+    if (isFavoritesPlaylist(number) || selected.favoritesFirst || selected.mode == PlaylistSortMode.random) {
+      sourceIds = await favoriteSourceIds();
+    }
     if (isFavoritesPlaylist(number)) {
       final identities = <String>{};
       tracks = tracks.where((track) => identities.add(favoriteIdentity(track, sourceIds: sourceIds))).toList();
@@ -527,9 +548,19 @@ class FileService {
       for (final track in tracks)
         if (favoriteKeys.contains(favoriteIdentity(track, sourceIds: sourceIds))) track,
     };
-    final ordered = selected.mode == PlaylistSortMode.dateAdded && selected.seed == 0 && !selected.favoritesFirst
+    final randomIdentities = <String, String>{};
+    if (selected.mode == PlaylistSortMode.random) {
+      for (final track in tracks) {
+        final identity = favoriteIdentity(track, sourceIds: sourceIds);
+        if (identity.startsWith('youtube:')) {
+          randomIdentities[track] = TrackSourceRepository.canonicalUrlFor(identity.substring(8));
+        }
+      }
+    }
+    final ordered =
+        preserveOrder || selected.mode == PlaylistSortMode.dateAdded && selected.seed == 0 && !selected.favoritesFirst
         ? tracks
-        : selected.sorted(tracks, titles: titles, favorites: favorites);
+        : selected.sorted(tracks, titles: titles, favorites: favorites, randomIdentities: randomIdentities);
     // The numbered playlist stays authoritative for Next/Previous. The sidecar
     // remembers insertion order even after sorting or manual rearrangement.
     final sidecar = File('${file.path}.sort.json');
@@ -537,8 +568,33 @@ class FileService {
     await partial.writeAsString(jsonEncode(selected.toJson()), flush: true);
     await partial.rename(sidecar.path);
     final stagedPlaylist = File('${file.path}.part');
+    final previousTracks = await file.exists() ? await file.readAsLines() : <String>[];
     await stagedPlaylist.writeAsString('#\n${ordered.map((track) => '$track\n').join()}', flush: true);
     await stagedPlaylist.rename(file.path);
+    if (number != favoritesPlaylistNumber) {
+      final added = tracks.where((track) => !previousTracks.contains(track)).toList();
+      if (added.isNotEmpty) {
+        final task = _dateWrites.catchError((_) {}).then((_) async {
+          final prefs = await SharedPreferences.getInstance();
+          Map<String, dynamic> dates;
+          try {
+            dates = Map<String, dynamic>.from(jsonDecode(prefs.getString('library_added_dates_v1') ?? '{}') as Map);
+          } catch (_) {
+            dates = {};
+          }
+          final mappings = await favoriteSourceIds();
+          for (final track in added) {
+            dates.putIfAbsent(
+              favoriteIdentity(track, sourceIds: mappings),
+              () => DateTime.now().toUtc().toIso8601String(),
+            );
+          }
+          await prefs.setString('library_added_dates_v1', jsonEncode(dates));
+        });
+        _dateWrites = task;
+        await task;
+      }
+    }
   }
 
   Future<void> _serialize(int playlistNumber, Future<void> Function() operation) async {
@@ -566,6 +622,12 @@ class FileService {
           await _publish(number, PlaylistMutationKind.reordered);
         });
       }
+    }
+  }
+
+  Future<void> notifyLibraryRestored() async {
+    for (final number in await listPlaylistNumbers()) {
+      await _publish(number, PlaylistMutationKind.reordered);
     }
   }
 

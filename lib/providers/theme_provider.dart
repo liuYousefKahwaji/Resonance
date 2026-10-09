@@ -37,6 +37,8 @@ class ThemeProvider extends ChangeNotifier {
     _loadTheme();
   }
 
+  Future<void> reloadPortablePreferences() => _loadTheme();
+
   Future<void> _loadTheme() async {
     final prefs = await SharedPreferences.getInstance();
     final isDark = prefs.getBool('is_dark_mode') ?? false;

@@ -19,6 +19,7 @@ import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/platform/android/android_entrypoint_service.dart';
 import 'package:resonance/screens/settings/settings_screen.dart';
 import 'package:resonance/services/app_update_service.dart';
+import 'package:resonance/services/update_discovery_coordinator.dart';
 import 'package:resonance/services/update_test_profile.dart';
 import 'package:resonance/widgets/app_update_prompt.dart';
 import 'package:resonance/screens/external_playlist/external_playlist_import_screen.dart';
@@ -64,6 +65,10 @@ import 'package:resonance/services/youtube/youtube_history_service.dart';
 import 'package:resonance/services/youtube/youtube_music_home_service.dart';
 import 'package:resonance/services/youtube/youtube_playback_history_coordinator.dart';
 import 'package:resonance/services/listening_history_repository.dart';
+import 'package:resonance/services/listening_statistics.dart';
+import 'package:resonance/screens/library/library_browser_screen.dart';
+import 'package:resonance/widgets/playlist_offline_dialog.dart';
+import 'package:resonance/services/playlist_offline_service.dart';
 import 'package:resonance/services/local_playback_history_coordinator.dart';
 import 'package:resonance/screens/history/history_screen.dart';
 import 'package:resonance/screens/sync/sync_screens.dart';
@@ -133,6 +138,7 @@ Future<void> main(List<String> args) async {
     isEnabled: () => youtubeHistoryPreferences.enabled,
   );
   await ListeningHistoryRepository.instance.initialize();
+  await ListeningStatistics.instance.initialize();
   final localHistoryCoordinator = LocalPlaybackHistoryCoordinator(repository: ListeningHistoryRepository.instance);
 
   // Windows uses PlayerHandler directly. The app already owns its Windows
@@ -386,7 +392,8 @@ class DesktopWindowHandler with WindowListener, TrayListener {
   }
 }
 
-class _MainAppState extends State<MainApp> {
+class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
+  late final UpdateDiscoveryCoordinator _updates;
   StreamSubscription<PlaylistMutation>? _playlistMutationSubscription;
   Timer? _playlistRefreshTimer;
   int _playlistLoadGeneration = 0;
@@ -424,6 +431,17 @@ class _MainAppState extends State<MainApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _updates = UpdateDiscoveryCoordinator(
+      ready: () =>
+          mounted &&
+          !_showOnboarding &&
+          _uiVisible &&
+          !isUpdatePromptActive &&
+          _navigatorKey.currentState?.overlay != null,
+      present: _presentDiscoveredUpdate,
+    )..start();
+    if (Platform.isAndroid) unawaited(AppUpdateService().resumeAndroidInstall().catchError((_) {}));
     final alreadyPlaying = widget.handler.playbackVisualNotifier.value.playing;
     _streamControlsExpanded = alreadyPlaying;
     _streamControlsAutoOpened = alreadyPlaying;
@@ -431,7 +449,6 @@ class _MainAppState extends State<MainApp> {
     widget.handler.youtubeFailureNotifier.addListener(_showPlaybackYoutubeFailure);
     widget.handler.outputDeviceErrorNotifier.addListener(_showOutputDeviceError);
     _initIntro();
-    unawaited(_checkStartupUpdate());
     DownloadQueueController.instance.addListener(_refreshCompletedDownloads);
     _loadPlaylistFromDisk();
     _playlistMutationSubscription = FileService.mutations.listen((mutation) {
@@ -445,8 +462,7 @@ class _MainAppState extends State<MainApp> {
     }
   }
 
-  Future<void> _checkStartupUpdate() async {
-    await Future<void>.delayed(const Duration(seconds: 8));
+  Future<void> _presentDiscoveredUpdate(AvailableUpdate update) async {
     if (Platform.isAndroid) {
       try {
         await AppUpdateService().resumeAndroidInstall();
@@ -454,8 +470,7 @@ class _MainAppState extends State<MainApp> {
     }
     if (!mounted || _showOnboarding) return;
     try {
-      final update = await AppUpdateService().check();
-      if (!mounted || update == null) return;
+      if (!mounted) return;
       if (Platform.isAndroid) {
         final prefs = await SharedPreferences.getInstance();
         if (prefs.getBool('android_auto_updates') == true && await AppUpdateService().canInstallAndroidUpdates()) {
@@ -468,8 +483,13 @@ class _MainAppState extends State<MainApp> {
         await showAppUpdatePrompt(promptContext, update);
       }
     } catch (_) {
-      // Update checks are optional; Settings has an explicit retry action.
+      rethrow;
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_updates.wake());
   }
 
   void _showPlaybackYoutubeFailure() {
@@ -564,6 +584,8 @@ class _MainAppState extends State<MainApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _updates.dispose();
     if (Platform.isAndroid) widget.handler.playbackVisualNotifier.removeListener(_openStreamControlsOnFirstPlay);
     _playlistMutationSubscription?.cancel();
     _playlistRefreshTimer?.cancel();
@@ -814,6 +836,13 @@ class _MainAppState extends State<MainApp> {
     }
     final navigatorContext = _navigatorKey.currentState?.overlay?.context;
     if (navigatorContext == null) return;
+    if (DownloadQueueController.instance.pendingCount > 0 ||
+        PlaylistOfflineService.instance.progress.values.any((state) => state.running)) {
+      ScaffoldMessenger.of(
+        navigatorContext,
+      ).showSnackBar(SnackBar(content: Text(context.tr('Finish or stop downloads before deleting playlists.'))));
+      return;
+    }
     final name = FileService.isFavoritesPlaylist(number)
         ? context.tr('Favorites')
         : playlistNames[number] ?? 'Playlist $number';
@@ -897,6 +926,8 @@ class _MainAppState extends State<MainApp> {
       case _PlaylistActionType.create:
       case _PlaylistActionType.sort:
       case _PlaylistActionType.favoriteAll:
+      case _PlaylistActionType.offline:
+      case _PlaylistActionType.browse:
         return;
     }
   }
@@ -1260,6 +1291,7 @@ class _MainAppState extends State<MainApp> {
   void _resumeUi() {
     widget.handler.setUiVisible(true);
     if (mounted && !_uiVisible) setState(() => _uiVisible = true);
+    unawaited(_updates.wake());
   }
 
   void _exitApp() {
@@ -1509,7 +1541,12 @@ class _MainAppState extends State<MainApp> {
               return _showIntro
                   ? _IntroOverlay(onDismiss: () => unawaited(_dismissIntro()))
                   : _showOnboarding
-                  ? OnboardingScreen(onFinished: () => setState(() => _showOnboarding = false))
+                  ? OnboardingScreen(
+                      onFinished: () {
+                        setState(() => _showOnboarding = false);
+                        WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_updates.wake()));
+                      },
+                    )
                   : TickerMode(
                       enabled: _uiVisible,
                       child: Scaffold(
@@ -2436,6 +2473,11 @@ class _MainAppState extends State<MainApp> {
             unawaited(_sortActivePlaylist());
           case _PlaylistActionType.favoriteAll:
             unawaited(_favoriteAllTracks());
+          case _PlaylistActionType.offline:
+            final promptContext = _navigatorKey.currentState?.overlay?.context;
+            if (promptContext != null) unawaited(showPlaylistOfflineDialog(promptContext, activePlaylistNumber));
+          case _PlaylistActionType.browse:
+            _navigatorKey.currentState?.push<void>(MaterialPageRoute(builder: (_) => const LibraryBrowserScreen()));
         }
       },
       itemBuilder: (menuContext) => [
@@ -2476,6 +2518,15 @@ class _MainAppState extends State<MainApp> {
             ),
           ),
         const PopupMenuDivider(),
+        PopupMenuItem(
+          value: const _PlaylistMenuAction(_PlaylistActionType.browse),
+          child: _ToolbarMenuLabel(icon: Icons.album_outlined, label: context.tr('Browse library')),
+        ),
+        PopupMenuItem(
+          value: const _PlaylistMenuAction(_PlaylistActionType.offline),
+          enabled: playlist.isNotEmpty,
+          child: _ToolbarMenuLabel(icon: Icons.offline_pin_outlined, label: context.tr('Make available offline')),
+        ),
         PopupMenuItem(
           enabled: playlist.isNotEmpty,
           value: const _PlaylistMenuAction(_PlaylistActionType.sort),
@@ -2580,7 +2631,7 @@ class _ToolbarMenuLabel extends StatelessWidget {
   );
 }
 
-enum _PlaylistActionType { select, create, rename, delete, sort, favoriteAll }
+enum _PlaylistActionType { select, create, rename, delete, sort, favoriteAll, offline, browse }
 
 enum _SelectionAction { copy, move, remove, delete }
 

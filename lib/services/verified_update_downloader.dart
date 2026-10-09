@@ -144,7 +144,7 @@ class VerifiedUpdateDownloader {
               report();
             },
           ),
-      ], eagerError: true);
+      ], eagerError: false);
       controller?._throwIfCancelled();
       report(force: true);
       onProgress?.call(UpdateDownloadProgress(size, size, verifying: true));
