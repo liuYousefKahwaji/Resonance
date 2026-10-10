@@ -11,6 +11,8 @@ import 'package:resonance/app/theme.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/l10n/app_strings.dart';
+import 'package:resonance/widgets/player/playback_range_dialog.dart';
+import 'package:resonance/widgets/player/playback_range_indicator.dart';
 import 'package:resonance/models/smart_playlist.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/services/library_catalog.dart';
@@ -453,33 +455,48 @@ class _LibraryTracksScreenState extends State<LibraryTracksScreen> {
                   final track = list[index];
                   return ListTile(
                     leading: SizedBox(width: 46, height: 46, child: LibraryArtwork(track: track)),
-                    title: Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    title: Row(
+                      children: [
+                        Expanded(child: Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                        if (!track.path.startsWith('http'))
+                          PlaybackRangeIndicator(
+                            handler: context.read<PlayerHandler>(),
+                            path: track.path,
+                            title: track.title,
+                          ),
+                      ],
+                    ),
                     subtitle: Text(track.artist, maxLines: 1, overflow: TextOverflow.ellipsis),
                     onTap: () => _play(list, index),
-                    trailing: widget.smartId == null
-                        ? null
-                        : PopupMenuButton<String>(
-                            onSelected: (action) async {
-                              if (action == 'favorite') {
-                                await FileService().setTracksFavorite([track.path], !track.favorite);
-                              }
-                              if (action == 'exclude' && rules != null) {
-                                final json = rules!.toJson()
-                                  ..['exclusions'] = {...rules!.exclusions, track.id}.toList();
-                                await widget.smart!.save(SmartPlaylist.fromJson(json));
-                              }
-                            },
-                            itemBuilder: (context) => [
-                              PopupMenuItem(
-                                value: 'favorite',
-                                child: Text(context.tr(track.favorite ? 'Unfavorite' : 'Favorite')),
-                              ),
-                              PopupMenuItem(
-                                value: 'exclude',
-                                child: Text(context.tr('Exclude from this smart playlist')),
-                              ),
-                            ],
-                          ),
+                    trailing: PopupMenuButton<String>(
+                      onSelected: (action) async {
+                        if (action == 'trim') {
+                          await showPlaybackRangeDialog(
+                            context,
+                            context.read<PlayerHandler>(),
+                            track.path,
+                            track.title,
+                          );
+                        }
+                        if (action == 'favorite') {
+                          await FileService().setTracksFavorite([track.path], !track.favorite);
+                        }
+                        if (action == 'exclude' && rules != null) {
+                          final json = rules!.toJson()..['exclusions'] = {...rules!.exclusions, track.id}.toList();
+                          await widget.smart!.save(SmartPlaylist.fromJson(json));
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        if (!track.path.startsWith('http'))
+                          PopupMenuItem(value: 'trim', child: Text(context.tr('Trim playback'))),
+                        PopupMenuItem(
+                          value: 'favorite',
+                          child: Text(context.tr(track.favorite ? 'Unfavorite' : 'Favorite')),
+                        ),
+                        if (widget.smartId != null)
+                          PopupMenuItem(value: 'exclude', child: Text(context.tr('Exclude from this smart playlist'))),
+                      ],
+                    ),
                   );
                 },
               ),

@@ -1,4 +1,6 @@
 import 'package:resonance/l10n/app_strings.dart';
+import 'package:resonance/widgets/player/playback_range_dialog.dart';
+import 'package:resonance/widgets/player/playback_range_indicator.dart';
 // lib/widgets/library/track_tile.dart
 //
 // Scroll-smoothness fixes:
@@ -755,18 +757,26 @@ class _TrackTileContent extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(
-                              resolvedTitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontWeight: isCurrentTrack ? FontWeight.w700 : FontWeight.w500,
-                                fontSize: 13,
-                                color: isCurrentTrack
-                                    ? primary
-                                    : (isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A)),
-                                letterSpacing: -0.1,
-                              ),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    resolvedTitle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontWeight: isCurrentTrack ? FontWeight.w700 : FontWeight.w500,
+                                      fontSize: 13,
+                                      color: isCurrentTrack
+                                          ? primary
+                                          : (isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A)),
+                                      letterSpacing: -0.1,
+                                    ),
+                                  ),
+                                ),
+                                if (!isStream)
+                                  PlaybackRangeIndicator(handler: handler, path: trackPath, title: resolvedTitle),
+                              ],
                             ),
                             const SizedBox(height: 2),
                             Text(
@@ -875,6 +885,12 @@ class _TrackTileContent extends StatelessWidget {
                                     ),
                                   );
                                 },
+                              ),
+                            if (!isStream)
+                              MenuItemButton(
+                                leadingIcon: const Icon(Icons.content_cut_rounded, size: 19),
+                                onPressed: () => showPlaybackRangeDialog(context, handler, trackPath, resolvedTitle),
+                                child: Text(context.tr('Trim playback')),
                               ),
                             if (!isStream)
                               MenuItemButton(

@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-The current source version is **3.5.0** (build **17**), matching `version: 3.5.0+17` in [`pubspec.yaml`](pubspec.yaml). Packaged builds are available on the [GitHub Releases page](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
+The current source version is **3.6.1** (build **19**), matching `version: 3.6.1+19` in [`pubspec.yaml`](pubspec.yaml). Published builds are available on the [GitHub Releases page](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 
@@ -42,6 +42,7 @@ The working tree may contain features intended for the next release. See the rel
 - Use a full-screen player with lyrics, artwork-derived colors, an audio visualizer, gestures, and Pocket Vinyl.
 - Adjust speed and pitch from 0.5× to 2×, volume up to 200%, and a five-band equalizer with presets.
 - Apply playback settings globally or per track.
+- Use **Trim playback** in a local song's menu to choose a section with waveform handles, preview, zoom and exact times. Saved cuts apply across playlists; the seekbar dims excluded parts while keeping the original timestamps. Reset anytime; the audio file stays unchanged.
 - Normalize local tracks toward -14 LUFS using cached, peak-safe analysis.
 - Crossfade automatic track changes and resume long tracks from their saved position.
 - Handle Android audio interruptions so music resumes only when appropriate, and pause when headphones disconnect.

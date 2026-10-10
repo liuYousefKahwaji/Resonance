@@ -1,5 +1,9 @@
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
+import 'package:resonance/core/audio/playback_range.dart';
+import 'playback_range_indicator.dart';
+import 'playback_range_dialog.dart';
+import 'cut_slider_track_shape.dart';
 // lib/widgets/player/seek_bar.dart
 //
 // Fixes:
@@ -81,9 +85,10 @@ class _SeekBarState extends State<SeekBar> {
     _position = handler.currentPosition;
     _duration = handler.currentDuration ?? handler.mediaItem.value?.duration ?? Duration.zero;
     if (_duration.inMilliseconds > 0) {
-      _sliderValue = _position.inMilliseconds / _duration.inMilliseconds;
+      _sliderValue = _fractionForRelative(_position);
     }
     handler.uiVisibleNotifier.addListener(_onUiVisibilityChanged);
+    handler.playbackRangeNotifier.addListener(_onRangeChanged);
 
     _positionSub = handler.positionStream.listen((position) {
       if (!mounted || _isScrubbing) return;
@@ -101,7 +106,7 @@ class _SeekBarState extends State<SeekBar> {
 
       _position = position;
       if (_duration.inMilliseconds > 0) {
-        _sliderValue = _position.inMilliseconds / _duration.inMilliseconds;
+        _sliderValue = _fractionForRelative(_position);
       }
       final now = DateTime.now();
       if (!handler.uiVisibleNotifier.value || now.difference(_lastPositionPaint) < const Duration(milliseconds: 100)) {
@@ -114,6 +119,7 @@ class _SeekBarState extends State<SeekBar> {
     _durationSub = handler.durationStream.listen((duration) {
       if (duration != null && mounted) {
         _duration = duration;
+        if (!_isScrubbing && _pendingSeekPosition == null) _sliderValue = _fractionForRelative(_position);
         if (handler.uiVisibleNotifier.value) setState(() {});
       }
     });
@@ -144,6 +150,28 @@ class _SeekBarState extends State<SeekBar> {
     });
   }
 
+  PlaybackRange get _range => _handler?.currentPlaybackRange ?? PlaybackRange.full;
+  Duration get _sourceDuration =>
+      _range.isFull ? _duration : _handler?.currentSourceDuration ?? _duration + _range.start;
+  double _fractionForRelative(Duration position) => _sourceDuration.inMilliseconds <= 0
+      ? 0
+      : (_range.source(position).inMilliseconds / _sourceDuration.inMilliseconds).clamp(0, 1);
+  double _clampFraction(double value) {
+    if (_range.isFull || _sourceDuration.inMilliseconds <= 0) return value.clamp(0, 1);
+    final total = _sourceDuration.inMilliseconds;
+    final start = _range.start.inMilliseconds / total;
+    final end = ((_range.end ?? _sourceDuration).inMilliseconds - 1).clamp(_range.start.inMilliseconds, total) / total;
+    return value.clamp(start, end);
+  }
+
+  void _onRangeChanged() {
+    if (!mounted) return;
+    _pendingSeekPosition = null;
+    _position = _handler!.currentPosition;
+    _sliderValue = _fractionForRelative(_position);
+    setState(() {});
+  }
+
   void _onUiVisibilityChanged() {
     final handler = _handler;
     if (!mounted || handler == null || !handler.uiVisibleNotifier.value) return;
@@ -151,7 +179,7 @@ class _SeekBarState extends State<SeekBar> {
     _position = handler.currentPosition;
     _duration = handler.currentDuration ?? _duration;
     if (_duration.inMilliseconds > 0) {
-      _sliderValue = _position.inMilliseconds / _duration.inMilliseconds;
+      _sliderValue = _fractionForRelative(_position);
     }
     setState(() {});
   }
@@ -160,6 +188,7 @@ class _SeekBarState extends State<SeekBar> {
   void dispose() {
     _handler?.seekStepNotifier.removeListener(_onSeekStepChanged);
     _handler?.uiVisibleNotifier.removeListener(_onUiVisibilityChanged);
+    _handler?.playbackRangeNotifier.removeListener(_onRangeChanged);
     _positionSub?.cancel();
     _durationSub?.cancel();
     _playbackSub?.cancel();
@@ -168,10 +197,10 @@ class _SeekBarState extends State<SeekBar> {
 
   void _updateHoverPosition(double localX, double maxWidth) {
     if (maxWidth <= 0 || _duration.inMilliseconds <= 0) return;
-    final ratio = (localX / maxWidth).clamp(0.0, 1.0);
+    final ratio = ((localX - 12) / (maxWidth - 24).clamp(1, double.infinity)).clamp(0.0, 1.0);
     setState(() {
       _hoverX = localX;
-      _hoverDuration = _duration * ratio;
+      _hoverDuration = _sourceDuration * ratio;
     });
   }
 
@@ -192,7 +221,7 @@ class _SeekBarState extends State<SeekBar> {
 
   double get _displaySliderValue {
     if (_pendingSeekPosition != null && _duration.inMilliseconds > 0) {
-      return (_pendingSeekPosition!.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0);
+      return _fractionForRelative(_pendingSeekPosition!);
     }
     return _sliderValue.clamp(0.0, 1.0);
   }
@@ -208,7 +237,7 @@ class _SeekBarState extends State<SeekBar> {
       setState(() {
         _pendingSeekPosition = null;
         _position = handler.currentPosition;
-        _sliderValue = _duration.inMilliseconds > 0 ? _position.inMilliseconds / _duration.inMilliseconds : 0;
+        _sliderValue = _fractionForRelative(_position);
       });
     }
   }
@@ -221,7 +250,7 @@ class _SeekBarState extends State<SeekBar> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final primary = Theme.of(context).colorScheme.primary;
 
-    final showHours = _duration.inHours >= 1;
+    final showHours = _sourceDuration.inHours >= 1;
 
     final previewBgColor = isDark ? const Color(0xFF242436) : primary;
     final previewTextColor = isDark ? primary : Colors.white;
@@ -244,7 +273,28 @@ class _SeekBarState extends State<SeekBar> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Text(_formatDuration(_displayPosition, showHours: showHours), style: timestampStyle),
+        if (!_range.isFull)
+          Tooltip(
+            message: playbackRangeLabel(context, _range),
+            child: SizedBox(
+              width: 24,
+              height: 30,
+              child: IconButton(
+                key: const Key('active-trim-indicator'),
+                padding: EdgeInsets.zero,
+                icon: Icon(Icons.content_cut_rounded, size: 15, color: primary),
+                onPressed: handler.mediaItem.value == null
+                    ? null
+                    : () => showPlaybackRangeDialog(
+                        context,
+                        handler,
+                        handler.mediaItem.value!.id,
+                        handler.mediaItem.value!.title,
+                      ),
+              ),
+            ),
+          ),
+        Text(_formatDuration(_range.source(_displayPosition), showHours: showHours), style: timestampStyle),
         const SizedBox(width: 8),
         _SeekStepButton(
           label: '-$_seekStepSeconds',
@@ -285,6 +335,13 @@ class _SeekBarState extends State<SeekBar> {
                       data: SliderTheme.of(context).copyWith(
                         showValueIndicator: ShowValueIndicator.never,
                         activeTrackColor: activeTrackColor,
+                        trackShape: _range.isFull || _sourceDuration.inMilliseconds <= 0
+                            ? null
+                            : CutSliderTrackShape(
+                                startFraction: _range.start.inMilliseconds / _sourceDuration.inMilliseconds,
+                                endFraction:
+                                    (_range.end ?? _sourceDuration).inMilliseconds / _sourceDuration.inMilliseconds,
+                              ),
                         inactiveTrackColor: Theme.of(context).colorScheme.outline,
                         thumbColor: isDimmed ? (isDark ? const Color(0xFF3D3D55) : const Color(0xFFABA8C8)) : primary,
                         tickMarkShape: SliderTickMarkShape.noTickMark,
@@ -306,14 +363,15 @@ class _SeekBarState extends State<SeekBar> {
                             : (value) {
                                 setState(() {
                                   _isScrubbing = true;
-                                  _sliderValue = value;
+                                  _sliderValue = _clampFraction(value);
                                 });
                                 _updateHoverPosition(value * maxWidth, maxWidth);
                               },
                         onChangeEnd: sliderDisabled
                             ? null
                             : (value) {
-                                final newPosition = _duration * value;
+                                final sourcePosition = _sourceDuration * _clampFraction(value);
+                                final newPosition = _range.relative(sourcePosition, sourceDuration: _sourceDuration);
                                 setState(() {
                                   _pendingSeekPosition = newPosition;
                                   _isScrubbing = false;
@@ -375,7 +433,7 @@ class _SeekBarState extends State<SeekBar> {
           onPressed: sliderDisabled ? null : () => handler.seekBySeconds(_seekStepSeconds),
         ),
         const SizedBox(width: 6),
-        Text(_formatDuration(_duration, showHours: showHours), style: timestampStyle),
+        Text(_formatDuration(_sourceDuration, showHours: showHours), style: timestampStyle),
       ],
     );
   }

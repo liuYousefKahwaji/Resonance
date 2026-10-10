@@ -52,6 +52,20 @@ class PlaybackVisualState {
   int get hashCode => Object.hash(trackId, playing, loading);
 }
 
+@immutable
+class PlaybackRangePreviewState {
+  const PlaybackRangePreviewState({
+    required this.path,
+    required this.position,
+    required this.playing,
+    this.loading = false,
+  });
+  final String path;
+  final Duration position;
+  final bool playing;
+  final bool loading;
+}
+
 bool resolvedStreamCacheIsFresh(ResolvedYoutubeStream stream, DateTime resolvedAt, DateTime now, Duration maxAge) {
   if (now.difference(resolvedAt) >= maxAge) return false;
   final expirySeconds = int.tryParse(stream.uri.queryParameters['expire'] ?? '');
@@ -475,9 +489,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final trackId = _audioEnvelopeTrackId;
     final current = mediaItem.value;
     if (envelope != null && trackId != null && current != null && _sameTrackId(trackId, current.id)) {
-      return envelope.amplitudeAt(_currentPosition);
+      return envelope.amplitudeAt(currentSourcePosition);
     }
-    return current == null ? 0 : fallbackVisualizerAmplitude(current.id, _currentPosition);
+    return current == null ? 0 : fallbackVisualizerAmplitude(current.id, currentSourcePosition);
   }
 
   bool _sameTrackId(String first, String second) {
@@ -556,6 +570,20 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   static const _streamCacheLifetime = Duration(minutes: 30);
   bool _windowsIsBuffering = false;
   bool _windowsIsCompleted = false;
+  PlaybackRange _activePlaybackRange = PlaybackRange.full;
+  final playbackRangeNotifier = ValueNotifier<PlaybackRange>(PlaybackRange.full);
+  final playbackRangeRevision = ValueNotifier<int>(0);
+  final playbackRangePreviewNotifier = ValueNotifier<PlaybackRangePreviewState?>(null);
+  StreamSubscription<Duration>? _rangePreviewPositionSubscription;
+  StreamSubscription<dynamic>? _rangePreviewPlayingSubscription;
+  StreamSubscription<bool>? _rangePreviewCompletedSubscription;
+  PlaybackRange _previewRange = PlaybackRange.full;
+  Duration? _originalTrackDuration;
+  mk.Player? _rangePreviewWindows;
+  AudioPlayer? _rangePreviewAndroid;
+  int _rangePreviewGeneration = 0;
+  int? _rangePreviewOwner;
+  bool _resumeAfterRangePreview = false;
   Duration _windowsPosition = Duration.zero;
   Duration _windowsDuration = Duration.zero;
   Duration _windowsBufferedPosition = Duration.zero;
@@ -655,7 +683,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   void _attachAudioSession(AudioSession session) {
     if (_interruptions.disposed) return;
     _androidAudioSession = session;
-    _interruptionSubscription = session.interruptionEventStream.listen(_interruptions.handle);
+    _interruptionSubscription = session.interruptionEventStream.listen((event) {
+      if (event.begin) unawaited(stopPlaybackRangePreview(resume: false));
+      _interruptions.handle(event);
+    });
     _noisySubscription = session.becomingNoisyEventStream.listen((_) {
       _playbackRequested = false;
       unawaited(
@@ -667,6 +698,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> _pauseForAudioInterruption() async {
+    await stopPlaybackRangePreview(resume: false);
     _playbackHealthWatchdog.cancel();
     _crossfadeGeneration++;
     _crossfadeInProgress = false;
@@ -749,7 +781,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (!identical(player, _windowsPlayer)) return;
       if (_pendingStreamSourceGeneration == _loadGeneration || _playbackUnavailable) return;
       _windowsPosition = position;
-      _positionController.add(position);
+      _positionController.add(_currentPosition);
       _updatePlaybackState();
       _maybeStartAutomaticCrossfade();
     });
@@ -757,10 +789,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (!identical(player, _windowsPlayer)) return;
       if (_pendingStreamSourceGeneration == _loadGeneration || _playbackUnavailable) return;
       _windowsDuration = duration;
-      _durationController.add(duration);
+      _durationController.add(_currentDuration);
       final currentItem = mediaItem.value;
       if (currentItem != null && duration > Duration.zero) {
-        mediaItem.add(currentItem.copyWith(duration: duration));
+        mediaItem.add(currentItem.copyWith(duration: _currentDuration));
       }
       _updatePlaybackState();
     });
@@ -786,7 +818,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (_loadGeneration != genAtCompletion) return;
       if (currentLoopMode == LoopMode.one) {
         ListeningStatistics.instance.onSessionEnded();
-        await player.seek(Duration.zero);
+        await player.seek(_activePlaybackRange.start);
         if (_loadGeneration != genAtCompletion) return;
         await player.play();
       } else if (_loadGeneration == genAtCompletion) {
@@ -1158,36 +1190,262 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     await warmStreamCandidates(neighbors);
   }
 
-  Future<AudioSource> _buildAudioSource(String filePath) async {
+  Future<AudioSource> _buildAudioSource(String filePath, {PlaybackRange? range}) async {
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
     if (isStream) {
       final resolved = await _resolveStream(filePath);
       return AudioSource.uri(resolved.uri, headers: resolved.headers);
     } else {
-      return AudioSource.uri(Uri.file(filePath));
+      final bounds = range ?? await playbackRangeFor(filePath);
+      final source = AudioSource.uri(Uri.file(filePath));
+      return bounds.isFull ? source : ClippingAudioSource(child: source, start: bounds.start, end: bounds.end);
     }
   }
 
-  Future<mk.Media> _buildMediaKitMedia(String filePath) async {
+  Future<mk.Media> _buildMediaKitMedia(String filePath, {PlaybackRange? range}) async {
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
     if (isStream) {
       final resolved = await _resolveStream(filePath);
       return mk.Media(resolved.uri.toString(), httpHeaders: resolved.headers);
     }
-    return mk.Media(Uri.file(filePath).toString());
+    final bounds = range ?? await playbackRangeFor(filePath);
+    return mk.Media(Uri.file(filePath).toString(), start: bounds.start, end: bounds.end);
   }
 
   bool get _isWindowsPlaying => _windowsPlayer?.state.playing ?? false;
 
   bool get _isBackendPlaying => Platform.isWindows ? _isWindowsPlaying : _player.playing;
 
-  Duration get _currentPosition =>
-      _playbackUnavailable ? Duration.zero : (Platform.isWindows ? _windowsPosition : _player.position);
+  Duration get _currentPosition => _playbackUnavailable
+      ? Duration.zero
+      : (Platform.isWindows
+            ? _activePlaybackRange.relative(_windowsPosition, sourceDuration: _windowsDuration)
+            : _player.position);
 
-  Duration? get _currentDuration =>
-      _playbackUnavailable ? null : (Platform.isWindows ? _windowsDuration : _player.duration);
+  Duration? get _currentDuration => _playbackUnavailable
+      ? null
+      : (Platform.isWindows ? _activePlaybackRange.durationOf(_windowsDuration) : _player.duration);
+
+  Duration get currentSourcePosition => _activePlaybackRange.source(_currentPosition);
+  PlaybackRange get currentPlaybackRange => _activePlaybackRange;
+  void _setActivePlaybackRange(PlaybackRange range) {
+    _activePlaybackRange = range;
+    playbackRangeNotifier.value = range;
+  }
+
+  Future<PlaybackRange> savedPlaybackRangeFor(String path) async => (await _playbackPreferenceStore).rangeFor(path);
+  Duration? get currentSourceDuration => Platform.isWindows
+      ? (_windowsDuration > Duration.zero ? _windowsDuration : _originalTrackDuration)
+      : _originalTrackDuration ?? _player.duration;
+  Duration sourcePositionFor(Duration relative) => _activePlaybackRange.source(relative);
+  Duration relativePositionFor(Duration source) =>
+      _activePlaybackRange.relative(source, sourceDuration: currentSourceDuration);
+
+  Future<Duration?> originalDurationFor(String path) async {
+    if (path.startsWith('http://') || path.startsWith('https://')) return null;
+    if (mediaItem.value?.id == path &&
+        _pendingStreamSourceGeneration != _loadGeneration &&
+        (Platform.isWindows || _activePlaybackRange.isFull || _originalTrackDuration != null) &&
+        currentSourceDuration != null &&
+        currentSourceDuration! > Duration.zero) {
+      return currentSourceDuration;
+    }
+    final metadata = await MetadataGod.readMetadata(file: path);
+    final ms = metadata.durationMs;
+    return ms == null || !ms.isFinite || ms <= 0 ? null : Duration(milliseconds: ms.round());
+  }
+
+  Future<PlaybackRange> playbackRangeFor(String path) async {
+    if (path.startsWith('http://') || path.startsWith('https://')) return PlaybackRange.full;
+    final saved = (await _playbackPreferenceStore).rangeFor(path);
+    if (saved.isFull) return saved;
+    Duration? duration;
+    try {
+      duration = await originalDurationFor(path);
+    } catch (_) {}
+    return saved.bounded(duration);
+  }
+
+  Future<void> _configureWindowsRange(mk.Player player, PlaybackRange range) async {
+    final platform = player.platform;
+    if (platform is mk.NativePlayer) {
+      // mpv retains start/end properties when a later Media has null bounds.
+      await platform.setProperty('start', (range.start.inMicroseconds / 1000000).toString());
+      await platform.setProperty('end', range.end == null ? 'none' : (range.end!.inMicroseconds / 1000000).toString());
+    }
+  }
+
+  Future<void> savePlaybackRange(String path, PlaybackRange range) async {
+    if (_syncControlLocked) return;
+    final selectedGeneration = _loadGeneration;
+    final store = await _playbackPreferenceStore;
+    final bounded = range.bounded(await originalDurationFor(path));
+    if (!await store.saveRange(path, bounded)) throw StateError('Could not save playback range.');
+    playbackRangeRevision.value++;
+    await store.clearPosition(path);
+    if (selectedGeneration != _loadGeneration) return;
+    await _reloadActivePlaybackRange(path);
+  }
+
+  Future<void> _reloadActivePlaybackRange(String path) async {
+    final selectedGeneration = _loadGeneration;
+    final item = mediaItem.value;
+    if (item?.id != path || _pendingRestoredTrack != null) return;
+    final sourcePosition = currentSourcePosition;
+    final playing = _isBackendPlaying;
+    final queue = _standaloneStreamQueue;
+    final queueIndex = _standaloneStreamQueueIndex;
+    await loadTrack(
+      path,
+      item!.title,
+      item.artist ?? '',
+      artworkUri: item.artUri,
+      standalone: standaloneModeNotifier.value,
+      standalonePlaylistNumber: _standalonePlaylistNumber,
+      standalonePlaylistIndex: _standalonePlaylistIndex,
+      playWhenReady: false,
+      preservePosition: false,
+    );
+    if (_loadGeneration != selectedGeneration + 1 || mediaItem.value?.id != path) return;
+    _standaloneStreamQueue = queue;
+    _standaloneStreamQueueIndex = queueIndex;
+    final relative = relativePositionFor(sourcePosition);
+    await seek(currentDuration != null && relative >= currentDuration! ? Duration.zero : relative);
+    if (playing && _loadGeneration == selectedGeneration + 1) await play();
+  }
+
+  /// Audition through an isolated backend while the real queue stays paused.
+  /// Any normal transport command invalidates preview ownership.
+  Future<void> previewPlaybackRange(String path, PlaybackRange range) async {
+    if (_syncControlLocked || _interruptions.blocked) return;
+    final owner = _loadGeneration;
+    final previousPreviewGeneration = _rangePreviewGeneration;
+    final wasPlaying = _isBackendPlaying || _resumeAfterRangePreview;
+    await stopPlaybackRangePreview(resume: false);
+    if (owner != _loadGeneration || _rangePreviewGeneration != previousPreviewGeneration + 1) return;
+    await pause();
+    if (owner != _loadGeneration ||
+        _rangePreviewGeneration != previousPreviewGeneration + 2 ||
+        _syncControlLocked ||
+        _interruptions.blocked) {
+      return;
+    }
+    final generation = ++_rangePreviewGeneration;
+    _rangePreviewOwner = owner;
+    _resumeAfterRangePreview = wasPlaying;
+    _previewRange = range;
+    playbackRangePreviewNotifier.value = PlaybackRangePreviewState(
+      path: path,
+      position: range.start,
+      playing: false,
+      loading: true,
+    );
+    void publish(Duration position, bool playing, {bool loading = false}) {
+      if (generation != _rangePreviewGeneration || owner != _loadGeneration) return;
+      playbackRangePreviewNotifier.value = PlaybackRangePreviewState(
+        path: path,
+        position: position,
+        playing: playing,
+        loading: loading,
+      );
+    }
+
+    try {
+      if (Platform.isWindows) {
+        final player = mk.Player();
+        _rangePreviewWindows = player;
+        _rangePreviewPositionSubscription = player.stream.position.listen(
+          (position) => publish(position, player.state.playing && !player.state.completed),
+        );
+        _rangePreviewPlayingSubscription = player.stream.playing.listen(
+          (playing) => publish(player.state.position, playing && !player.state.completed),
+        );
+        _rangePreviewCompletedSubscription = player.stream.completed.listen((completed) {
+          if (completed) publish(range.end ?? player.state.duration, false);
+        });
+        await player.setVolume((volumeNotifier.value * 100).clamp(0, 100));
+        await _configureWindowsRange(player, range);
+        if (generation != _rangePreviewGeneration || owner != _loadGeneration) return;
+        await player.open(await _buildMediaKitMedia(path, range: range), play: false);
+        if (generation == _rangePreviewGeneration && owner == _loadGeneration) await player.play();
+      } else {
+        final player = AudioPlayer(handleInterruptions: false, handleAudioSessionActivation: !Platform.isAndroid);
+        _rangePreviewAndroid = player;
+        _rangePreviewPositionSubscription = player.positionStream.listen(
+          (position) =>
+              publish(range.source(position), player.playing && player.processingState != ProcessingState.completed),
+        );
+        _rangePreviewPlayingSubscription = player.playerStateStream.listen(
+          (state) => publish(
+            range.source(player.position),
+            state.playing && state.processingState != ProcessingState.completed,
+            loading: state.processingState == ProcessingState.loading,
+          ),
+        );
+        await player.setVolume(volumeNotifier.value.clamp(0, 1));
+        await player.setAudioSource(await _buildAudioSource(path, range: range));
+        if (Platform.isAndroid && generation == _rangePreviewGeneration && owner == _loadGeneration) {
+          final session = _androidAudioSession ?? await AudioSession.instance;
+          if (!await session.setActive(true)) throw StateError('Audio focus unavailable.');
+        }
+        if (generation == _rangePreviewGeneration && owner == _loadGeneration && !_interruptions.blocked) {
+          unawaited(player.play().catchError((Object _) {}));
+        }
+      }
+    } catch (_) {
+      if (generation == _rangePreviewGeneration) await stopPlaybackRangePreview();
+      rethrow;
+    }
+  }
+
+  Future<void> stopPlaybackRangePreview({bool resume = true}) async {
+    final generation = ++_rangePreviewGeneration;
+    final owner = _rangePreviewOwner;
+    final windows = _rangePreviewWindows;
+    final android = _rangePreviewAndroid;
+    final restore =
+        resume && _resumeAfterRangePreview && _rangePreviewOwner == _loadGeneration && !_interruptions.blocked;
+    _rangePreviewWindows = null;
+    _rangePreviewAndroid = null;
+    _rangePreviewOwner = null;
+    _resumeAfterRangePreview = false;
+    playbackRangePreviewNotifier.value = null;
+    final positionSub = _rangePreviewPositionSubscription;
+    final playingSub = _rangePreviewPlayingSubscription;
+    final completedSub = _rangePreviewCompletedSubscription;
+    _rangePreviewPositionSubscription = null;
+    _rangePreviewPlayingSubscription = null;
+    _rangePreviewCompletedSubscription = null;
+    await positionSub?.cancel();
+    await playingSub?.cancel();
+    await completedSub?.cancel();
+    if (windows != null) {
+      await windows.dispose().catchError((Object error) {
+        debugPrint('[PlayerHandler] Preview cleanup failed: $error');
+      });
+    }
+    if (android != null) {
+      await android.dispose().catchError((Object error) {
+        debugPrint('[PlayerHandler] Preview cleanup failed: $error');
+      });
+    }
+    if (restore && generation == _rangePreviewGeneration && owner == _loadGeneration && !_interruptions.blocked) {
+      await play();
+    }
+  }
 
   Duration get currentPosition => _currentPosition;
+
+  Future<void> seekPlaybackRangePreview(Duration sourcePosition) async {
+    final generation = _rangePreviewGeneration;
+    final range = _previewRange;
+    final relative = range.relative(sourcePosition);
+    final windows = _rangePreviewWindows;
+    final android = _rangePreviewAndroid;
+    if (generation != _rangePreviewGeneration) return;
+    if (windows != null) await windows.seek(range.source(relative));
+    if (android != null) await android.seek(relative);
+  }
 
   Duration? get currentDuration => _currentDuration;
 
@@ -1453,12 +1711,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         updatePosition: streamSourcePending
             ? Duration.zero
             : Platform.isWindows
-            ? _windowsPosition
+            ? _currentPosition
             : _player.position,
         bufferedPosition: streamSourcePending
             ? Duration.zero
             : Platform.isWindows
-            ? _windowsBufferedPosition
+            ? _activePlaybackRange.relative(_windowsBufferedPosition, sourceDuration: _windowsDuration)
             : _player.bufferedPosition,
         speed: Platform.isWindows ? speedNotifier.value : _player.speed,
         queueIndex: Platform.isWindows ? 0 : _player.currentIndex,
@@ -1469,7 +1727,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   // ─── Saved state ──────────────────────────────────────────────────
   Future<void> reloadPortablePreferences() async {
     _playbackPreferenceStore = PlaybackPreferenceStore.load();
+    playbackRangeRevision.value++;
     await _initSavedState(preload: false);
+    final item = mediaItem.value;
+    if (item != null && !item.id.startsWith('http') && _pendingRestoredTrack == null) {
+      await _reloadActivePlaybackRange(item.id);
+    }
   }
 
   Future<void> _initSavedState({bool preload = true}) async {
@@ -2153,6 +2416,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     }
   }
 
+  Duration _incomingCrossfadeDuration(Duration fade, Duration? length, Duration position) {
+    if (length == null || length <= position) return fade;
+    final maximum = Duration(microseconds: (length - position).inMicroseconds ~/ 2);
+    return fade < maximum ? fade : maximum;
+  }
+
   Future<void> _performWindowsCrossfade(
     int generation,
     Duration fade,
@@ -2169,16 +2438,24 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _attachWindowsPlayer(incoming);
     var adopted = false;
     try {
-      final media = await _buildMediaKitMedia(target.path);
+      final range = await playbackRangeFor(target.path);
+      Duration? originalDuration;
+      if (!range.isFull) {
+        try {
+          originalDuration = await originalDurationFor(target.path);
+        } catch (_) {}
+      }
+      final media = await _buildMediaKitMedia(target.path, range: range);
       if (generation != _crossfadeGeneration) return;
+      await _configureWindowsRange(incoming, range);
       await incoming.open(media, play: false);
       final incomingEqualizerApplied = await _applyWindowsPlaybackAdjustments(
         incoming,
         incomingAdjustments,
         updateSupport: false,
       );
-      final resume = await _incomingResumePosition(target.path, incoming.state.duration);
-      if (resume != null) await incoming.seek(resume);
+      final resume = await _incomingResumePosition(target.path, range.durationOf(incoming.state.duration));
+      if (resume != null) await incoming.seek(range.source(resume));
       await _setWindowsOutputVolume(
         incoming,
         0,
@@ -2189,31 +2466,38 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       );
       if (generation != _crossfadeGeneration || !identical(outgoing, _windowsPlayer)) return;
       await incoming.play();
-      final completed = await _runEqualPowerFade(generation, _availableCrossfadeDuration(fade), (
-        outgoingVolume,
-        incomingVolume,
-      ) async {
-        await Future.wait([
-          _setWindowsOutputVolume(
-            outgoing,
-            outgoingVolume,
-            outgoingAdjustments.equalizer,
-            outgoingEqualizerApplied,
-            outgoingNormalization,
-            outgoingAdjustments.volumePercent,
-          ),
-          _setWindowsOutputVolume(
-            incoming,
-            incomingVolume,
-            incomingAdjustments.equalizer,
-            incomingEqualizerApplied,
-            incomingNormalization,
-            incomingAdjustments.volumePercent,
-          ),
-        ]);
-      });
+      final completed = await _runEqualPowerFade(
+        generation,
+        _incomingCrossfadeDuration(
+          _availableCrossfadeDuration(fade),
+          range.durationOf(incoming.state.duration),
+          resume ?? Duration.zero,
+        ),
+        (outgoingVolume, incomingVolume) async {
+          await Future.wait([
+            _setWindowsOutputVolume(
+              outgoing,
+              outgoingVolume,
+              outgoingAdjustments.equalizer,
+              outgoingEqualizerApplied,
+              outgoingNormalization,
+              outgoingAdjustments.volumePercent,
+            ),
+            _setWindowsOutputVolume(
+              incoming,
+              incomingVolume,
+              incomingAdjustments.equalizer,
+              incomingEqualizerApplied,
+              incomingNormalization,
+              incomingAdjustments.volumePercent,
+            ),
+          ]);
+        },
+      );
       if (!completed || !identical(outgoing, _windowsPlayer)) return;
 
+      _setActivePlaybackRange(range);
+      _originalTrackDuration = originalDuration;
       _windowsPlayer = incoming;
       adopted = true;
       _windowsPosition = incoming.state.position;
@@ -2264,7 +2548,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _attachJustAudioPlayer(incoming);
     var adopted = false;
     try {
-      final source = await _buildAudioSource(target.path);
+      final range = await playbackRangeFor(target.path);
+      Duration? originalDuration;
+      if (!range.isFull) {
+        try {
+          originalDuration = await originalDurationFor(target.path);
+        } catch (_) {}
+      }
+      final source = await _buildAudioSource(target.path, range: range);
       if (generation != _crossfadeGeneration) return;
       await incoming.setAudioSource(source);
       await incoming.setSpeed(incomingAdjustments.speed);
@@ -2291,33 +2582,36 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       // zero volume and prevent adoption until the entire next track ended.
       await _startJustAudioPlayer(incoming, _loadGeneration);
       if (generation != _crossfadeGeneration || !_playbackRequested) return;
-      final completed = await _runEqualPowerFade(generation, _availableCrossfadeDuration(fade), (
-        outgoingVolume,
-        incomingVolume,
-      ) async {
-        await Future.wait([
-          _setJustAudioOutputVolume(
-            outgoing,
-            outgoingLoudnessEnhancer,
-            outgoingVolume,
-            outgoingAdjustments.equalizer,
-            outgoingEqualizerApplied,
-            outgoingNormalization,
-            outgoingAdjustments.volumePercent,
-          ),
-          _setJustAudioOutputVolume(
-            incoming,
-            backend.loudnessEnhancer,
-            incomingVolume,
-            incomingAdjustments.equalizer,
-            incomingEqualizerApplied,
-            incomingNormalization,
-            incomingAdjustments.volumePercent,
-          ),
-        ]);
-      });
+      final completed = await _runEqualPowerFade(
+        generation,
+        _incomingCrossfadeDuration(_availableCrossfadeDuration(fade), incoming.duration, resume ?? Duration.zero),
+        (outgoingVolume, incomingVolume) async {
+          await Future.wait([
+            _setJustAudioOutputVolume(
+              outgoing,
+              outgoingLoudnessEnhancer,
+              outgoingVolume,
+              outgoingAdjustments.equalizer,
+              outgoingEqualizerApplied,
+              outgoingNormalization,
+              outgoingAdjustments.volumePercent,
+            ),
+            _setJustAudioOutputVolume(
+              incoming,
+              backend.loudnessEnhancer,
+              incomingVolume,
+              incomingAdjustments.equalizer,
+              incomingEqualizerApplied,
+              incomingNormalization,
+              incomingAdjustments.volumePercent,
+            ),
+          ]);
+        },
+      );
       if (!completed || !identical(outgoing, _player)) return;
 
+      _setActivePlaybackRange(range);
+      _originalTrackDuration = originalDuration;
       _player = incoming;
       _loudnessEnhancer = backend.loudnessEnhancer;
       _androidEqualizer = backend.equalizer;
@@ -2420,6 +2714,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   @override
   Future<void> play() async {
+    await stopPlaybackRangePreview(resume: false);
     if (_syncControlLocked) return;
     final restored = _pendingRestoredTrack;
     if (restored != null) {
@@ -2480,6 +2775,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   @override
   Future<void> pause() async {
+    await stopPlaybackRangePreview(resume: false);
     if (_syncControlLocked) return;
     _playbackRequested = false;
     _playbackHealthWatchdog.cancel();
@@ -2509,6 +2805,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   @override
   Future<void> seek(Duration position) async {
+    await stopPlaybackRangePreview(resume: false);
     if (_syncControlLocked || _playbackUnavailable || _pendingStreamSourceGeneration == _loadGeneration) return;
     final generation = ++_seekGeneration;
     final sourceGeneration = _loadGeneration;
@@ -2566,9 +2863,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       // Both backends preserve play/pause during seek. Use native buffering
       // state; a synthetic true value can stick when no false event follows.
       final player = _windowsPlayer!;
-      _windowsPosition = position;
+      final sourcePosition = _activePlaybackRange.source(position);
+      _windowsPosition = sourcePosition;
       _updatePlaybackState();
-      await player.seek(position);
+      await player.seek(sourcePosition);
       if (_loadGeneration != sourceGeneration || !identical(player, _windowsPlayer)) return;
       _windowsIsBuffering = player.state.buffering;
       _windowsIsCompleted = player.state.completed;
@@ -2615,6 +2913,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   @override
   Future<void> stop() async {
+    await stopPlaybackRangePreview(resume: false);
     _playbackRequested = false;
     _playbackHealthWatchdog.cancel();
     _cancelPendingSeeks();
@@ -2721,15 +3020,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     int? standalonePlaylistIndex,
     TrackTransitionDirection transitionDirection = TrackTransitionDirection.none,
     bool preserveFailureHistory = false,
+    bool playWhenReady = true,
+    bool preservePosition = true,
   }) async {
     if (_syncControlLocked) return;
+    final stopPreview = stopPlaybackRangePreview(resume: false);
     final interruptSource =
         // Each explicit track load begins a new listening session.
         _activeTrackLoadGeneration != null ||
         _currentTrackIsStream ||
         filePath.startsWith('http://') ||
         filePath.startsWith('https://');
-    final outgoingPositionSave = saveCurrentPlaybackPosition();
+    final outgoingPositionSave = preservePosition ? saveCurrentPlaybackPosition() : Future<void>.value();
     ListeningStatistics.instance.onSessionEnded();
     final generation = ++_loadGeneration;
     _cancelPendingSeeks();
@@ -2739,7 +3041,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _crossfadeInProgress = false;
     _pendingStreamSourceGeneration = generation;
     _cancelSupersededAndroidStreams(filePath);
-    _playbackRequested = true;
+    _playbackRequested = playWhenReady;
     _playbackUnavailable = false;
     _playbackHealthWatchdog.cancel();
     _handledFailureGeneration = null;
@@ -2750,6 +3052,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _activeTrackLoadGeneration = generation;
     _lastTrackLoadFailure = null;
     try {
+      await stopPreview;
+      if (_loadGeneration != generation) return;
       if (Platform.isAndroid && interruptSource) {
         // Stop interrupts obsolete preparation and discards its buffered audio.
         try {
@@ -2780,6 +3084,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         standalonePlaylistNumber: standalonePlaylistNumber,
         standalonePlaylistIndex: standalonePlaylistIndex,
         transitionDirection: transitionDirection,
+        restorePosition: preservePosition,
       );
     } finally {
       if (_activeTrackLoadGeneration == generation) {
@@ -2804,6 +3109,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     required int? standalonePlaylistNumber,
     required int? standalonePlaylistIndex,
     required TrackTransitionDirection transitionDirection,
+    required bool restorePosition,
   }) async {
     final myGen = generation;
     await _seekOperations.idle;
@@ -2831,7 +3137,16 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_loadGeneration != myGen) return;
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
     final adjustments = await _adjustmentsForTrack(filePath);
+    final range = await playbackRangeFor(filePath);
+    Duration? originalDuration;
+    if (!range.isFull) {
+      try {
+        originalDuration = await originalDurationFor(filePath);
+      } catch (_) {}
+    }
     if (_loadGeneration != myGen) return;
+    _setActivePlaybackRange(range);
+    _originalTrackDuration = originalDuration;
 
     _currentTrackIsStream = isStream;
     _pendingStreamSourceGeneration = myGen;
@@ -2870,7 +3185,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (Platform.isWindows) {
         mk.Media media;
         try {
-          media = await _buildMediaKitMedia(filePath);
+          media = await _buildMediaKitMedia(filePath, range: range);
         } catch (e) {
           if (_loadGeneration != myGen) return;
           debugPrint('[PlayerHandler] Failed to build media_kit URI for "$filePath": $e');
@@ -2893,7 +3208,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           // Keep source replacement and playback start in one media_kit
           // command. A stale open may finish after a newer selection; pause
           // it here, then let the queued replacement open the selected song.
-          await player.open(media, play: true);
+          await _configureWindowsRange(player, range);
+          if (_loadGeneration != myGen) return;
+          await player.open(media, play: _playbackRequested);
           if (_loadGeneration != myGen || !_playbackRequested) await player.pause();
           if (_loadGeneration == myGen) {
             _windowsDuration = player.state.duration;
@@ -2903,7 +3220,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       } else {
         AudioSource source;
         try {
-          source = await _buildAudioSource(filePath);
+          source = await _buildAudioSource(filePath, range: range);
         } catch (e) {
           if (_loadGeneration != myGen) return;
           debugPrint('[PlayerHandler] Failed to build audio source for "$filePath": $e');
@@ -2923,7 +3240,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _durationController.add(_currentDuration);
       await _applyPlaybackAdjustments(adjustments, persist: false);
       if (_loadGeneration != myGen) return;
-      await _restorePlaybackPosition(filePath, myGen);
+      if (restorePosition) await _restorePlaybackPosition(filePath, myGen);
       if (_loadGeneration != myGen) return;
       if (!Platform.isWindows && _playbackRequested) {
         await _startJustAudioPlayer(_player, myGen);
@@ -2978,7 +3295,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (isStream && _standaloneStreamQueue.isNotEmpty) {
         unawaited(_prefetchAdjacentStreams(myGen));
       } else {
-        unawaited(_prefetchPlaylistNeighborStreams(myGen));
+        unawaited(
+          _prefetchPlaylistNeighborStreams(myGen).catchError((Object error) {
+            if (!_interruptions.disposed) debugPrint('[PlayerHandler] Optional neighbor prefetch failed: $error');
+          }),
+        );
       }
       final loadedFromOutsidePlaylist = standaloneModeNotifier.value && _standalonePlaylistNumber == null;
       unawaited(
@@ -3808,6 +4129,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    await stopPlaybackRangePreview(resume: false);
     _playbackRequested = false;
     _interruptions.dispose();
     await _interruptionSubscription?.cancel();
@@ -3837,6 +4159,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     await DiscordPresenceService().dispose();
     await _positionController.close();
     await _durationController.close();
+    playbackRangeNotifier.dispose();
+    playbackRangeRevision.dispose();
+    playbackRangePreviewNotifier.dispose();
     volumeNotifier.dispose();
     trackVolumePercentNotifier.dispose();
     speedNotifier.dispose();

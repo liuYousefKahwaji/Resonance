@@ -9,6 +9,7 @@ import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/services/backup_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
+import 'package:resonance/core/audio/playback_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -63,6 +64,10 @@ void main() {
     final sort = await files.playlistSortState(1);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('long_track_positions_v1', jsonEncode({'file:${a.path.toLowerCase()}': 123000}));
+    await (await PlaybackPreferenceStore.load()).saveRange(
+      a.path,
+      const PlaybackRange(start: Duration(seconds: 10), end: Duration(seconds: 30)),
+    );
     final preview = await backups.previewExport(BackupMode.everything, includeAudio: true);
     expect(preview.audioCount, 2);
     expect(preview.unresolved, 0);
@@ -79,6 +84,10 @@ void main() {
     expect((await files.playlistSortState(1)).seed, sort.seed);
     expect((await files.playlistSortState(1)).addedOrder, sort.addedOrder.map((path) => mapping[path]).toList());
     expect(await files.readPlaylistTracks(0), [mapping[a.path]]);
+    expect(
+      (await PlaybackPreferenceStore.load()).rangeFor(mapping[a.path]!),
+      const PlaybackRange(start: Duration(seconds: 10), end: Duration(seconds: 30)),
+    );
     expect((await const TrackSourceRepository().getSourceForTrack(mapping[a.path]!))!.youtubeVideoId, 'abcdefghijk');
     expect(
       jsonDecode(prefs.getString('long_track_positions_v1')!),

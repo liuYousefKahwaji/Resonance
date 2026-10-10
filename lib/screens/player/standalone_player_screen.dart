@@ -1,5 +1,7 @@
 import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
 import 'package:resonance/l10n/app_strings.dart';
+import 'package:resonance/widgets/player/playback_range_dialog.dart';
+import 'package:resonance/widgets/player/playback_range_indicator.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'dart:io';
@@ -594,6 +596,17 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                     ],
                   ),
                   actions: [
+                    if (item != null && !item.id.startsWith('http') && !widget.syncPeer)
+                      IconButton(
+                        tooltip: handler.currentPlaybackRange.isFull
+                            ? context.tr('Trim playback')
+                            : playbackRangeLabel(context, handler.currentPlaybackRange),
+                        icon: Icon(
+                          Icons.content_cut_rounded,
+                          color: handler.currentPlaybackRange.isFull ? null : theme.colorScheme.primary,
+                        ),
+                        onPressed: () => showPlaybackRangeDialog(context, handler, item.id, item.title),
+                      ),
                     if (!widget.playlistTrack &&
                         !widget.syncPeer &&
                         item != null &&
@@ -854,7 +867,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
   @override
   void initState() {
     super.initState();
-    _anchorPosition = widget.handler.currentPosition;
+    _anchorPosition = widget.handler.currentSourcePosition;
     _anchorClock = _interpolationClock.elapsed;
     _anchorPlaying = widget.handler.playbackVisualNotifier.value.playing;
     _anchorSpeed = widget.handler.speedNotifier.value;
@@ -872,7 +885,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
       oldWidget.handler.playbackVisualNotifier.removeListener(_onPlaybackVisualChanged);
       oldWidget.handler.speedNotifier.removeListener(_onPlaybackSpeedChanged);
       unawaited(_positionSubscription?.cancel());
-      _anchorPosition = widget.handler.currentPosition;
+      _anchorPosition = widget.handler.currentSourcePosition;
       _anchorClock = _interpolationClock.elapsed;
       _anchorPlaying = widget.handler.playbackVisualNotifier.value.playing;
       _anchorSpeed = widget.handler.speedNotifier.value;
@@ -926,7 +939,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
         title: item.title,
         artist: item.artist ?? '',
         album: item.album ?? '',
-        duration: item.duration,
+        duration: widget.handler.currentSourceDuration ?? item.duration,
         forceRefresh: forceRefresh,
       );
       if (!mounted || generation != _generation) return;
@@ -952,7 +965,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
         item.artist,
         item.title,
       ].whereType<String>().map((part) => part.trim()).where((part) => part.isNotEmpty).join(' '),
-      targetDuration: item.duration,
+      targetDuration: widget.handler.currentSourceDuration ?? item.duration,
     );
     final candidate = Platform.isWindows
         ? await showDialog<LrclibCandidate>(
@@ -986,7 +999,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
         title: item.title,
         artist: item.artist ?? '',
         album: item.album ?? '',
-        duration: item.duration,
+        duration: widget.handler.currentSourceDuration ?? item.duration,
         candidate: candidate,
       );
       if (!mounted) return;
@@ -1051,6 +1064,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
   }
 
   void _onPosition(Duration position) {
+    position = widget.handler.sourcePositionFor(position);
     final predicted = _interpolatedPosition();
     final drift = position - predicted;
     if (!_anchorPlaying || drift.abs() > const Duration(milliseconds: 220)) {
@@ -1150,7 +1164,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
   Future<void> _seekLine(LyricLine line) async {
     if (line.start == null) return;
     setState(() => _followState = _LyricsFollowState.following);
-    await widget.handler.seek(line.start!);
+    await widget.handler.seek(widget.handler.relativePositionFor(line.start!));
     _scrollToLine(_activeLine);
   }
 

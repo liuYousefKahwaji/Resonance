@@ -1,5 +1,27 @@
 /// Arabic UI translations. Placeholders match the English message templates.
 const arabicMessages = <String, String>{
+  'Choose the part you want to hear. Your file stays unchanged.':
+      'اختر الجزء الذي تريد سماعه. يبقى الملف الأصلي كما هو.',
+  'Drag the edges, or tap the waveform to choose a position.': 'اسحب الطرفين أو اضغط على الموجة لاختيار موضع.',
+  'Use current position': 'استخدام الموضع الحالي',
+  'Show full song': 'عرض المقطع كاملًا',
+  'Zoom to selection': 'تكبير الجزء المحدد',
+  'Trimmed: {0} – {1}': 'جزء التشغيل: {0} – {1}',
+  'End of song': 'نهاية المقطع',
+  'Trim playback': 'تحديد جزء التشغيل',
+  'Play only this section, in every playlist. Your file stays unchanged.':
+      'شغّل هذا الجزء فقط في جميع قوائم التشغيل. يبقى الملف الأصلي كما هو.',
+  'Start time': 'وقت البداية',
+  'End time': 'وقت النهاية',
+  'Song length: {0}': 'مدة المقطع: {0}',
+  'Selected length: {0}': 'مدة الجزء المحدد: {0}',
+  'Stop preview': 'إيقاف المعاينة',
+  'Preview': 'معاينة',
+  'Reset to full song': 'إعادة المقطع كاملًا',
+  'Could not read the song length.': 'تعذرت قراءة مدة المقطع.',
+  'Choose an end time after the start, within the song.': 'اختر وقت نهاية بعد البداية وضمن مدة المقطع.',
+  'Could not preview this section.': 'تعذرت معاينة هذا الجزء.',
+  'Could not save playback range.': 'تعذر حفظ جزء التشغيل.',
   'Finish or stop downloads before deleting playlists.': 'أكمل التنزيلات أو أوقفها قبل حذف قوائم التشغيل.',
   'Favorite listening hour: {0}': 'ساعة الاستماع المفضلة: {0}',
   "Browse library": "تصفح المكتبة",

@@ -5,11 +5,38 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/core/audio/playback_range.dart';
+import 'package:resonance/widgets/player/cut_slider_track_shape.dart';
 import 'package:resonance/widgets/player/seek_bar.dart';
 import 'package:resonance/widgets/player/volume_bar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  testWidgets('a cut keeps the full timeline visible and confines seeking to its section', (tester) async {
+    final handler = _FakePlayerHandler();
+    handler.playbackRangeNotifier.value = const PlaybackRange(
+      start: Duration(seconds: 40),
+      end: Duration(seconds: 140),
+    );
+    handler.mediaItem.add(const MediaItem(id: 'song.mp3', title: 'Cut song'));
+    await _showSeekBar(tester, handler);
+    expect(find.text('01:10'), findsOneWidget);
+    expect(find.text('03:20'), findsOneWidget);
+    expect(find.byKey(const Key('active-trim-indicator')), findsOneWidget);
+    expect(tester.widget<SliderTheme>(find.byType(SliderTheme)).data.trackShape, isA<CutSliderTrackShape>());
+    final slider = tester.widget<Slider>(find.byType(Slider));
+    expect(slider.value, closeTo(.35, .001));
+    slider.onChanged!(.95);
+    slider.onChangeEnd!(.95);
+    await tester.pump();
+    expect(handler.lastSeek!.inMilliseconds, closeTo(99999, 1));
+    slider.onChanged!(.05);
+    slider.onChangeEnd!(.05);
+    await tester.pump();
+    expect(handler.lastSeek, Duration.zero);
+    await tester.pumpWidget(const SizedBox());
+    await handler.disposeTest();
+  });
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   testWidgets('RTL does not reverse timeline or volume drag coordinates', (tester) async {
@@ -114,6 +141,12 @@ Future<void> _showSeekBar(WidgetTester tester, _FakePlayerHandler handler) async
 }
 
 class _FakePlayerHandler extends Fake implements PlayerHandler {
+  @override
+  final playbackRangeNotifier = ValueNotifier<PlaybackRange>(PlaybackRange.full);
+  @override
+  PlaybackRange get currentPlaybackRange => playbackRangeNotifier.value;
+  @override
+  Duration get currentSourceDuration => const Duration(seconds: 200);
   final _base = BaseAudioHandler();
   final positions = StreamController<Duration>.broadcast();
   final durations = StreamController<Duration?>.broadcast();

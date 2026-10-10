@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/core/audio/playback_range.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/widgets/library/track_list.dart';
 import 'package:resonance/widgets/library/track_tile.dart';
@@ -94,6 +95,11 @@ void main() {
 }
 
 class _FakePlayerHandler implements PlayerHandler {
+  @override
+  final playbackRangeRevision = ValueNotifier<int>(0);
+  @override
+  Future<PlaybackRange> savedPlaybackRangeFor(String path) async => PlaybackRange.full;
+
   @override
   final ValueNotifier<PlaybackVisualState> playbackVisualNotifier = ValueNotifier(const PlaybackVisualState());
 

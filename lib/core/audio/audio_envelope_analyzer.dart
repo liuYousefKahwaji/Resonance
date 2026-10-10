@@ -73,6 +73,9 @@ AudioEnvelope audioEnvelopeFromPcm16(
 }
 
 class AudioEnvelopeAnalyzer {
+  AudioEnvelopeAnalyzer({this.cacheNamespace = 'resonance_pulse', this.sampleRate = _analysisSampleRate});
+  final String cacheNamespace;
+  final int sampleRate;
   final Map<String, ({int modified, AudioEnvelope envelope})> _memoryCache = {};
   Process? _windowsProcess;
   int? _androidSessionId;
@@ -97,7 +100,7 @@ class AudioEnvelopeAnalyzer {
     if (cached != null && cached.modified == modified) return cached.envelope;
 
     try {
-      final cacheDirectory = Directory(p.join((await getTemporaryDirectory()).path, 'resonance_pulse'));
+      final cacheDirectory = Directory(p.join((await getTemporaryDirectory()).path, cacheNamespace));
       await cacheDirectory.create(recursive: true);
       final pcmFile = File(p.join(cacheDirectory.path, '${filePath.hashCode.abs()}_$modified.pcm'));
       if (!await pcmFile.exists() || await pcmFile.length() == 0) {
@@ -110,7 +113,7 @@ class AudioEnvelopeAnalyzer {
         if (!decoded) return null;
       }
       if (request != _request || !await pcmFile.exists()) return null;
-      final envelope = audioEnvelopeFromPcm16(await pcmFile.readAsBytes());
+      final envelope = audioEnvelopeFromPcm16(await pcmFile.readAsBytes(), inputSampleRate: sampleRate);
       if (request != _request || envelope.samples.isEmpty) return null;
       if (_memoryCache.length >= 16) _memoryCache.remove(_memoryCache.keys.first);
       _memoryCache[filePath] = (modified: modified, envelope: envelope);
@@ -170,7 +173,7 @@ class AudioEnvelopeAnalyzer {
     '-ac',
     '1',
     '-ar',
-    '$_analysisSampleRate',
+    '$sampleRate',
     '-f',
     's16le',
     '-y',

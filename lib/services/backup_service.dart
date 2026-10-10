@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:resonance/core/audio/playback_range.dart';
 import 'dart:io';
 import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
@@ -60,6 +61,7 @@ class BackupService {
   static const dataKeys = {
     'long_track_positions_v1',
     'per_track_playback_settings_v2',
+    'per_track_playback_ranges_v1',
     'resonance_track_sources_v1',
     'track_metadata_cache_v2',
     'library_album_metadata_v1',
@@ -231,6 +233,11 @@ class BackupService {
           if (value is! List) throw const FormatException('Invalid history');
         } else if (value is! Map) {
           throw const FormatException('Invalid library data');
+        }
+        if (entry.key == 'per_track_playback_ranges_v1' &&
+            (!(value as Map).keys.every((key) => key is String && !key.startsWith('http')) ||
+                !value.values.every(PlaybackRange.validJson))) {
+          throw const FormatException('Invalid playback ranges');
         }
         if (entry.key == ListeningStatistics.storageKey) ListeningStatistics.validateData(value as Map);
       }

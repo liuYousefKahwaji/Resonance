@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'equalizer_settings.dart';
 export 'equalizer_settings.dart';
+import 'playback_range.dart';
+export 'playback_range.dart';
 
 enum PlaybackSettingsScope { global, perTrack }
 
@@ -108,14 +110,17 @@ class PlaybackPreferenceStore {
   static const _adjustmentsKey = 'per_track_playback_settings_v2';
   static const _legacyAdjustmentsKey = 'per_track_playback_settings_v1';
   static const _maximumEntries = 512;
+  static const rangesKey = 'per_track_playback_ranges_v1';
 
   final SharedPreferences _preferences;
+  Map<String, PlaybackRange> _ranges;
+  Future<void> _rangeWriteQueue = Future<void>.value();
   Map<String, int> _positions;
   Map<String, PlaybackAdjustments> _adjustments;
   Future<void> _positionWriteQueue = Future<void>.value();
   Future<void> _adjustmentWriteQueue = Future<void>.value();
 
-  PlaybackPreferenceStore._(this._preferences, this._positions, this._adjustments);
+  PlaybackPreferenceStore._(this._preferences, this._positions, this._adjustments, this._ranges);
 
   static Future<PlaybackPreferenceStore> load({SharedPreferences? preferences}) async {
     final prefs = preferences ?? await SharedPreferences.getInstance();
@@ -123,7 +128,48 @@ class PlaybackPreferenceStore {
       prefs,
       _decodePositions(prefs.getString(_positionsKey)),
       _decodeAdjustments(prefs.getString(_adjustmentsKey) ?? prefs.getString(_legacyAdjustmentsKey)),
+      _decodeRanges(prefs.getString(rangesKey)),
     );
+  }
+
+  PlaybackRange rangeFor(String source) => _ranges[playbackTrackIdentity(source)] ?? PlaybackRange.full;
+
+  Future<bool> saveRange(String source, PlaybackRange range) {
+    if (source.startsWith('http://') || source.startsWith('https://')) {
+      return Future.error(ArgumentError('Playback ranges require a local file.'));
+    }
+    if (range.bounded(null) != range) return Future.error(ArgumentError('Invalid playback range.'));
+    final operation = _rangeWriteQueue.then((_) async {
+      final updated = Map<String, PlaybackRange>.from(_ranges);
+      final identity = playbackTrackIdentity(source);
+      if (range.isFull) {
+        updated.remove(identity);
+      } else {
+        updated[identity] = range;
+      }
+      final written = await _preferences.setString(
+        rangesKey,
+        jsonEncode({for (final entry in updated.entries) entry.key: entry.value.toJson()}),
+      );
+      if (written) _ranges = updated;
+      return written;
+    });
+    _rangeWriteQueue = operation.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return operation;
+  }
+
+  static Map<String, PlaybackRange> _decodeRanges(String? encoded) {
+    try {
+      final decoded = jsonDecode(encoded ?? '{}');
+      if (decoded is! Map) return {};
+      return {
+        for (final entry in decoded.entries)
+          if (entry.key is String && PlaybackRange.validJson(entry.value))
+            entry.key as String: PlaybackRange.fromJson(entry.value),
+      };
+    } catch (_) {
+      return {};
+    }
   }
 
   Duration? positionFor(String source) {
