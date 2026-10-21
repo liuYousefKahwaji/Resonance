@@ -47,12 +47,14 @@ The working tree may contain features intended for the next release. See the rel
 - Crossfade automatic track changes and resume long tracks from their saved position.
 - Handle Android audio interruptions so music resumes only when appropriate, and pause when headphones disconnect.
 - Select a Windows audio output device; Android continues to use system audio routing.
+- Share music and your microphone in Windows voice chats from the microphone button beside volume.
 - Control playback from Android notifications, widgets, Quick Settings, Windows media keys, taskbar controls, tray controls, hotkeys, and Discord Companion shortcuts.
 - Browse saved playlists and control playback through Android Auto on a connected phone.
 
 ### YouTube and YouTube Music
 
-- Search YouTube by title, artist, album, or URL with quick previews and engagement counts.
+- Search **YouTube Music** for songs or **YouTube** for videos, with quick previews and engagement counts. The selected source is remembered.
+- Search results and artist pages show available release/upload dates, using recent labels such as **Yesterday** and full dates for older tracks. Missing dates load independently of results and playback.
 - Play a result in a temporary queue, add it as a stream, or download it into a playlist.
 - Convert an existing streamed playlist entry into a local download from its three-dot menu while preserving its position.
 - Display streamed artwork immediately at thumbnail quality, then crossfade to a higher-resolution version when it is ready.
@@ -102,6 +104,16 @@ The History button lives in the main header beside Settings.
 - **Resonance** records a local file after three seconds of genuine forward playback. Replaying it moves it to the top. Streams are excluded, the list is capped at 100 distinct tracks, and clearing history never deletes audio.
 
 Local history begins when a build containing the feature is installed; earlier plays cannot be reconstructed.
+
+## Windows voice chat
+
+Click the microphone beside the volume bar to share music and your microphone together. Install [VB-CABLE](https://vb-audio.com/Cable/) once, then choose **CABLE Output** as the microphone in Discord, your game, or another chat app. Keep headphones as the chat app's speakers and Resonance's usual output. The panel remembers your audio devices and has separate music and microphone levels; Resonance's regular volume changes only what you hear. **Hear myself** is optional and off by default. Sharing starts off on each app launch. Turn off chat noise suppression or automatic microphone volume if they distort the music.
+
+If shared music has a problem, your microphone stays active; **Retry music** reconnects the music output.
+
+### Launch on startup
+
+On Windows, enable **Settings → System Tray → Launch on startup** to open Resonance when you sign in. The app opens visibly even with tray mode enabled. Turn the option off to remove the startup entry.
 
 ## YouTube access
 

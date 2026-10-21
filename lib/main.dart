@@ -80,6 +80,7 @@ import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 import 'package:resonance/platform/desktop/hotkey_service.dart'
     if (dart.library.html) 'package:resonance/platform/desktop/hotkey_service_stub.dart';
 import 'package:resonance/platform/desktop/tray_settings.dart';
+import 'package:resonance/platform/desktop/windows_startup.dart';
 import 'package:resonance/platform/desktop/tray_service.dart';
 import 'package:resonance/services/media_keys_service.dart';
 import 'package:resonance/widgets/library/drop_overlay.dart';
@@ -111,6 +112,13 @@ Future<void> main(List<String> args) async {
   if (_isDesktop) {
     await windowManager.ensureInitialized();
     await windowManager.setPreventClose(true);
+    if (Platform.isWindows && !updateTestMode) {
+      try {
+        await const WindowsStartup().refreshRegisteredPath();
+      } catch (error) {
+        _shutdownLog('Startup registration refresh failed: $error');
+      }
+    }
   }
 
   final session = await AudioSession.instance;
@@ -262,6 +270,14 @@ Future<void> main(List<String> args) async {
     unawaited(acknowledgeUpdateStartup(args));
     unawaited(runRequestedUpdateLab(args));
   });
+
+  if (Platform.isWindows && args.contains('--launch-on-startup')) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await windowManager.show();
+      if (await windowManager.isMinimized()) await windowManager.restore();
+      await windowManager.focus();
+    });
+  }
 
   // Start the small first Home page while the launch animation is visible.
   // The Discover screen joins this request or paints the saved shelves.

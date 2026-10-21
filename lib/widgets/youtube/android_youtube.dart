@@ -27,6 +27,7 @@ import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_download_result.dart';
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/models/youtube_search_source.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/core/youtube/android_download_event.dart';
 import 'package:resonance/services/download_history_repository.dart';
@@ -62,14 +63,14 @@ class AndroidYoutubeDownloader {
     }
   }
 
-  Future<List<YoutubeTrack>> search(String query, {int limit = 10}) async {
+  Future<List<YoutubeTrack>> search(String query, {int limit = 10, YoutubeSearchSource? source}) async {
     final resultLimit = limit.clamp(1, 120).toInt();
     // A two-item type-ahead preview and the submitted first page share one
     // request; later scroll pages ask for a longer prefix only when needed.
     final fetchLimit = resultLimit < 10 ? 10 : resultLimit;
     final normalized = query.trim().toLowerCase();
     final access = YoutubeAccessService.active;
-    final key = '${identityHashCode(access)}:${access?.revision ?? 0}:$normalized';
+    final key = '${identityHashCode(access)}:${access?.revision ?? 0}:${source?.name ?? 'legacy'}:$normalized';
     final cached = _searchCache[key];
     if (cached != null &&
         DateTime.now().difference(cached.storedAt) < _searchCacheTtl &&
@@ -79,7 +80,7 @@ class AndroidYoutubeDownloader {
     final requestKey = '$key:$fetchLimit';
     var pending = _searchesInFlight[requestKey];
     if (pending == null) {
-      pending = _runSearch(query.trim(), limit: fetchLimit);
+      pending = _runSearch(query.trim(), limit: fetchLimit, source: source);
       _searchesInFlight[requestKey] = pending;
     }
     try {
@@ -98,8 +99,12 @@ class AndroidYoutubeDownloader {
     }
   }
 
-  Future<List<YoutubeTrack>> _runSearch(String query, {required int limit}) async {
-    final raw = await _invoke<String>('search', {'query': query, 'limit': limit});
+  Future<List<YoutubeTrack>> _runSearch(String query, {required int limit, YoutubeSearchSource? source}) async {
+    final raw = await _invoke<String>('search', {
+      'query': query,
+      'limit': limit,
+      if (source != null) 'source': source.name,
+    });
     final decoded = jsonDecode(raw ?? '[]') as List;
     return decoded.map((e) => YoutubeTrack.fromJson(Map<String, dynamic>.from(e as Map))).toList(growable: false);
   }

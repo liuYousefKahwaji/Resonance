@@ -17,4 +17,9 @@ void main() {
   test('returns no results when search data is absent', () {
     expect(const WindowsFastSearch().parseHtml('<html>Sign in</html>'), isEmpty);
   });
+  test('preserves relative upload labels from fast search', () {
+    const html =
+        'var ytInitialData = {"videoRenderer":{"videoId":"abcdefghijk","title":{"simpleText":"A"},"publishedTimeText":{"simpleText":"2 hours ago"}}};';
+    expect(const WindowsFastSearch().parseHtml(html).single.date!.relative, '2 hours ago');
+  });
 }

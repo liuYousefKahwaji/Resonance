@@ -78,6 +78,7 @@ class AudioEnvelopeAnalyzer {
   final int sampleRate;
   final Map<String, ({int modified, AudioEnvelope envelope})> _memoryCache = {};
   Process? _windowsProcess;
+  final Set<Future<Process>> _windowsLaunches = {};
   int? _androidSessionId;
   int _request = 0;
 
@@ -130,18 +131,26 @@ class AudioEnvelopeAnalyzer {
     final executable = await releaseBinary.exists() ? releaseBinary.path : developmentBinary.path;
     if (!await File(executable).exists()) return false;
 
-    final process = await Process.start(executable, _arguments(input, output.path), runInShell: false);
-    _windowsProcess = process;
-    final stdoutDone = process.stdout.drain<void>();
-    final stderrDone = process.stderr.drain<void>();
-    final exitCode = await process.exitCode;
-    await Future.wait([stdoutDone, stderrDone]);
-    if (identical(_windowsProcess, process)) _windowsProcess = null;
-    if (request != _request || exitCode != 0) {
-      if (await output.exists()) await output.delete();
-      return false;
+    if (request != _request) return false;
+    final launch = Process.start(executable, _arguments(input, output.path), runInShell: false);
+    _windowsLaunches.add(launch);
+    try {
+      final process = await launch;
+      _windowsProcess = process;
+      if (request != _request) process.kill();
+      final stdoutDone = process.stdout.drain<void>();
+      final stderrDone = process.stderr.drain<void>();
+      final exitCode = await process.exitCode;
+      await Future.wait([stdoutDone, stderrDone]);
+      if (identical(_windowsProcess, process)) _windowsProcess = null;
+      if (request != _request || exitCode != 0) {
+        if (await output.exists()) await output.delete();
+        return false;
+      }
+      return await output.exists() && await output.length() > 0;
+    } finally {
+      _windowsLaunches.remove(launch);
     }
-    return await output.exists() && await output.length() > 0;
   }
 
   Future<bool> _decodeAndroid(String input, File output, int request) async {
@@ -194,5 +203,22 @@ class AudioEnvelopeAnalyzer {
   void dispose() {
     cancel();
     _memoryCache.clear();
+  }
+
+  /// A Windows decoder can still be starting when cancellation arrives. Drain
+  /// those launches before shutdown releases the library/files it was reading.
+  Future<void> close() async {
+    dispose();
+    try {
+      await Future.wait<void>(
+        _windowsLaunches.toList().map((launch) async {
+          final process = await launch;
+          process.kill();
+          await process.exitCode;
+        }),
+      ).timeout(const Duration(seconds: 1));
+    } catch (error) {
+      debugPrint('[AudioEnvelopeAnalyzer] Decoder shutdown: $error');
+    }
   }
 }

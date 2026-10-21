@@ -194,6 +194,8 @@ def _normalize_music_item(item):
         "title": title,
         "artist": artist,
         "artistId": artists[0].get("id") if artists and isinstance(artists[0], dict) else None,
+        "year": item.get("year"),
+        "release_date": item.get("release_date"),
         "url": f"https://www.youtube.com/watch?v={video_id}",
         "duration_seconds": duration,
         "thumbnail": thumbnail,
@@ -566,20 +568,26 @@ def _extract_info(target, extra=None, download=False, cookie_file=None, transfor
 
 # ── search ─────────────────────────────────────────────────────────────────────
 
-def search(query: str, limit: int = 10, cookie_file=None) -> str:
+def search(query: str, limit: int = 10, cookie_file=None, source=None) -> str:
     """Return a JSON array capped to the requested search result count."""
     result_limit = max(1, min(int(limit), 120))
     # YT Music's search endpoint returns parsed video results and follows its
     # continuation pages up to the requested limit. Guest search avoids reading
     # or copying browser cookies for each request.
+    if source not in (None, "music", "youtube"):
+        raise ValueError("Unknown search source")
     try:
         from ytmusicapi import YTMusic
-        items = YTMusic(language="en").search(query, filter="videos", limit=result_limit)
+        if source == "youtube":
+            raise LookupError("Use regular YouTube search")
+        items = YTMusic(language="en").search(query, filter="songs" if source == "music" else "videos", limit=result_limit)
         fast_results = [_normalize_music_item(item) for item in items]
         fast_results = [item for item in fast_results if item][:result_limit]
-        if fast_results:
+        if fast_results or source == "music":
             return json.dumps(fast_results, ensure_ascii=False)
     except Exception:
+        if source == "music":
+            raise
         pass  # Preserve yt-dlp's broader YouTube search as a fallback.
     opts = {
         "extract_flat": True,
@@ -623,6 +631,8 @@ def search(query: str, limit: int = 10, cookie_file=None) -> str:
             "duration_seconds": int(duration) if duration else None,
             "thumbnail": thumbnail,
             "view_count": entry.get("view_count"),
+            "upload_date": entry.get("upload_date"),
+            "release_date": entry.get("release_date"),
             "like_count": entry.get("like_count"),
             "live_status": entry.get("live_status"),
             "availability": entry.get("availability"),
@@ -661,6 +671,8 @@ def get_metadata(url: str, cookie_file=None) -> str:
         "duration_seconds": int(info["duration"]) if info.get("duration") else None,
         "thumbnail": thumbnail,
         "view_count": info.get("view_count"),
+        "upload_date": info.get("upload_date"),
+        "release_date": info.get("release_date"),
         "like_count": info.get("like_count"),
     }, ensure_ascii=False)
 

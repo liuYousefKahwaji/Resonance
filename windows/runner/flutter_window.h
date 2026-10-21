@@ -38,6 +38,7 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<flutter::PluginRegistrarWindows> media_keys_registrar_;
   std::unique_ptr<flutter::PluginRegistrarWindows>
       music_recognition_registrar_;
+  std::unique_ptr<flutter::PluginRegistrarWindows> voice_chat_registrar_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       shutdown_channel_;
   std::atomic<bool> exit_watchdog_started_{false};

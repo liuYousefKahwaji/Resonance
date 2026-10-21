@@ -64,6 +64,32 @@ class EventSink:
 
 
 class AndroidYtdlpBridgeTests(unittest.TestCase):
+    def test_explicit_music_source_uses_songs_and_never_falls_back(self):
+        calls = []
+        class Music:
+            def __init__(self, **kwargs): pass
+            def search(self, query, filter, limit):
+                calls.append((filter, limit))
+                return []
+        with patch.dict(sys.modules, {"ytmusicapi": types.SimpleNamespace(YTMusic=Music)}):
+            self.assertEqual(json.loads(bridge.search("yes", 120, source="music")), [])
+        self.assertEqual(calls, [("songs", 120)])
+        class BrokenMusic(Music):
+            def search(self, *args, **kwargs): raise RuntimeError("Music unavailable")
+        with patch.dict(sys.modules, {"ytmusicapi": types.SimpleNamespace(YTMusic=BrokenMusic)}):
+            with self.assertRaisesRegex(RuntimeError, "Music unavailable"):
+                bridge.search("yes", source="music")
+
+    def test_explicit_youtube_source_bypasses_music(self):
+        calls = []
+        def responder(ydl, target, download):
+            calls.append(target)
+            return {"entries": [{"title":"Video", "url":"https://youtu.be/abcdefghijk", "upload_date":"20240102"}]}
+        with patch.object(FakeYoutubeDL, "responder", responder):
+            result = json.loads(bridge.search("yes", 10, source="youtube"))
+        self.assertEqual(calls, ["ytsearch10:yes"])
+        self.assertEqual(result[0]["upload_date"], "20240102")
+
     def test_music_collection_uses_catalog_ids_preserves_order_and_duplicates(self):
         class Music:
             def get_playlist(self, playlist_id, limit):

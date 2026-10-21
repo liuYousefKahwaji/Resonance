@@ -139,6 +139,8 @@ def _track(item):
         "title": str(item.get("title") or "Unknown"),
         "artist": str(artist),
         "artistId": artists[0].get("id") if artists and isinstance(artists[0], dict) else None,
+        "year": item.get("year"),
+        "release_date": item.get("release_date"),
         "url": f"https://www.youtube.com/watch?v={video_id}",
         "duration_seconds": item.get("duration_seconds"),
         "thumbnail": thumbnail,
@@ -291,7 +293,7 @@ def main():
     if args.action == "search":
         if not args.query or not args.query.strip():
             parser.error("--query is required for search")
-        results = YTMusic(language="en").search(args.query, filter="videos", limit=max(1, min(args.limit, 10)))
+        results = YTMusic(language=args.language).search(args.query, filter="songs", limit=max(1, min(args.limit, 120)))
         tracks = [_track(item) for item in results]
         print(json.dumps([track for track in tracks if track][:args.limit], ensure_ascii=False))
         return

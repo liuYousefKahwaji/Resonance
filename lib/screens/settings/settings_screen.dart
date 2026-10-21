@@ -42,6 +42,8 @@ import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 import 'package:resonance/widgets/app_update_prompt.dart';
 import 'package:resonance/services/app_update_service.dart';
+import 'package:resonance/widgets/windows_startup_toggle.dart';
+import 'package:resonance/platform/desktop/windows_startup.dart';
 import 'package:resonance/screens/settings/backup_screen.dart';
 import 'package:resonance/screens/settings/listening_statistics_screen.dart';
 
@@ -1109,6 +1111,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
                     child: TraySettings(selectedMode: _selectedMode, onChanged: _saveTrayMode),
                   ),
+                  if (WindowsStartup.available) ...[_Divider(), const WindowsStartupToggle()],
                 ],
               ),
             ],

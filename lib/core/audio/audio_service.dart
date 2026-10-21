@@ -1,6 +1,7 @@
 // lib/core/audio/audio_service.dart
 
 import 'dart:async';
+import 'package:resonance/core/audio/voice_chat_controller.dart';
 import 'package:resonance/services/listening_statistics.dart';
 import 'dart:io';
 import 'dart:convert';
@@ -342,6 +343,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   late AndroidLoudnessEnhancer _loudnessEnhancer;
   late AndroidEqualizer _androidEqualizer;
   mk.Player? _windowsPlayer;
+  VoiceChatController? voiceChat;
+  int _voiceChatSeekRevision = 0;
 
   double savedVolume = 1.0;
 
@@ -612,6 +615,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       final player = windowsPlayer ?? mk.Player(configuration: const mk.PlayerConfiguration(pitch: true));
       _windowsPlayer = player;
       _attachWindowsPlayer(player);
+      voiceChat = VoiceChatController(frame: _voiceChatFrame);
     } else {
       final backend = _createJustAudioBackend();
       _player = backend.player;
@@ -640,6 +644,35 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   final YoutubeAccessService? _youtubeAccessService;
+
+  VoiceChatFrame? _voiceChatFrame() {
+    final player = _windowsPlayer;
+    if (player == null ||
+        _playbackUnavailable ||
+        _activeTrackLoadGeneration != null ||
+        _pendingStreamSourceGeneration == _loadGeneration ||
+        playbackRangePreviewNotifier.value != null ||
+        player.state.playlist.medias.isEmpty) {
+      return null;
+    }
+    final media = player.state.playlist.medias[player.state.playlist.index];
+    return VoiceChatFrame(
+      media: media,
+      generation: _loadGeneration,
+      position: currentSourcePosition,
+      listeningDevice: player.state.audioDevice.name,
+      playing: _playbackRequested && player.state.playing && !player.state.completed,
+      seekRevision: _voiceChatSeekRevision,
+      rate: speedNotifier.value,
+      pitch: pitchNotifier.value,
+      filter: buildWindowsAudioFilter(_currentAdjustments),
+      gain:
+          _normalizationMultiplier *
+          trackVolumeMultiplier(trackVolumePercentNotifier.value, 1) *
+          equalizerOutputHeadroomMultiplier(equalizerNotifier.value, effectApplied: _equalizerEffectApplied),
+    );
+  }
+
   final Future<ResolvedYoutubeStream> Function(String)? _streamResolver;
   final YoutubePlaybackHistoryCoordinator? _youtubeHistoryCoordinator;
   final LocalPlaybackHistoryCoordinator? _localHistoryCoordinator;
@@ -819,6 +852,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (currentLoopMode == LoopMode.one) {
         ListeningStatistics.instance.onSessionEnded();
         await player.seek(_activePlaybackRange.start);
+        _voiceChatSeekRevision++;
         if (_loadGeneration != genAtCompletion) return;
         await player.play();
       } else if (_loadGeneration == genAtCompletion) {
@@ -2751,7 +2785,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_pendingStreamSourceGeneration == _loadGeneration) return;
     if (Platform.isWindows) {
       try {
-        if (!_isWindowsPlaying) await _windowsPlayer!.play();
+        if (!_isWindowsPlaying) {
+          final replaying = _windowsPlayer!.state.completed;
+          await _windowsPlayer!.play();
+          if (replaying) _voiceChatSeekRevision++;
+        }
       } catch (error) {
         await _handlePlaybackFailure(_loadGeneration, error, allowStreamRecovery: _currentTrackIsStream);
         return;
@@ -2868,6 +2906,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _updatePlaybackState();
       await player.seek(sourcePosition);
       if (_loadGeneration != sourceGeneration || !identical(player, _windowsPlayer)) return;
+      _voiceChatSeekRevision++;
       _windowsIsBuffering = player.state.buffering;
       _windowsIsCompleted = player.state.completed;
       _updatePlaybackState();
@@ -3035,6 +3074,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     ListeningStatistics.instance.onSessionEnded();
     final generation = ++_loadGeneration;
     _cancelPendingSeeks();
+    voiceChat?.suspendMusic();
     // Invalidate transitions before the first await: a newer selection owns
     // both the audio source and its presentation immediately.
     _crossfadeGeneration++;
@@ -4129,6 +4169,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    await voiceChat?.shutdown();
     await stopPlaybackRangePreview(resume: false);
     _playbackRequested = false;
     _interruptions.dispose();
@@ -4147,7 +4188,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     await _backendSourceOperations.idle;
     _crossfadeGeneration++;
     _crossfadeInProgress = false;
-    _envelopeAnalyzer.dispose();
+    await _envelopeAnalyzer.close();
     _loudnessAnalyzer.dispose();
     await saveState();
     if (Platform.isWindows) {

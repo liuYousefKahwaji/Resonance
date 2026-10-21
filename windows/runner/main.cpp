@@ -6,6 +6,7 @@
 #include "resonance_app_identity.h"
 #include "utils.h"
 #include "update_recovery.h"
+#include "startup_settings.h"
 
 // ─────────────────────────────────────────────────────────────────────────
 // Single-instance enforcement.
@@ -35,14 +36,22 @@ constexpr wchar_t kWindowTitle[] = L"Resonance";
 // common Windows "foreground lock" issue (AttachThreadInput trick) that
 // can otherwise silently make SetForegroundWindow a no-op.
 void FocusExistingInstance() {
-  HWND existing = FindWindow(nullptr, kWindowTitle);
+  HWND existing = nullptr;
+  EnumWindows([](HWND window, LPARAM output) -> BOOL {
+    if (GetPropW(window, kMutexName) != nullptr) {
+      *reinterpret_cast<HWND*>(output) = window;
+      return FALSE;
+    }
+    return TRUE;
+  }, reinterpret_cast<LPARAM>(&existing));
+  if (!existing) existing = FindWindow(nullptr, kWindowTitle);
   if (!existing) {
     return;
   }
 
-  if (IsIconic(existing)) {
-    ShowWindow(existing, SW_RESTORE);
-  }
+  // Close-to-tray hides a normal window without marking it minimized.
+  // Explicitly show either state before asking Windows to focus it.
+  ShowWindow(existing, IsIconic(existing) ? SW_RESTORE : SW_SHOW);
 
   // SetForegroundWindow can silently fail if the calling process isn't
   // allowed to steal focus. Temporarily attaching this thread's input
@@ -88,11 +97,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   resonance::RegisterAppIdentity();
 
-  flutter::DartProject project(L"data");
-
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
 
+  for (const auto& argument : command_line_arguments) {
+    if (argument == "--launch-on-startup") {
+      const auto directory = resonance::ExecutableDirectory();
+      if (!directory.empty()) SetCurrentDirectoryW(directory.c_str());
+      break;
+    }
+  }
+  flutter::DartProject project(L"data");
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
   FlutterWindow window(project);
@@ -103,6 +118,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
+  SetPropW(window.GetHandle(), kMutexName, reinterpret_cast<HANDLE>(1));
 
   ::MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0)) {

@@ -1,7 +1,7 @@
 name: resonance
 description: "A local music player with youtube support"
 publish_to: 'none'
-version: 3.6.1+19
+version: 3.6.2+20
 
 environment:
   sdk: ^3.9.2
@@ -42,6 +42,7 @@ dependencies:
   crypto: ^3.0.6
   fftea: ^1.5.0+1
   image: ^4.8.0
+  intl: ^0.20.2
   mobile_scanner: ^7.2.0
   qr_flutter: ^4.1.0
   zxing2: ^0.2.4

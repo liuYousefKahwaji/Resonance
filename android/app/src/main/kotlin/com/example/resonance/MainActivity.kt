@@ -166,9 +166,10 @@ class MainActivity : AudioServiceFragmentActivity() {
                     "search" -> {
                         val query = call.argument<String>("query") ?: ""
                         val limit = (call.argument<Int>("limit") ?: 10).coerceIn(1, 120)
+                        val source = call.argument<String>("source")
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                val json = bridge.callAttr("search", query, limit).toString()
+                                val json = bridge.callAttr("search", query, limit, null, source).toString()
                                 withContext(Dispatchers.Main) { result.success(json) }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {

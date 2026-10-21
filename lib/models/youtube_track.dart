@@ -1,3 +1,5 @@
+import 'youtube_track_date.dart';
+
 class YoutubeTrack {
   /// A playable result from a copied YouTube link, available without a
   /// network round trip. Full metadata can arrive after the result is shown.
@@ -36,6 +38,7 @@ class YoutubeTrack {
   final bool isShort;
   final String? availability;
   final String? artistId;
+  final YoutubeTrackDate? date;
 
   /// Compatibility alias for older transfer/search callers.
   String get uploader => artist;
@@ -52,6 +55,7 @@ class YoutubeTrack {
     this.isShort = false,
     this.availability,
     this.artistId,
+    this.date,
   });
 
   String? get videoId {
@@ -79,6 +83,7 @@ class YoutubeTrack {
     'isShort': isShort,
     if (availability != null) 'availability': availability,
     if (artistId != null) 'artistId': artistId,
+    if (date != null) 'trackDate': date!.toJson(),
   };
 
   factory YoutubeTrack.fromCacheJson(Map<String, dynamic> json) => YoutubeTrack(
@@ -93,6 +98,7 @@ class YoutubeTrack {
     isShort: json['isShort'] == true,
     availability: json['availability']?.toString(),
     artistId: json['artistId']?.toString(),
+    date: YoutubeTrackDate.fromMetadata(json),
   );
 
   String get formattedDuration {
@@ -111,7 +117,7 @@ class YoutubeTrack {
 
   String get formattedLikeCount => _compactCount(likeCount);
 
-  YoutubeTrack copyWith({int? viewCount, int? likeCount}) => YoutubeTrack(
+  YoutubeTrack copyWith({int? viewCount, int? likeCount, YoutubeTrackDate? date}) => YoutubeTrack(
     title: title,
     artist: artist,
     url: url,
@@ -123,6 +129,7 @@ class YoutubeTrack {
     isShort: isShort,
     availability: availability,
     artistId: artistId,
+    date: date ?? this.date,
   );
 
   factory YoutubeTrack.fromJson(Map<String, dynamic> json) {
@@ -149,6 +156,7 @@ class YoutubeTrack {
           json['original_url']?.toString().contains('/shorts/') == true,
       availability: json['availability']?.toString(),
       artistId: _firstNonEmpty([json['artistId'], json['channel_id']]),
+      date: YoutubeTrackDate.fromMetadata(json),
     );
   }
 

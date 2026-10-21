@@ -1,5 +1,33 @@
 /// Arabic UI translations. Placeholders match the English message templates.
 const arabicMessages = <String, String>{
+  'Launch on startup': 'التشغيل عند بدء ويندوز',
+  'Retry music': 'إعادة محاولة تشغيل الموسيقى',
+  'Open Resonance when you sign in to Windows, even with tray mode enabled.':
+      'افتح ريزونانس عند تسجيل الدخول إلى ويندوز، حتى مع تفعيل وضع شريط النظام.',
+  'Could not read the Windows startup setting.': 'تعذّرت قراءة إعداد التشغيل عند بدء ويندوز.',
+  'Could not change the Windows startup setting.': 'تعذّر تغيير إعداد التشغيل عند بدء ويندوز.',
+  'Voice chat': 'المحادثة الصوتية',
+  'Voice chat is on': 'المشاركة الصوتية مفعّلة',
+  'Share your music and microphone together in Discord, games or calls.':
+      'شارك الموسيقى وصوت الميكروفون معًا في ديسكورد أو الألعاب أو المكالمات.',
+  'One-time setup': 'إعداد لمرة واحدة',
+  'Install VB-CABLE, then choose CABLE Output as your microphone in the voice chat app. Your headphones stay as its speakers.':
+      'ثبّت VB-CABLE، ثم اختر CABLE Output كميكروفون في تطبيق المحادثة. أبقِ سماعاتك كمخرج للصوت فيه.',
+  'Get VB-CABLE': 'تنزيل VB-CABLE',
+  'Refresh devices': 'تحديث الأجهزة',
+  'Share music + microphone': 'مشاركة الموسيقى والميكروفون',
+  'Off — your microphone is not being shared': 'متوقفة — لا تتم مشاركة الميكروفون',
+  'In your chat app, select {0} as the microphone.': 'في تطبيق المحادثة، اختر {0} كميكروفون.',
+  'Music sent to chat': 'الموسيقى المرسلة للمحادثة',
+  'Hear myself': 'سماع صوتي',
+  'Use headphones to avoid echo.': 'استخدم سماعات الرأس لتجنب الصدى.',
+  'The usual volume bar only changes what you hear.': 'شريط الصوت المعتاد يغيّر ما تسمعه أنت فقط.',
+  'Preparing music for voice chat…': 'تجهيز الموسيقى للمحادثة الصوتية…',
+  'Audio devices': 'أجهزة الصوت',
+  'Virtual cable': 'الكابل الافتراضي',
+  'Hear myself through': 'سماع صوتي عبر',
+  'If music sounds filtered, turn off noise suppression and automatic microphone volume in your chat app.':
+      'إذا تغيّر صوت الموسيقى، عطّل إزالة الضوضاء والتحكم التلقائي بصوت الميكروفون في تطبيق المحادثة.',
   'Choose the part you want to hear. Your file stays unchanged.':
       'اختر الجزء الذي تريد سماعه. يبقى الملف الأصلي كما هو.',
   'Drag the edges, or tap the waveform to choose a position.': 'اسحب الطرفين أو اضغط على الموجة لاختيار موضع.',
@@ -1212,4 +1240,24 @@ const arabicMessages = <String, String>{
   "YouTube blocked this request until a signed-in session is provided.":
       "حظر يوتيوب هذا الطلب حتى توفير جلسة مسجّل فيها الدخول.",
   "Not now": "ليس الآن",
+  'Search YouTube Music or paste a link': 'ابحث في YouTube Music أو الصق رابطًا',
+  'Uploaded {0}': 'نُشر في {0}',
+  'Released {0}': 'صدر في {0}',
+  'Today': 'اليوم',
+  'Yesterday': 'أمس',
+  'Last week': 'الأسبوع الماضي',
+  'Just now': 'الآن',
+  '1 second ago': 'قبل ثانية',
+  '{0} seconds ago': 'قبل {0} ثانية',
+  '1 minute ago': 'قبل دقيقة',
+  '{0} minutes ago': 'قبل {0} دقيقة',
+  '1 hour ago': 'قبل ساعة',
+  '{0} hours ago': 'قبل {0} ساعة',
+  '1 day ago': 'قبل يوم',
+  '1 week ago': 'قبل أسبوع',
+  '{0} weeks ago': 'قبل {0} أسابيع',
+  '1 month ago': 'قبل شهر',
+  '{0} months ago': 'قبل {0} أشهر',
+  '1 year ago': 'قبل سنة',
+  '{0} years ago': 'قبل {0} سنوات',
 };

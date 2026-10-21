@@ -125,11 +125,13 @@ class WindowsYoutubeMusicHomeTests(unittest.TestCase):
         self.assertNotIn("cookies", output.getvalue().lower())
 
     def test_guest_search_requires_no_browser_cookies(self):
+        requests = []
         class FakeMusic:
             def __init__(self, language):
                 self.language = language
 
             def search(self, query, filter, limit):
+                requests.append((query, filter, limit))
                 return [{"title": query, "videoId": "jNQXAC9IVRw", "artists": [{"name": "Artist"}]}]
 
         output = io.StringIO()
@@ -139,6 +141,7 @@ class WindowsYoutubeMusicHomeTests(unittest.TestCase):
             helper.main()
 
         self.assertEqual(json.loads(output.getvalue())[0]["title"], "Quick result")
+        self.assertEqual(requests, [("Quick result", "songs", 2)])
 
     def test_related_radio_is_guest_scoped_unique_and_bounded(self):
         class FakeMusic:

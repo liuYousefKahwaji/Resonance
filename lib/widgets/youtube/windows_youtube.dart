@@ -20,6 +20,8 @@ import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/models/youtube_search_source.dart';
+import 'package:resonance/services/youtube/windows_ytmusic_helper.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/download_history_repository.dart';
 import 'package:resonance/services/download/youtube_download_gate.dart';
@@ -82,10 +84,15 @@ class MediaDownloader {
     }
   }
 
-  Future<List<YoutubeTrack>> search(String query, {int limit = 10, bool background = false}) async {
+  Future<List<YoutubeTrack>> search(
+    String query, {
+    int limit = 10,
+    bool background = false,
+    YoutubeSearchSource source = YoutubeSearchSource.youtube,
+  }) async {
     final resultLimit = limit.clamp(1, 120).toInt();
     final fetchLimit = resultLimit < 10 ? 10 : resultLimit;
-    final normalizedQuery = query.trim().toLowerCase();
+    final normalizedQuery = '${source.name}:${query.trim().toLowerCase()}';
     final cached = _searchCache[normalizedQuery];
     if (cached != null &&
         DateTime.now().difference(cached.storedAt) < _searchCacheTtl &&
@@ -97,7 +104,9 @@ class MediaDownloader {
     if (inFlight != null) {
       return (await inFlight).take(resultLimit).toList(growable: false);
     }
-    final search = _runSearch(query.trim(), limit: fetchLimit, background: background);
+    final search = source == YoutubeSearchSource.music
+        ? _runMusicSearch(query.trim(), fetchLimit)
+        : _runSearch(query.trim(), limit: fetchLimit, background: background);
     _searchesInFlight[requestKey] = search;
     try {
       final tracks = await search;
@@ -176,6 +185,14 @@ class MediaDownloader {
     }
 
     return results;
+  }
+
+  Future<List<YoutubeTrack>> _runMusicSearch(String query, int limit) async {
+    final raw = await const WindowsYtMusicHelper().invoke(action: 'search', query: query, limit: limit);
+    return (jsonDecode(raw) as List)
+        .whereType<Map>()
+        .map((item) => YoutubeTrack.fromJson(Map<String, dynamic>.from(item)))
+        .toList();
   }
 
   Future<List<YoutubeTrack>> _searchMusicVideos(String query, {required int limit}) async {

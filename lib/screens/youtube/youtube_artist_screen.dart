@@ -11,6 +11,7 @@ import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/services/youtube/youtube_artist_service.dart';
 import 'package:resonance/services/youtube_stats_service.dart';
+import 'package:resonance/widgets/youtube/youtube_track_date_label.dart';
 import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 
 typedef YoutubeArtistLoader = Future<YoutubeArtistPage> Function(YoutubeArtistSort sort, YoutubeArtistCursor? cursor);
@@ -389,6 +390,7 @@ class _YoutubeArtistScreenState extends State<YoutubeArtistScreen> {
                               _visibleStats(track);
                               return _ArtistTrackRow(
                                 track: track,
+                                fetchDates: widget.loader == null,
                                 wide: wide,
                                 busy: _playingUrl == track.url,
                                 onTap: _playingUrl != track.url ? () => _play(track) : null,
@@ -591,9 +593,16 @@ class _ArtistHeader extends StatelessWidget {
 }
 
 class _ArtistTrackRow extends StatelessWidget {
-  const _ArtistTrackRow({required this.track, required this.wide, required this.busy, this.onTap});
+  const _ArtistTrackRow({
+    required this.track,
+    required this.wide,
+    required this.busy,
+    this.onTap,
+    this.fetchDates = true,
+  });
   final YoutubeTrack track;
   final bool wide, busy;
+  final bool fetchDates;
   final VoidCallback? onTap;
 
   @override
@@ -651,6 +660,7 @@ class _ArtistTrackRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
                     ),
+                    if (wide) YoutubeTrackDateLabel(track: track, fetch: fetchDates),
                     if (!wide) ...[
                       const SizedBox(height: 6),
                       Wrap(
@@ -659,6 +669,7 @@ class _ArtistTrackRow extends StatelessWidget {
                         children: [
                           stat(Icons.visibility_outlined, track.formattedViewCount, 'Views'),
                           stat(Icons.thumb_up_outlined, track.formattedLikeCount, 'Likes'),
+                          YoutubeTrackDateLabel(track: track, fetch: fetchDates),
                         ],
                       ),
                     ],

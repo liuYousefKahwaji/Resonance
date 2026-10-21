@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:resonance/models/youtube_artist.dart';
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/models/youtube_track_date.dart';
 
 typedef ArtistHttpLoader = Future<String> Function(Uri uri, Map<String, dynamic>? body);
 
@@ -401,12 +402,14 @@ class YoutubeArtistService {
       final modern = node['lockupViewModel'];
       String? id, title, thumb;
       int? views, duration;
+      YoutubeTrackDate? date;
       if (legacy is Map) {
         id = legacy['videoId']?.toString();
         title = _text(legacy['title']);
         thumb = _image(legacy['thumbnail']);
         views = _count(_text(legacy['viewCountText'] ?? legacy['shortViewCountText']));
         duration = _duration(_text(legacy['lengthText']));
+        date = YoutubeTrackDate.parse(_text(legacy['publishedTimeText']));
       } else if (modern is Map && modern['contentType'] == 'LOCKUP_CONTENT_TYPE_VIDEO') {
         id = modern['contentId']?.toString();
         final metadata = modern['metadata']?['lockupMetadataViewModel'];
@@ -415,6 +418,7 @@ class YoutubeArtistService {
         for (final part in _walk(metadata?['metadata'])) {
           final accessibility = part['accessibilityLabel']?.toString() ?? '';
           final label = _text(part['text']);
+          date ??= YoutubeTrackDate.parse(label);
           if (accessibility.contains('view') || part['leadingIcon']?['name'] == 'PLAY_ARROW_OUTLINED') {
             views ??= _count(accessibility.isNotEmpty ? accessibility : label);
           }
@@ -434,6 +438,7 @@ class YoutubeArtistService {
           thumbnailUrl: thumb ?? 'https://i.ytimg.com/vi/$id/hqdefault.jpg',
           durationSeconds: duration,
           viewCount: views,
+          date: date,
         ),
       );
     }

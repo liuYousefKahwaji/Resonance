@@ -12,6 +12,9 @@ import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/models/youtube_search_source.dart';
+import 'package:resonance/widgets/youtube/youtube_track_date_label.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/models/download_queue_entry.dart';
 import 'package:resonance/screens/external_playlist/external_playlist_import_screen.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
@@ -38,6 +41,8 @@ import 'package:resonance/screens/settings/youtube_access_screen.dart';
 import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 
 typedef YoutubeSearchLoader = Future<List<YoutubeTrack>> Function(String input, int limit);
+typedef YoutubeSourceSearchLoader =
+    Future<List<YoutubeTrack>> Function(String input, int limit, YoutubeSearchSource source);
 typedef YoutubeSuggestionsLoader =
     Future<SuggestedMusicResult> Function({required bool refresh, required bool Function() isCancelled});
 typedef YoutubeMusicHomeLoader = Future<YoutubeMusicHome> Function();
@@ -50,6 +55,7 @@ class YoutubeSearchScreen extends StatefulWidget {
   final String? initialQuery;
   final String? recognitionLabel;
   final YoutubeSearchLoader? searchLoader;
+  final YoutubeSourceSearchLoader? sourceSearchLoader;
   final YoutubeSuggestionsLoader? suggestionsLoader;
   final YoutubeMusicHomeLoader? youtubeMusicHomeLoader;
   final Future<YoutubeMusicHomeShelf> Function()? playlistLibraryLoader;
@@ -67,6 +73,7 @@ class YoutubeSearchScreen extends StatefulWidget {
     this.initialQuery,
     this.recognitionLabel,
     this.searchLoader,
+    this.sourceSearchLoader,
     this.suggestionsLoader,
     this.youtubeMusicHomeLoader,
     this.playlistLibraryLoader,
@@ -88,6 +95,11 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   static const _loadMoreThreshold = 420.0;
 
   final _controller = TextEditingController();
+  String _lastQueryText = '';
+  YoutubeSearchSource _searchSource = YoutubeSearchSource.music;
+  int _sourceRevision = 0;
+  late final Future<void> _sourceReady;
+  bool get _injectedSearch => widget.searchLoader != null || widget.sourceSearchLoader != null;
   final _resultsScrollController = ScrollController();
   final MediaDownloader _windows = MediaDownloader();
   final AndroidYoutubeDownloader _android = AndroidYoutubeDownloader();
@@ -129,6 +141,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   @override
   void initState() {
     super.initState();
+    _sourceReady = _restoreSearchSource();
     if (widget.startOnMusicHome) _suggestionMode = _SuggestionMode.youtubeMusic;
     _controller.addListener(_onQueryChanged);
     final initialQuery = widget.initialQuery?.trim() ?? '';
@@ -186,6 +199,8 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   }
 
   void _onQueryChanged() {
+    if (_controller.text == _lastQueryText) return;
+    _lastQueryText = _controller.text;
     _previewTimer?.cancel();
     final input = _controller.text.trim();
     final generation = ++_searchGeneration;
@@ -242,6 +257,88 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       unawaited(_loadSuggestions());
     }
   }
+
+  Future<void> _restoreSearchSource() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('youtube_search_source');
+      if (!mounted || _sourceRevision != 0) return;
+      setState(
+        () => _searchSource =
+            YoutubeSearchSource.values.where((s) => s.name == saved).firstOrNull ?? YoutubeSearchSource.music,
+      );
+    } catch (_) {
+      /* Default to Music if preferences are unavailable. */
+    }
+  }
+
+  Future<void> _selectSearchSource(YoutubeSearchSource source) async {
+    if (_searchSource == source) return;
+    ++_sourceRevision;
+    _previewTimer?.cancel();
+    ++_searchGeneration;
+    ++_statsGeneration;
+    _windows.cancelBackgroundSearches();
+    setState(() {
+      _searchSource = source;
+      _loading = false;
+      _waitingForPreview = false;
+      _results = const [];
+      _error = null;
+      _submittedSearchQuery = null;
+      _hasMoreSearchResults = false;
+      _loadingMoreResults = false;
+      _loadMoreError = null;
+    });
+    unawaited(() async {
+      try {
+        await (await SharedPreferences.getInstance()).setString('youtube_search_source', source.name);
+      } catch (_) {}
+    }());
+    if (_controller.text.trim().isNotEmpty) await _submit();
+  }
+
+  Widget _buildSearchSourceTabs() => Padding(
+    padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 8),
+    child: Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Wrap(
+        children: [
+          for (final source in YoutubeSearchSource.values)
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 20),
+              child: Semantics(
+                selected: _searchSource == source,
+                button: true,
+                child: InkWell(
+                  key: ValueKey('search-source-${source.name}'),
+                  onTap: () => unawaited(_selectSearchSource(source)),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                          width: 2,
+                          color: _searchSource == source ? Theme.of(context).colorScheme.primary : Colors.transparent,
+                        ),
+                      ),
+                    ),
+                    child: Text(
+                      source.label,
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: _searchSource == source
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
 
   Future<void> _loadYoutubeMusicHome({bool refresh = false}) async {
     if (_controller.text.trim().isNotEmpty) return;
@@ -480,6 +577,9 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   Future<List<YoutubeTrack>> _search(String input, {int limit = 10}) async {
     final loader = widget.searchLoader;
     if (loader != null) return loader(input, limit);
+    await _sourceReady;
+    final sourceLoader = widget.sourceSearchLoader;
+    if (sourceLoader != null) return sourceLoader(input, limit, _searchSource);
     final fastLink = YoutubeTrack.fromVideoLink(input);
     if (fastLink != null) return [fastLink];
     if (Platform.isWindows) {
@@ -489,12 +589,14 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     if (_isLink(input)) {
       return [await (Platform.isWindows ? _windows.lookup(input) : _android.lookup(input))];
     }
-    return Platform.isWindows ? _windows.search(input, limit: limit) : _android.search(input, limit: limit);
+    return Platform.isWindows
+        ? _windows.search(input, limit: limit, source: _searchSource)
+        : _android.search(input, limit: limit, source: _searchSource);
   }
 
   void _hydrateVideoLink(String input, int generation) {
     final quick = YoutubeTrack.fromVideoLink(input);
-    if (quick == null || widget.searchLoader != null) return;
+    if (quick == null || _injectedSearch) return;
     final handler = context.read<PlayerHandler>();
     final pending = _linkLookups.putIfAbsent(input, () async {
       final warmed = handler.warmStreamCandidates([quick.url]);
@@ -550,7 +652,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         _waitingForPreview = false;
       });
       _hydrateVideoLink(input, generation);
-      if (widget.searchLoader == null) {
+      if (!_injectedSearch) {
         unawaited(context.read<PlayerHandler>().warmStreamCandidates(_results.map((track) => track.url)));
       }
       unawaited(_hydrateStats(_results, suggestions: false));
@@ -603,7 +705,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
           _hasMoreSearchResults = !_isLink(input) && results.length >= _searchPageSize;
         });
         _hydrateVideoLink(input, generation);
-        if (widget.searchLoader == null) {
+        if (!_injectedSearch) {
           unawaited(context.read<PlayerHandler>().warmStreamCandidates(_results.map((track) => track.url)));
         }
         unawaited(_hydrateStats(_results, suggestions: false));
@@ -689,7 +791,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     // An injected search backend owns its metadata contract as well. This is
     // important for deterministic tests and for embedders that do not ship
     // Resonance's native yt-dlp binaries.
-    if (tracks.isEmpty || widget.searchLoader != null) return;
+    if (tracks.isEmpty || _injectedSearch) return;
     final generation = ++_statsGeneration;
     try {
       late List<YoutubeTrack> hydrated;
@@ -980,7 +1082,11 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
                     onSubmitted: (_) => _submit(),
                     onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
                     decoration: InputDecoration(
-                      hintText: context.tr("Search YouTube or paste a link"),
+                      hintText: context.tr(
+                        _searchSource == YoutubeSearchSource.music
+                            ? 'Search YouTube Music or paste a link'
+                            : "Search YouTube or paste a link",
+                      ),
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: IconButton(
                         key: const Key('youtube-search-action'),
@@ -1010,6 +1116,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
                     ),
                   ),
                 ),
+                _buildSearchSourceTabs(),
                 Expanded(child: _buildBody()),
                 if (Platform.isAndroid && showQueue)
                   InkWell(
@@ -1307,6 +1414,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         final pending = DownloadQueueController.instance.pendingEntryFor(track.url, widget.playlistNumber);
         final card = _ResultCard(
           track: track,
+          fetchDates: !_injectedSearch,
           busy: _busyUrl == track.url,
           queued: pending != null,
           downloading: pending?.status == DownloadQueueStatus.downloading,
@@ -1919,6 +2027,7 @@ class _QuickPickShelf extends StatelessWidget {
 
 class _ResultCard extends StatelessWidget {
   final YoutubeTrack track;
+  final bool fetchDates;
   final bool busy;
   final bool queued;
   final bool downloading;
@@ -1929,6 +2038,7 @@ class _ResultCard extends StatelessWidget {
 
   const _ResultCard({
     required this.track,
+    this.fetchDates = true,
     required this.busy,
     required this.queued,
     required this.downloading,
@@ -1955,21 +2065,22 @@ class _ResultCard extends StatelessWidget {
               children: [
                 Text(track.title, style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 6),
-                Row(
+                Wrap(
+                  spacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Flexible(
-                      child: YoutubeArtistLink(
-                        track: track,
-                        child: Text(
-                          track.artist,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
+                    YoutubeArtistLink(
+                      track: track,
+                      child: Text(
+                        track.artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ),
                     if (track.formattedDuration.isNotEmpty)
-                      Text(' · ${track.formattedDuration}', style: Theme.of(context).textTheme.bodySmall),
+                      Text('· ${track.formattedDuration}', style: Theme.of(context).textTheme.bodySmall),
+                    YoutubeTrackDateLabel(track: track, fetch: fetchDates, separator: true),
                   ],
                 ),
                 const SizedBox(height: 8),

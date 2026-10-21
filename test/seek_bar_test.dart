@@ -142,6 +142,8 @@ Future<void> _showSeekBar(WidgetTester tester, _FakePlayerHandler handler) async
 
 class _FakePlayerHandler extends Fake implements PlayerHandler {
   @override
+  get voiceChat => null;
+  @override
   final playbackRangeNotifier = ValueNotifier<PlaybackRange>(PlaybackRange.full);
   @override
   PlaybackRange get currentPlaybackRange => playbackRangeNotifier.value;

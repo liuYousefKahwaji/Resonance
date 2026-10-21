@@ -18,6 +18,7 @@ class WindowsYtMusicHelper {
     String? videoId,
     String? language,
     String? playlistUrl,
+    String? query,
     String? overrideBrowserSource,
     YoutubeAccessService? access,
   }) async {
@@ -33,8 +34,8 @@ class WindowsYtMusicHelper {
     final configuredAccess = access ?? YoutubeAccessService.active;
     final browser = overrideBrowserSource ?? configuredAccess?.windowsBrowserId;
     final cookiePath = configuredAccess?.windowsCookiePath;
-    final authenticated = browser != null || cookiePath != null;
-    if (action != 'related' && action != 'playlist' && !authenticated) {
+    final authenticated = action != 'search' && action != 'related' && (browser != null || cookiePath != null);
+    if (action != 'related' && action != 'playlist' && action != 'search' && !authenticated) {
       throw const YoutubeFailure(
         kind: YoutubeFailureKind.verificationRequired,
         userMessage: 'Connect YouTube access before using YouTube Music.',
@@ -42,7 +43,7 @@ class WindowsYtMusicHelper {
     }
 
     final process = await Process.start(helper, [
-      if (action != 'related' && authenticated)
+      if (action != 'related' && action != 'search' && authenticated)
         if (browser != null) ...['--browser', browser] else ...['--cookies-file', cookiePath!],
       '--action',
       action,
@@ -50,6 +51,7 @@ class WindowsYtMusicHelper {
       if (language != null) ...['--language', language],
       if (videoId != null) ...['--video-id', videoId],
       if (playlistUrl != null) ...['--playlist-url', playlistUrl],
+      if (query != null) ...['--query', query],
     ], runInShell: false);
     late final String stdout;
     late final String stderr;
@@ -59,7 +61,7 @@ class WindowsYtMusicHelper {
         process.stdout.transform(utf8.decoder).join(),
         process.stderr.transform(utf8.decoder).join(),
         process.exitCode,
-      ]).timeout(action == 'related' ? const Duration(seconds: 10) : const Duration(seconds: 60));
+      ]).timeout(action == 'related' || action == 'search' ? const Duration(seconds: 15) : const Duration(seconds: 60));
       stdout = output[0] as String;
       stderr = output[1] as String;
       exitCode = output[2] as int;

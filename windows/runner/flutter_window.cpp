@@ -1,6 +1,8 @@
 #include "flutter_window.h"
 #include "media_keys_plugin.h"
 #include "music_recognition_plugin.h"
+#include "voice_chat_plugin.h"
+#include "startup_settings.h"
 #include <chrono>
 #include <cstdio>
 #include <optional>
@@ -78,6 +80,29 @@ bool FlutterWindow::OnCreate() {
           result->Success();
           return;
         }
+        if (call.method_name() == "getStartup" || call.method_name() == "setStartup" || call.method_name() == "refreshStartup") {
+#ifdef RESONANCE_UPDATE_TEST
+          result->Success(flutter::EncodableValue(false));
+          return;
+#endif
+          LSTATUS status = ERROR_SUCCESS;
+          bool enabled = false;
+          if (call.method_name() == "setStartup") {
+            const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
+            if (arguments == nullptr) { result->Error("STARTUP", "Invalid startup setting."); return; }
+            const auto value = arguments->find(flutter::EncodableValue("enabled"));
+            const bool* selected = value == arguments->end() ? nullptr : std::get_if<bool>(&value->second);
+            if (selected == nullptr) { result->Error("STARTUP", "Invalid startup setting."); return; }
+            status = resonance::WriteStartupSetting(*selected);
+          } else if (call.method_name() == "refreshStartup") {
+            status = resonance::RefreshStartupSetting();
+          }
+          if (status == ERROR_SUCCESS) status = resonance::ReadStartupSetting(&enabled);
+          if (status != ERROR_SUCCESS) {
+            result->Error("STARTUP", "Windows could not change the startup setting (" + std::to_string(status) + ").");
+          } else { result->Success(flutter::EncodableValue(enabled)); }
+          return;
+        }
         result->NotImplemented();
       });
   {
@@ -97,6 +122,11 @@ bool FlutterWindow::OnCreate() {
         music_recognition_registrar_.get());
   }
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  {
+    auto ref = flutter_controller_->engine()->GetRegistrarForPlugin("VoiceChatPlugin");
+    voice_chat_registrar_ = std::make_unique<flutter::PluginRegistrarWindows>(ref);
+    resonance::VoiceChatPlugin::RegisterWithRegistrar(voice_chat_registrar_.get());
+  }
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
@@ -115,6 +145,7 @@ void FlutterWindow::OnDestroy() {
   // Stop native capture before tearing down the engine/messenger it completes
   // method calls through.
   shutdown_channel_ = nullptr;
+  voice_chat_registrar_ = nullptr;
   music_recognition_registrar_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;

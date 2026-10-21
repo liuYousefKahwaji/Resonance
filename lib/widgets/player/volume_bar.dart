@@ -1,4 +1,6 @@
 import 'package:resonance/l10n/app_strings.dart';
+import 'dart:io';
+import 'package:resonance/widgets/player/voice_chat_button.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/app/theme.dart';
@@ -63,6 +65,7 @@ class _VolumeBarState extends State<VolumeBar> {
 
         return Row(
           children: [
+            if (Platform.isWindows && handler.voiceChat != null) VoiceChatButton(controller: handler.voiceChat!),
             IconButton(
               icon: Icon(
                 icon,

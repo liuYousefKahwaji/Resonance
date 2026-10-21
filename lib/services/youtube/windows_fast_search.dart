@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/models/youtube_track_date.dart';
 
 /// Reads the public YouTube search page in one HTTP request. yt-dlp remains
 /// the caller's fallback when YouTube changes the page or blocks the request.
@@ -101,6 +102,7 @@ class WindowsFastSearch {
                 url: 'https://www.youtube.com/watch?v=$id',
                 durationSeconds: seconds,
                 thumbnailUrl: thumbnail,
+                date: YoutubeTrackDate.parse(label(renderer['publishedTimeText'])),
               ),
             );
           }
