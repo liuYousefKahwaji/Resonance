@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-The current source version is **3.6.1** (build **19**), matching `version: 3.6.1+19` in [`pubspec.yaml`](pubspec.yaml). Published builds are available on the [GitHub Releases page](https://github.com/liuYousefKahwaji/Resonance/releases/latest).
+The current source version is **3.7.0** (build **21**), matching `version: 3.7.0+21` in [`pubspec.yaml`](pubspec.yaml). This update adds fresh shuffle cycles, Random playback, and **Song/Video switching in beta**. See the [3.7.0 patch notes](release/v3.7.0/patchnotes.md) for details and [GitHub Releases](https://github.com/liuYousefKahwaji/Resonance/releases/latest) for packaged builds.
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 
@@ -31,14 +31,18 @@ The working tree may contain features intended for the next release. See the rel
 - Keep songs in a permanent **Favorites** playlist. Favorites are shared across playlists and marked with a bright gold star or shuffle cue.
 - Sort tracks by name, date added, or a saved random order. **Favorites first** keeps favorites at the top in either ascending or descending order.
 - Search the active playlist by title or artist, with title matches ranked first.
+- Browse local albums by their covers through **Playlist menu → Browse library**.
+- Create **Smart playlists** from rules such as artist, favorites, offline availability, date added, and listening history. Start from a preset, combine rules, set sorting and limits, or save the results as a regular playlist.
 - Drag files into the Windows app or use the cross-platform file picker.
+- Add an entire folder on Windows, including its subfolders, without importing duplicate files.
 - Edit title, artist, and embedded artwork without leaving the library.
 - Remove an entry from one playlist or delete its file and references everywhere.
 - Keep metadata and artwork cached for fast scrolling without moving source files.
 
 ### Playback
 
-- Play, pause, seek, shuffle, repeat, and navigate the real upcoming queue.
+- Play, pause, seek, repeat, and navigate the real upcoming queue.
+- Cycle the shuffle button through **Off → Shuffle → Random → Off**. Shuffle keeps an order for one cycle, then reshuffles at the end. Random reshuffles whenever you select a track or move between songs, including automatic advances.
 - Use a full-screen player with lyrics, artwork-derived colors, an audio visualizer, gestures, and Pocket Vinyl.
 - Adjust speed and pitch from 0.5× to 2×, volume up to 200%, and a five-band equalizer with presets.
 - Apply playback settings globally or per track.
@@ -56,7 +60,10 @@ The working tree may contain features intended for the next release. See the rel
 - Search **YouTube Music** for songs or **YouTube** for videos, with quick previews and engagement counts. The selected source is remembered.
 - Search results and artist pages show available release/upload dates, using recent labels such as **Yesterday** and full dates for older tracks. Missing dates load independently of results and playback.
 - Play a result in a temporary queue, add it as a stream, or download it into a playlist.
+- Use **Song/Video (beta)** in the expanded player to switch between audio and available music videos. Video playback is still being refined; some songs have no linked video.
+- Collapsing the player or putting the app in the background returns to audio-only Song mode.
 - Convert an existing streamed playlist entry into a local download from its three-dot menu while preserving its position.
+- Make a playlist available offline with download progress and retry options. Existing downloads are reused; removing offline downloads preserves imported files and songs still needed by other playlists or Favorites.
 - Display streamed artwork immediately at thumbnail quality, then crossfade to a higher-resolution version when it is ready.
 - Browse authenticated YouTube Music Home shelves such as Quick Picks, Suggestions, and Speed Dial.
 - Browse your saved YouTube Music playlists in **Playlist Library**, above Quick Picks. This shelf loads independently and uses the same playback and import actions as other collections.
@@ -73,11 +80,12 @@ The working tree may contain features intended for the next release. See the rel
 - Fetch synchronized lyrics from Better Lyrics, AMLL, and LRCLIB, with local sidecar support and manual selection.
 - Follow the active lyric line at 30 or 120 FPS, or scroll manually and resume following when ready.
 
-### Import, transfer, and Sync
+### Import, backup, transfer, and Sync
 
 - Import public playlists from YouTube/YouTube Music and supported external music sites.
 - Move playlists between Windows and Android using compressed, checksummed QR payloads.
 - Review automatic source matches before transfer and reuse local downloads when possible.
+- Export settings or a complete library backup from **Settings → Backup and restore**, with optional audio files. Preview before restoring, merge or replace data, and relink moved files. Browser connections and paired devices must be reconnected separately.
 - Use Resonance Sync on Android to host or join a local-network listening session.
 - Pair the Android Companion with Windows for authenticated LAN playback control.
 
@@ -104,6 +112,12 @@ The History button lives in the main header beside Settings.
 - **Resonance** records a local file after three seconds of genuine forward playback. Replaying it moves it to the top. Streams are excluded, the list is capped at 100 distinct tracks, and clearing history never deletes audio.
 
 Local history begins when a build containing the feature is installed; earlier plays cannot be reconstructed.
+
+## Resonance Wrapped
+
+Open **Settings → Resonance Wrapped** for yearly, monthly, or all-time listening recaps: top songs, artists and playlists, listening streaks, and local versus streamed playback. Save a themed recap card as an image.
+
+Statistics stay on your device and begin with recorded listening; earlier activity is not reconstructed. Tracking can be turned off, and recorded statistics can be cleared.
 
 ## Windows voice chat
 
@@ -166,7 +180,7 @@ Windows can restore the previous version if an update fails to start. Android ca
 2. Create or rename playlists from the playlist menu.
 3. Open Search to play, stream, or download YouTube results.
 4. Connect YouTube Access only if verification or authenticated YouTube Music features require it.
-5. Open the full player for lyrics, queue controls, playback tuning, and gestures.
+5. Open the full player for lyrics, queue controls, playback tuning, gestures, and **Song/Video (beta)** for supported YouTube tracks.
 
 ## Build from source
 
@@ -187,6 +201,8 @@ flutter build windows --release
 ```
 
 Run only the build command for your target platform; Windows builds require Windows. For Android builds, ensure Chaquopy can find Python 3.10, or configure `buildPython` as described in [`android/app/build.gradle.kts`](android/app/build.gradle.kts).
+
+The first build also downloads native video libraries and other platform dependencies. If building both platforms, run their builds sequentially.
 
 The Android release configuration uses the debug signing key for local builds unless the existing release-keystore environment variables are supplied. Official releases preserve the existing signing key through CI; a differently signed local APK cannot replace an official installation in place.
 
@@ -218,6 +234,10 @@ Release notes live under [`release/`](release/); the automated build and publish
 
 | Release | Highlights |
 | --- | --- |
+| [v3.7.0](release/v3.7.0/patchnotes.md) | Fresh shuffle cycles, Random playback, and Song/Video switching **in beta** with audio-only playback when collapsed. |
+| [v3.6.2](release/v3.6.2/patchnotes.md) | Windows voice-chat sharing and launch on startup, YouTube/Music search selection, and track dates. |
+| [v3.6.1](release/v3.6.1/patchnotes.md) | Saved local playback trims, waveform editing and preview, and a seekbar that shows the full song with excluded sections dimmed. |
+| [v3.6.0](release/v3.6.0/patchnotes.md) | Offline playlists, album browsing, folder imports, Smart playlists, Resonance Wrapped, backups, and update improvements. |
 | [v3.5.0](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.5.0) | Artist/author pages, Arabic interface and RTL layouts, default-browser connections, and an optional Windows browser connector. |
 | [v3.4.9](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.9) | Better Android call handling, failed-stream playback fixes, and browsable Discover playlists with Play and Shuffle. |
 | [v3.4.8](https://github.com/liuYousefKahwaji/Resonance/releases/tag/v3.4.8) | Permanent Favorites playlist, bulk favoriting, gold indicators, Favorites-first sorting, and YouTube Music Playlist Library. |
