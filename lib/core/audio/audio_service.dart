@@ -1,6 +1,9 @@
 // lib/core/audio/audio_service.dart
 
 import 'dart:async';
+import 'package:resonance/core/audio/media_source_readiness.dart';
+import 'package:resonance/core/audio/standalone_video_session.dart';
+import 'package:resonance/models/youtube_video_source.dart';
 import 'package:resonance/core/audio/voice_chat_controller.dart';
 import 'package:resonance/services/listening_statistics.dart';
 import 'dart:io';
@@ -370,6 +373,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   final ValueNotifier<int> seekStepNotifier = ValueNotifier<int>(5);
   LoopMode currentLoopMode = LoopMode.all;
   bool isShuffle = false;
+  bool isRandom = false;
+  PlaybackOrderMode get playbackOrderMode => !isShuffle
+      ? PlaybackOrderMode.off
+      : isRandom
+      ? PlaybackOrderMode.random
+      : PlaybackOrderMode.shuffle;
   final Map<int, PlaylistShuffleOrder> _shuffleOrders = {};
   final _shuffleOrderForPaths = Expando<PlaylistShuffleOrder>();
   int _shuffleSelectionGeneration = -1;
@@ -403,6 +412,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   int? _standalonePlaylistNumber;
   int? _standalonePlaylistIndex;
   List<StandaloneStreamQueueItem> _standaloneStreamQueue = const [];
+  List<StandaloneStreamQueueItem> _standaloneQueueOriginal = const [];
+  final PlaylistShuffleOrder _standaloneShuffleOrder = PlaylistShuffleOrder();
+  bool _standaloneNeedsShuffleReset = false;
   int? _standaloneStreamQueueIndex;
   bool _standaloneRelatedEnabled = false;
   int _standaloneRelatedGeneration = 0;
@@ -458,6 +470,134 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   // Tracks whether the current track is a stream (URL), for seek behaviour.
   bool _currentTrackIsStream = false;
 
+  StandaloneVideoSession? _standaloneVideo;
+  ResolvedYoutubeStream? _videoAudioOverride;
+  int? _videoAudioGeneration;
+  StandaloneVideoSession get standaloneVideo => _standaloneVideo ??= StandaloneVideoSession(
+    frame: _standaloneVideoFrame,
+    activateAudio: _activateVideoAudio,
+    restoreAudio: _restoreSongAudio,
+  );
+
+  StandaloneVideoFrame? _standaloneVideoFrame() {
+    final item = mediaItem.value;
+    if (item == null || YoutubeTrack(title: '', artist: '', url: item.id).videoId == null || _playbackUnavailable) {
+      return null;
+    }
+    return StandaloneVideoFrame(
+      trackId: item.id,
+      generation: _loadGeneration,
+      position: currentSourcePosition,
+      playing: _isBackendPlaying,
+      rate: speedNotifier.value,
+      seekRevision: _voiceChatSeekRevision,
+      loading: _activeTrackLoadGeneration != null || _pendingStreamSourceGeneration != null,
+    );
+  }
+
+  Future<Duration?> _activateVideoAudio(
+    ResolvedYoutubeVideo source,
+    YoutubeMediaVersions versions,
+    StandaloneVideoFrame owner,
+    bool Function() current,
+  ) async {
+    if (!current() || _syncSessionActive) return null;
+    final resolved = ResolvedYoutubeStream(
+      uri: source.audioUri,
+      headers: source.audioHeaders,
+      accessRevision: _youtubeAccessService?.revision ?? 0,
+    );
+    final position = currentSourcePosition;
+    _videoAudioOverride = resolved;
+    _videoAudioGeneration = owner.generation;
+    await _replaceVideoAudio(resolved, owner, position, current);
+    return current() ? currentSourcePosition : null;
+  }
+
+  Future<void> _restoreSongAudio(
+    StandaloneVideoFrame owner,
+    YoutubeMediaVersions? versions,
+    bool Function() current,
+  ) async {
+    bool valid() => current() && owner.generation == _loadGeneration && mediaItem.value?.id == owner.trackId;
+    if (!valid() || _videoAudioGeneration != owner.generation) return;
+    final resolved = await _resolveStream(owner.trackId);
+    if (!valid()) return;
+    final position = currentSourcePosition;
+    await _replaceVideoAudio(resolved, owner, position, valid);
+    if (valid()) {
+      _videoAudioOverride = null;
+      _videoAudioGeneration = null;
+    }
+  }
+
+  /// Mode switches replace only the transport source: queue identity, history,
+  /// metadata and the user's play/pause intent belong to the original song.
+  Future<void> _replaceVideoAudio(
+    ResolvedYoutubeStream resolved,
+    StandaloneVideoFrame owner,
+    Duration position,
+    bool Function() current,
+  ) async {
+    bool valid() => current() && owner.generation == _loadGeneration && mediaItem.value?.id == owner.trackId;
+    if (!valid()) return;
+    _playbackHealthWatchdog.cancel();
+    _crossfadeGeneration++;
+    _crossfadeInProgress = false;
+    _transitionVolumeMultiplier = 1;
+    voiceChat?.suspendMusic();
+    _pendingStreamSourceGeneration = owner.generation;
+    _updatePlaybackState();
+    try {
+      Future<void> replace() async {
+        if (!valid()) return;
+        if (Platform.isWindows) {
+          final player = _windowsPlayer!;
+          await player.open(mk.Media(resolved.uri.toString(), httpHeaders: resolved.headers), play: false);
+          if (!valid()) return;
+          if (!await waitForMediaSourceReady(player, valid)) return;
+          final duration = player.state.duration;
+          final target = duration > Duration.zero && position >= duration ? Duration.zero : position;
+          await player.seek(target);
+          if (!valid()) return;
+          _windowsPosition = target;
+          _windowsDuration = duration;
+          _windowsIsCompleted = false;
+          _windowsIsBuffering = player.state.buffering;
+          await _applyOutputVolume();
+          if (valid() && _playbackRequested) await player.play();
+        } else {
+          // just_audio retains its playing flag across source replacement.
+          // Keep the new stream paused until its position and focus are ready.
+          await _player.pause();
+          if (!valid()) return;
+          await _player.setAudioSource(AudioSource.uri(resolved.uri, headers: resolved.headers));
+          if (!valid()) return;
+          final duration = _player.duration;
+          await _player.seek(duration != null && position >= duration ? Duration.zero : position);
+          if (!valid()) return;
+          await _applyOutputVolume();
+          if (valid() && _playbackRequested) await _startJustAudioPlayer(_player, owner.generation);
+        }
+      }
+
+      if (Platform.isWindows) {
+        await _queueBackendLoad(replace);
+      } else {
+        await replace();
+      }
+    } finally {
+      if (valid()) {
+        _pendingStreamSourceGeneration = null;
+        final item = mediaItem.value;
+        if (item != null) mediaItem.add(item.copyWith(duration: _currentDuration));
+        _voiceChatSeekRevision++;
+        _updatePlaybackState();
+        _armPlaybackHealthCheck(owner.generation, grace: _streamStartupGrace);
+      }
+    }
+  }
+
   bool get isStandaloneMode => standaloneModeNotifier.value || mediaItem.value?.extras?['resonanceStandalone'] == true;
   bool get isStandaloneStreamSession =>
       isStandaloneMode &&
@@ -468,6 +608,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   bool get syncSessionActive => _syncSessionActive;
 
   void setSyncSessionMode({required bool active, required bool peerControlled}) {
+    if (active) unawaited(_standaloneVideo?.showSong());
     _syncSessionActive = active;
     _syncPeerControlled = active && peerControlled;
     if (active && _crossfadeInProgress) {
@@ -515,6 +656,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   void setStandalonePresentation(bool enabled) {
     standaloneModeNotifier.value = enabled;
     if (!enabled) {
+      unawaited(_standaloneVideo?.showSong());
       _standalonePlaylistNumber = null;
       _standalonePlaylistIndex = null;
       _standaloneStreamQueue = const [];
@@ -989,7 +1131,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (!identical(player, _player)) return;
       _updatePlaybackState();
       if (state == ProcessingState.completed) {
-        if (_crossfadeInProgress || _activeTrackLoadGeneration != null || !_playbackRequested || _playbackUnavailable) {
+        if (_crossfadeInProgress ||
+            _activeTrackLoadGeneration != null ||
+            _pendingStreamSourceGeneration == _loadGeneration ||
+            !_playbackRequested ||
+            _playbackUnavailable) {
           return;
         }
         final genAtCompletion = _loadGeneration;
@@ -998,6 +1144,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         if (currentLoopMode == LoopMode.one) {
           ListeningStatistics.instance.onSessionEnded();
           await player.seek(Duration.zero);
+          _voiceChatSeekRevision++;
           if (_loadGeneration != genAtCompletion) return;
           unawaited(_startJustAudioPlayer(player, genAtCompletion));
         } else if (_loadGeneration == genAtCompletion) {
@@ -1026,6 +1173,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      unawaited(_standaloneVideo?.showSong());
+    }
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
@@ -1227,7 +1377,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<AudioSource> _buildAudioSource(String filePath, {PlaybackRange? range}) async {
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
     if (isStream) {
-      final resolved = await _resolveStream(filePath);
+      final resolved = _videoAudioGeneration == _loadGeneration && mediaItem.value?.id == filePath
+          ? _videoAudioOverride ?? await _resolveStream(filePath)
+          : await _resolveStream(filePath);
       return AudioSource.uri(resolved.uri, headers: resolved.headers);
     } else {
       final bounds = range ?? await playbackRangeFor(filePath);
@@ -1239,7 +1391,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<mk.Media> _buildMediaKitMedia(String filePath, {PlaybackRange? range}) async {
     final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
     if (isStream) {
-      final resolved = await _resolveStream(filePath);
+      final resolved = _videoAudioGeneration == _loadGeneration && mediaItem.value?.id == filePath
+          ? _videoAudioOverride ?? await _resolveStream(filePath)
+          : await _resolveStream(filePath);
       return mk.Media(resolved.uri.toString(), httpHeaders: resolved.headers);
     }
     final bounds = range ?? await playbackRangeFor(filePath);
@@ -1584,7 +1738,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       await _markPlaybackUnavailable(generation);
       return;
     }
-    final playlist = await _effectivePlaybackOrder(playlistNumber: playlistNumber);
+    final playlist = await _effectivePlaybackOrder(playlistNumber: playlistNumber, reset: isRandom);
     if (_loadGeneration != generation || !_playbackRequested) return;
     final currentIndex = _currentPlaylistIndex(playlist, failedItem.id);
     final nextIndex = nextPlayablePlaylistIndex(
@@ -1814,6 +1968,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       final savedLoopMode = prefs.getString('last_loop_mode');
       currentLoopMode = LoopMode.values.firstWhere((mode) => mode.name == savedLoopMode, orElse: () => LoopMode.all);
       isShuffle = prefs.getBool('last_shuffle') ?? false;
+      isRandom = isShuffle && (prefs.getBool('last_shuffle_random') ?? false);
       if (isShuffle) await shuffleQueue();
       playbackModeRevision.value++;
 
@@ -2335,6 +2490,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   // ─── Automatic crossfade ─────────────────────────────────────────
   void _maybeStartAutomaticCrossfade() {
     if (_crossfadeInProgress ||
+        (_standaloneVideo?.wantsVideo ?? false) ||
         !_playbackRequested ||
         _syncSessionActive ||
         _activeTrackLoadGeneration != null ||
@@ -2359,13 +2515,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (currentItem == null) return null;
     final playlistNumber = _standalonePlaylistNumber;
     if (isStandaloneMode && playlistNumber == null) return null;
-    final playlist = await _effectivePlaybackOrder(playlistNumber: playlistNumber);
+    var playlist = await _effectivePlaybackOrder(playlistNumber: playlistNumber, reset: isRandom);
     if (playlist.length < 2) return null;
     final currentIndex = _currentPlaylistIndex(playlist, currentItem.id);
     if (currentIndex < 0) return null;
     final candidateIndex = currentIndex + 1;
     if (candidateIndex >= playlist.length && currentLoopMode == LoopMode.off) return null;
-    final nextIndex = candidateIndex % playlist.length;
+    var nextIndex = candidateIndex % playlist.length;
+    if (isShuffle && !isRandom && candidateIndex >= playlist.length) {
+      playlist = await _restartPlaylistShuffleCycle(playlistNumber);
+      if (playlist.isEmpty) return null;
+      nextIndex = 0;
+    }
     final path = playlist[nextIndex];
     final metadata = await _getTrackMetadata(path);
     return _AutomaticTrackTarget(
@@ -2916,6 +3077,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final player = _player;
     await player.seek(position);
     if (_loadGeneration != sourceGeneration || !identical(player, _player)) return;
+    _voiceChatSeekRevision++;
     _updatePlaybackState();
   }
 
@@ -2964,6 +3126,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _retryLoadGeneration = null;
     _handledFailureGeneration = null;
     _loadGeneration++;
+    _standaloneVideo?.sourceChanged();
+    unawaited(_standaloneVideo?.showSong());
+    _videoAudioOverride = null;
+    _videoAudioGeneration = null;
     _cancelSupersededAndroidStreams(null);
     _crossfadeGeneration++;
     _crossfadeInProgress = false;
@@ -3073,6 +3239,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final outgoingPositionSave = preservePosition ? saveCurrentPlaybackPosition() : Future<void>.value();
     ListeningStatistics.instance.onSessionEnded();
     final generation = ++_loadGeneration;
+    _videoAudioOverride = null;
+    _videoAudioGeneration = null;
+    _standaloneVideo?.sourceChanged();
+    if (YoutubeTrack(title: '', artist: '', url: filePath).videoId == null) {
+      unawaited(_standaloneVideo?.showSong());
+    }
     _cancelPendingSeeks();
     voiceChat?.suspendMusic();
     // Invalidate transitions before the first await: a newer selection owns
@@ -3129,6 +3301,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     } finally {
       if (_activeTrackLoadGeneration == generation) {
         _activeTrackLoadGeneration = null;
+        if (_lastTrackLoadFailure == null) _standaloneVideo?.sourceReady();
       }
     }
   }
@@ -3219,6 +3392,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       ),
     );
     playbackVisualNotifier.value = PlaybackVisualState(trackId: filePath, loading: isStream);
+    if (isRandom || (isShuffle && _standaloneNeedsShuffleReset)) {
+      await shuffleQueue(reset: true);
+      if (_loadGeneration != myGen) return;
+    }
+    _standaloneNeedsShuffleReset = false;
     try {
       if (_loadGeneration != myGen) return;
 
@@ -3456,6 +3634,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         ? queueIndex
         : requestedQueue.indexWhere((item) => item.url == url);
     _standaloneStreamQueue = requestedQueue.isEmpty ? const [] : List.unmodifiable(requestedQueue);
+    _standaloneQueueOriginal = List.of(_standaloneStreamQueue);
+    _standaloneNeedsShuffleReset = true;
     _standaloneStreamQueueIndex = resolvedIndex >= 0 ? resolvedIndex : null;
     final artworkUri = thumbnailUrl == null || thumbnailUrl.isEmpty ? null : Uri.tryParse(thumbnailUrl);
     unawaited(MetadataCacheService.set(url, title, artist, artworkUrl: thumbnailUrl));
@@ -3536,6 +3716,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (upcoming.isEmpty) return;
       _standaloneStreamQueue = List.unmodifiable([...history, ...upcoming]);
       _standaloneStreamQueueIndex = history.length - 1;
+      _standaloneQueueOriginal = List.of(_standaloneStreamQueue);
+      if (isShuffle) _orderStandaloneQueue();
       mediaItem.add(mediaItem.value);
       unawaited(warmStreamCandidates(upcoming.take(2).map((item) => item.url)));
     } catch (error) {
@@ -3781,11 +3963,16 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       await _moveStandaloneStreamQueue(1, TrackTransitionDirection.next);
       return;
     }
-    final playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber);
+    var playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber, reset: isRandom);
     if (_loadGeneration != generation || playlist.isEmpty) return;
     final index = _currentPlaylistIndex(playlist, currentItem.id);
     if (index == -1) return;
-    final nextIndex = (index + 1) % playlist.length;
+    var nextIndex = (index + 1) % playlist.length;
+    if (isShuffle && !isRandom && index + 1 >= playlist.length) {
+      playlist = await _restartPlaylistShuffleCycle(standalonePlaylistNumber);
+      if (_loadGeneration != generation || playlist.isEmpty) return;
+      nextIndex = 0;
+    }
     final nextPath = playlist[nextIndex];
     final meta = await _getTrackMetadata(nextPath);
     if (_loadGeneration != generation) return;
@@ -3812,18 +3999,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (currentItem == null) return;
     final standalonePlaylistNumber = _standalonePlaylistNumber;
     if (isStandaloneMode && standalonePlaylistNumber == null) {
-      if (restartCurrent && _currentPosition > const Duration(seconds: 3)) {
+      if (!isRandom && restartCurrent && _currentPosition > const Duration(seconds: 3)) {
         await seek(Duration.zero);
         return;
       }
       await _moveStandaloneStreamQueue(-1, TrackTransitionDirection.previous);
       return;
     }
-    final playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber);
+    final playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber, reset: isRandom);
     if (_loadGeneration != generation || playlist.isEmpty) return;
     final index = _currentPlaylistIndex(playlist, currentItem.id);
     if (index == -1) return;
-    if (restartCurrent && _currentPosition > const Duration(seconds: 3)) {
+    if (!isRandom && restartCurrent && _currentPosition > const Duration(seconds: 3)) {
       await seek(Duration.zero);
       return;
     }
@@ -3878,14 +4065,21 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> _moveStandaloneStreamQueue(int offset, TrackTransitionDirection direction) async {
-    final items = _standaloneStreamQueue;
+    if (isRandom) _orderStandaloneQueue(reset: true);
+    var items = _standaloneStreamQueue;
     if (items.isEmpty) return;
     var index = _standaloneStreamQueueIndex;
     if (index == null || index < 0 || index >= items.length) {
       index = items.indexWhere((item) => item.url == mediaItem.value?.id);
     }
     if (index < 0) return;
-    final targetIndex = loopingStandaloneQueueIndex(currentIndex: index, offset: offset, length: items.length);
+    var targetIndex = loopingStandaloneQueueIndex(currentIndex: index, offset: offset, length: items.length);
+    if (isShuffle && !isRandom && offset > 0 && index + offset >= items.length) {
+      _orderStandaloneQueue(newCycle: true);
+      items = _standaloneStreamQueue;
+      if (items.isEmpty) return;
+      targetIndex = 0;
+    }
     await _loadStandaloneStreamQueueItem(targetIndex, direction);
   }
 
@@ -4005,10 +4199,13 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   Future<void> toggleShuffle() async {
     if (_syncControlLocked) return;
-    isShuffle = !isShuffle;
-    if (isShuffle) await shuffleQueue(reset: true);
+    final next = PlaybackOrderMode.values[(playbackOrderMode.index + 1) % PlaybackOrderMode.values.length];
+    isShuffle = next != PlaybackOrderMode.off;
+    isRandom = next == PlaybackOrderMode.random;
+    await shuffleQueue(reset: true);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('last_shuffle', isShuffle);
+    await prefs.setBool('last_shuffle_random', isRandom);
     playbackModeRevision.value++;
   }
 
@@ -4016,9 +4213,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_syncControlLocked) return;
     if (isShuffle == enabled) return;
     isShuffle = enabled;
-    if (isShuffle) await shuffleQueue(reset: true);
+    isRandom = false;
+    await shuffleQueue(reset: true);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('last_shuffle', isShuffle);
+    await prefs.setBool('last_shuffle_random', false);
     playbackModeRevision.value++;
   }
 
@@ -4035,6 +4234,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       prefs.setDouble('last_bass_boost', _globalPlaybackAdjustments.equalizer.legacyBassEquivalent),
       prefs.setString('last_loop_mode', currentLoopMode.name),
       prefs.setBool('last_shuffle', isShuffle),
+      prefs.setBool('last_shuffle_random', isRandom),
       prefs.setBool('volume_normalization_enabled', volumeNormalizationEnabledNotifier.value),
     ]);
     final current = mediaItem.value;
@@ -4047,7 +4247,47 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> shuffleQueue({bool reset = false}) async {
-    await _effectivePlaybackOrder(reset: reset);
+    if (isStandaloneMode && _standalonePlaylistNumber == null && _standaloneStreamQueue.isNotEmpty) {
+      _orderStandaloneQueue(reset: reset);
+      return;
+    }
+    await _effectivePlaybackOrder(playlistNumber: _standalonePlaylistNumber, reset: reset);
+  }
+
+  void _orderStandaloneQueue({bool reset = false, bool newCycle = false}) {
+    if (_standaloneQueueOriginal.isEmpty) _standaloneQueueOriginal = List.of(_standaloneStreamQueue);
+    final current = mediaItem.value?.id;
+    if (!isShuffle) {
+      _standaloneStreamQueue = List.unmodifiable(_standaloneQueueOriginal);
+    } else {
+      final paths = _standaloneQueueOriginal.map((item) => item.url).toList();
+      if (newCycle) {
+        _standaloneShuffleOrder.restartCycle(paths, previous: current, same: _sameTrackId);
+      } else if (reset || _standaloneShuffleOrder.paths.isEmpty) {
+        _standaloneShuffleOrder.reset(paths, current: current, same: _sameTrackId);
+      } else {
+        _standaloneShuffleOrder.reconcile(paths, same: _sameTrackId);
+      }
+      _standaloneStreamQueue = List.unmodifiable(
+        _standaloneShuffleOrder.paths.map((path) => _standaloneQueueOriginal.firstWhere((item) => item.url == path)),
+      );
+    }
+    _standaloneStreamQueueIndex = newCycle ? -1 : _standaloneStreamQueue.indexWhere((item) => item.url == current);
+    playbackModeRevision.value++;
+  }
+
+  Future<List<String>> _restartPlaylistShuffleCycle(int? number) async {
+    var result = <String>[];
+    await _playlistOrderOperations.run(() async {
+      final playlist = number ?? await FileService().getActivePlaylistNumber();
+      final tracks = await _getCleanPlaylist(playlistNumber: playlist);
+      final order = _shuffleOrders.putIfAbsent(playlist, PlaylistShuffleOrder.new);
+      order.restartCycle(tracks, previous: mediaItem.value?.id, same: _sameTrackId);
+      result = order.paths;
+      _shuffleOrderForPaths[result] = order;
+    });
+    playbackModeRevision.value++;
+    return result;
   }
 
   Future<List<String>> _effectivePlaybackOrder({int? playlistNumber, bool reset = false}) async {
@@ -4112,12 +4352,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           _standaloneStreamQueue[currentIndex].url != current.id) {
         currentIndex = _standaloneStreamQueue.indexWhere((item) => item.url == current.id);
       }
-      return standaloneStreamQueueSnapshot(
+      final snapshot = standaloneStreamQueueSnapshot(
         items: _standaloneStreamQueue,
         currentIndex: currentIndex,
         // Search and Home session queues intentionally wrap regardless of the
         // persisted playlist repeat setting.
         loopBehavior: QueueLoopBehavior.all,
+      );
+      return PlaybackQueueSnapshot(
+        current: snapshot.current,
+        upcoming: snapshot.upcoming,
+        loopBehavior: snapshot.loopBehavior,
+        shuffled: isShuffle,
       );
     }
     final paths = isStandaloneMode && playlistNumber == null
@@ -4169,6 +4415,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    await _standaloneVideo?.close();
     await voiceChat?.shutdown();
     await stopPlaybackRangePreview(resume: false);
     _playbackRequested = false;

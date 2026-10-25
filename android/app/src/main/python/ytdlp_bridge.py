@@ -244,6 +244,33 @@ def _normalize_music_home_item(item):
     }
 
 
+def _music_media_versions(ytmusic, video_id):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(video_id or "")):
+        raise ValueError("Invalid video ID")
+    tracks = (ytmusic.get_watch_playlist(videoId=video_id, limit=1) or {}).get("tracks") or []
+    for item in tracks:
+        alternate = item.get("counterpart") or {}
+        if item.get("videoId") == video_id:
+            current, other = item, alternate
+        elif alternate.get("videoId") == video_id:
+            current, other = alternate, item
+        else:
+            continue
+        other_id = other.get("videoId")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(other_id or "")):
+            other_id = None
+        audio_only = current.get("videoType") == "MUSIC_VIDEO_TYPE_ATV"
+        return {"originalId": video_id,
+                "songId": video_id if audio_only else (other_id if other.get("videoType") == "MUSIC_VIDEO_TYPE_ATV" else video_id),
+                "videoId": other_id if audio_only else video_id}
+    return {"originalId": video_id, "songId": video_id, "videoId": video_id}
+
+
+def get_music_media_versions(video_id):
+    from ytmusicapi import YTMusic
+    return json.dumps(_music_media_versions(YTMusic(language="en"), video_id))
+
+
 def get_music_related(video_id: str, limit: int = 25) -> str:
     """Return YouTube Music's actual radio/watch queue for one video."""
     from ytmusicapi import YTMusic
@@ -809,6 +836,32 @@ def get_stream_data(url: str, cookie_file=None, prefer_authenticated=False, canc
         url, opts, cookie_file=cookie_file, transform=_stream_payload,
         prefer_guest=not prefer_authenticated, cancelled=cancelled,
     )
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _video_stream_payload(info, ydl):
+    selected = info.get("requested_formats") or [info]
+    video = next((f for f in selected if f.get("vcodec") not in (None, "none")), None)
+    audio = next((f for f in selected if f.get("acodec") not in (None, "none")), None)
+    if not video or not audio:
+        raise RuntimeError("This upload has no playable video and audio pair")
+    def stream_headers(fmt):
+        headers = dict(fmt.get("http_headers") or info.get("http_headers") or {})
+        jar = getattr(ydl, "cookiejar", None)
+        if jar is not None and hasattr(jar, "get_cookie_header"):
+            cookie = jar.get_cookie_header(fmt["url"])
+            if cookie:
+                headers["Cookie"] = cookie
+        return headers
+    return {"videoUrl": video["url"], "audioUrl": audio["url"],
+            "videoHeaders": stream_headers(video), "audioHeaders": stream_headers(audio)}
+
+
+def get_video_stream_data(url, cookie_file=None, cancelled=None):
+    opts = {"skip_download": True, "no_playlist": True,
+            "format": "bestvideo[height<=720][has_drm!=true]+bestaudio[has_drm!=true]/best[height<=720][has_drm!=true]"}
+    payload, _ = _extract_info(url, opts, cookie_file=cookie_file, transform=_video_stream_payload,
+                              prefer_guest=True, cancelled=cancelled)
     return json.dumps(payload, ensure_ascii=False)
 
 

@@ -1,5 +1,7 @@
 import 'dart:math';
 
+enum PlaybackOrderMode { off, shuffle, random }
+
 /// A playlist's shuffle session. Edits preserve the visited prefix and the
 /// remaining order; additions are mixed only into the unplayed suffix.
 class PlaylistShuffleOrder {
@@ -11,6 +13,20 @@ class PlaylistShuffleOrder {
 
   List<String> get paths => List.unmodifiable(_paths);
   int get index => _index;
+
+  /// A new full cycle, without immediately repeating the outgoing song.
+  void restartCycle(List<String> tracks, {String? previous, required bool Function(String, String) same}) {
+    _paths = List.of(tracks)..shuffle(_random);
+    if (previous != null && _paths.length > 1 && same(_paths.first, previous)) {
+      final other = _paths.indexWhere((path) => !same(path, previous));
+      if (other > 0) {
+        final first = _paths[0];
+        _paths[0] = _paths[other];
+        _paths[other] = first;
+      }
+    }
+    _index = -1;
+  }
 
   void reset(List<String> tracks, {String? current, required bool Function(String, String) same}) {
     _paths = List.of(tracks)..shuffle(_random);

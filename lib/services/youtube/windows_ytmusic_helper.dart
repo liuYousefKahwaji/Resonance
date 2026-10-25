@@ -34,8 +34,9 @@ class WindowsYtMusicHelper {
     final configuredAccess = access ?? YoutubeAccessService.active;
     final browser = overrideBrowserSource ?? configuredAccess?.windowsBrowserId;
     final cookiePath = configuredAccess?.windowsCookiePath;
-    final authenticated = action != 'search' && action != 'related' && (browser != null || cookiePath != null);
-    if (action != 'related' && action != 'playlist' && action != 'search' && !authenticated) {
+    final authenticated =
+        action != 'search' && action != 'related' && action != 'versions' && (browser != null || cookiePath != null);
+    if (action != 'related' && action != 'playlist' && action != 'search' && action != 'versions' && !authenticated) {
       throw const YoutubeFailure(
         kind: YoutubeFailureKind.verificationRequired,
         userMessage: 'Connect YouTube access before using YouTube Music.',
@@ -57,11 +58,16 @@ class WindowsYtMusicHelper {
     late final String stderr;
     late final int exitCode;
     try {
-      final output = await Future.wait<Object>([
-        process.stdout.transform(utf8.decoder).join(),
-        process.stderr.transform(utf8.decoder).join(),
-        process.exitCode,
-      ]).timeout(action == 'related' || action == 'search' ? const Duration(seconds: 15) : const Duration(seconds: 60));
+      final output =
+          await Future.wait<Object>([
+            process.stdout.transform(utf8.decoder).join(),
+            process.stderr.transform(utf8.decoder).join(),
+            process.exitCode,
+          ]).timeout(
+            action == 'related' || action == 'search' || action == 'versions'
+                ? const Duration(seconds: 15)
+                : const Duration(seconds: 60),
+          );
       stdout = output[0] as String;
       stderr = output[1] as String;
       exitCode = output[2] as int;

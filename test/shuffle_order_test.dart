@@ -6,6 +6,24 @@ import 'package:resonance/core/audio/shuffle_order.dart';
 bool same(String a, String b) => a == b;
 
 void main() {
+  test('wrapping starts a complete fresh cycle without immediately replaying the last song', () {
+    final order = PlaylistShuffleOrder(random: Random(1));
+    final tracks = List.generate(25, (i) => '$i');
+    order.reset(tracks, current: '0', same: same);
+    for (var cycle = 0; cycle < 30; cycle++) {
+      final previous = order.paths;
+      order.restartCycle(tracks, previous: previous.last, same: same);
+      expect(order.paths, isNot(previous));
+      expect(order.paths.first, isNot(previous.last));
+      expect(order.paths.toSet(), tracks.toSet());
+      expect(order.paths.length, tracks.length);
+    }
+    order.restartCycle(['only'], previous: 'only', same: same);
+    expect(order.paths, ['only']);
+    order.restartCycle([], same: same);
+    expect(order.paths, isEmpty);
+  });
+
   test('a cycle includes every track once and starts with the playing song', () {
     for (var seed = 0; seed < 100; seed++) {
       final order = PlaylistShuffleOrder(random: Random(seed));

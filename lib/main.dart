@@ -104,7 +104,7 @@ void _shutdownLog(String event) {
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeUpdateTestProfile();
-  if (Platform.isWindows) {
+  if (Platform.isWindows || Platform.isAndroid) {
     mk.MediaKit.ensureInitialized();
   }
   await MetadataGod.initialize();

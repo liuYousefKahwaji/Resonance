@@ -1,4 +1,6 @@
 import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
+import 'package:media_kit_video/media_kit_video.dart';
+import 'package:resonance/core/audio/standalone_video_session.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/widgets/player/playback_range_dialog.dart';
 import 'package:resonance/widgets/player/playback_range_indicator.dart';
@@ -421,6 +423,25 @@ class StandalonePlayerScreen extends StatefulWidget {
 }
 
 class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
+  PlayerHandler? _videoHandler;
+  Animation<double>? _coveringRoute;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _videoHandler = context.read<PlayerHandler>();
+    final animation = ModalRoute.of(context)?.secondaryAnimation;
+    if (!identical(animation, _coveringRoute)) {
+      _coveringRoute?.removeListener(_routeCovered);
+      _coveringRoute = animation;
+      animation?.addListener(_routeCovered);
+    }
+  }
+
+  void _routeCovered() {
+    if ((_coveringRoute?.value ?? 0) > 0) unawaited(_videoHandler?.standaloneVideo.showSong());
+  }
+
   bool _lyricsVisible = false;
   bool _queueDrawerOpen = false;
   bool _leavingSync = false;
@@ -500,6 +521,8 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
 
   @override
   void dispose() {
+    _coveringRoute?.removeListener(_routeCovered);
+    unawaited(_videoHandler?.standaloneVideo.showSong());
     if (widget.syncPeer) SyncSessionService.instance.removeListener(_onSyncChanged);
     super.dispose();
   }
@@ -546,6 +569,7 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
           canPop: !widget.syncPeer || _leavingSync,
           onPopInvokedWithResult: (didPop, _) {
             if (!didPop) _popRequested = false;
+            if (didPop) unawaited(handler.standaloneVideo.showSong());
             if (didPop && widget.playlistTrack) handler.setStandalonePresentation(false);
           },
           child: StandaloneGradientSurface(
@@ -633,7 +657,12 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                     IconButton(
                       key: const Key('standalone-lyrics-toggle'),
                       tooltip: _lyricsVisible ? context.tr("Hide lyrics") : context.tr("Show lyrics"),
-                      onPressed: () => setState(() => _lyricsVisible = !_lyricsVisible),
+                      onPressed: () {
+                        if (!_lyricsVisible && MediaQuery.sizeOf(context).width < 960) {
+                          unawaited(handler.standaloneVideo.showSong());
+                        }
+                        setState(() => _lyricsVisible = !_lyricsVisible);
+                      },
                       icon: AnimatedSwitcher(
                         duration: const Duration(milliseconds: 220),
                         child: Icon(
@@ -652,15 +681,29 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                     valueListenable: handler.playbackVisualNotifier,
                     builder: (context, playback, _) => Column(
                       children: [
+                        if (!widget.syncPeer &&
+                            !handler.syncSessionActive &&
+                            YoutubeTrack(title: '', artist: '', url: item?.id ?? '').videoId != null)
+                          _SongVideoSelector(
+                            session: handler.standaloneVideo,
+                            onVideo: () {
+                              if (MediaQuery.sizeOf(context).width < 960) setState(() => _lyricsVisible = false);
+                            },
+                          ),
                         Expanded(
                           child: ValueListenableBuilder<TrackTransitionState>(
                             valueListenable: handler.trackTransitionNotifier,
                             builder: (context, transition, _) => LayoutBuilder(
                               builder: (context, constraints) {
-                                final artwork = _AnimatedTrackContent(
-                                  item: item,
-                                  isPlaying: playback.playing,
-                                  direction: transition.direction,
+                                final artwork = ListenableBuilder(
+                                  listenable: handler.standaloneVideo,
+                                  builder: (context, _) => handler.standaloneVideo.wantsVideo
+                                      ? _StandaloneVideoSurface(session: handler.standaloneVideo)
+                                      : _AnimatedTrackContent(
+                                          item: item,
+                                          isPlaying: playback.playing,
+                                          direction: transition.direction,
+                                        ),
                                 );
                                 if (!_lyricsVisible) return artwork;
                                 final lyrics = Padding(
@@ -739,6 +782,103 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
       },
     );
   }
+}
+
+class _SongVideoSelector extends StatelessWidget {
+  const _SongVideoSelector({required this.session, required this.onVideo});
+  final StandaloneVideoSession session;
+  final VoidCallback onVideo;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: session,
+    builder: (context, _) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 4, bottom: 8),
+          child: SegmentedButton<bool>(
+            key: const Key('song-video-selector'),
+            showSelectedIcon: false,
+            style: ButtonStyle(
+              visualDensity: VisualDensity.compact,
+              padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 18)),
+              backgroundColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.selected)
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.surface.withValues(alpha: 0.8),
+              ),
+              foregroundColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.selected)
+                    ? Theme.of(context).colorScheme.onPrimary
+                    : Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            segments: [
+              ButtonSegment(value: false, label: Text(context.tr('Song'))),
+              ButtonSegment(value: true, label: Text(context.tr('Video'))),
+            ],
+            selected: {session.wantsVideo},
+            onSelectionChanged: (selection) {
+              if (selection.single) {
+                onVideo();
+                unawaited(session.showVideo());
+              } else {
+                unawaited(session.showSong());
+              }
+            },
+          ),
+        ),
+        if (session.error != null)
+          Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 20, 6),
+            child: Text(
+              context.tr(session.error!),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+class _StandaloneVideoSurface extends StatelessWidget {
+  const _StandaloneVideoSurface({required this.session});
+  final StandaloneVideoSession session;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    child: Center(
+      child: AspectRatio(
+        aspectRatio: 16 / 9,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: ColoredBox(
+            color: Colors.black,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (session.controller != null)
+                  Video(controller: session.controller!, controls: NoVideoControls, fit: BoxFit.contain),
+                if (session.preparing)
+                  Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox.square(dimension: 26, child: CircularProgressIndicator(strokeWidth: 2)),
+                        const SizedBox(height: 12),
+                        Text(context.tr('Loading video…'), style: const TextStyle(color: Colors.white70)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 void _showAndroidUpcomingQueue(BuildContext context, PlayerHandler handler, {required bool allowSelection}) {

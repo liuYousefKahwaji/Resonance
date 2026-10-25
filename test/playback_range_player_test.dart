@@ -24,7 +24,20 @@ void main() {
     addTearDown(() async {
       await handler.dispose();
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(paths, null);
-      await storage.delete(recursive: true);
+      // Windows can briefly retain a native reader/scanner handle after the
+      // decoder has exited. Retry only that sharing violation during cleanup;
+      // playback assertions and all other filesystem failures remain fatal.
+      for (var attempt = 0; ; attempt++) {
+        try {
+          await storage.delete(recursive: true);
+          break;
+        } on FileSystemException catch (error) {
+          if (!Platform.isWindows || error.osError?.errorCode != 32 || attempt >= 9) {
+            rethrow;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+      }
     });
     await Future<void>.delayed(const Duration(milliseconds: 30));
     await handler.loadTrack(path, 'Song', 'Artist', standalone: true);

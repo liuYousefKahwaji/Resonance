@@ -8,6 +8,8 @@ import 'package:media_kit/media_kit.dart' as mk;
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:resonance/core/audio/shuffle_order.dart';
+import 'package:resonance/core/storage/file_service.dart';
 
 const unavailableUrl = 'https://www.youtube.com/watch?v=KCeYsyYo2gc';
 const previousUrl = 'https://www.youtube.com/watch?v=abcdefghijk';
@@ -32,6 +34,119 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(paths, null);
     await storage.delete(recursive: true);
   });
+
+  test('Shuffle wraps into a complete new cycle; Random refreshes only on track actions', () async {
+    SharedPreferences.setMockInitialValues({});
+    final files = FileService();
+    final tracks = List.generate(12, (i) => 'https://www.youtube.com/watch?v=track${i.toString().padLeft(6, '0')}');
+    await files.writeTextToPlaylist(1, '#\n${tracks.join('\n')}\n');
+    await files.setActivePlaylistNumber(1);
+    final player = _RetainingPlayer();
+    final handler = PlayerHandler(
+      windowsPlayer: player,
+      streamResolver: (url) async => ResolvedYoutubeStream(
+        uri: Uri.parse('https://audio.test/${Uri.parse(url).queryParameters['v']}'),
+        accessRevision: 0,
+      ),
+    );
+    addTearDown(handler.dispose);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    await handler.loadTrack(tracks.first, 'First', 'Artist');
+    expect(handler.playbackOrderMode, PlaybackOrderMode.off);
+    await handler.toggleShuffle();
+    expect(handler.playbackOrderMode, PlaybackOrderMode.shuffle);
+    final cycle = <String>[handler.mediaItem.value!.id];
+    for (var i = 1; i < tracks.length; i++) {
+      await handler.next();
+      cycle.add(handler.mediaItem.value!.id);
+    }
+    expect(cycle.toSet(), tracks.toSet());
+    await handler.next();
+    expect(handler.mediaItem.value!.id, isNot(cycle.last));
+    final second = [handler.mediaItem.value!.id, ...(await handler.playbackQueueSnapshot()).upcoming.map((e) => e.id)];
+    expect(second.toSet(), tracks.toSet());
+    expect(second, isNot(cycle));
+    await handler.toggleShuffle();
+    expect(handler.playbackOrderMode, PlaybackOrderMode.random);
+    final initial = (await handler.playbackQueueSnapshot()).upcoming.map((e) => e.id).toList();
+    expect(
+      (await handler.playbackQueueSnapshot()).upcoming.map((e) => e.id),
+      initial,
+      reason: 'Opening the queue is read-only',
+    );
+    final before = handler.mediaItem.value!.id;
+    await handler.next();
+    expect(handler.mediaItem.value!.id, isNot(before));
+    final next = handler.mediaItem.value!.id;
+    await handler.previous();
+    expect(handler.mediaItem.value!.id, isNot(next));
+    await handler.loadTrack(tracks[3], 'Manual', 'Artist');
+    final manual = (await handler.playbackQueueSnapshot()).upcoming.map((e) => e.id).toList();
+    expect(manual.toSet(), tracks.where((e) => e != tracks[3]).toSet());
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('last_shuffle_random'), isTrue);
+    await handler.toggleShuffle();
+    expect(handler.playbackOrderMode, PlaybackOrderMode.off);
+    expect(prefs.getBool('last_shuffle_random'), isFalse);
+  }, skip: !Platform.isWindows);
+
+  test('standalone stream shuffle visits its whole queue and Off restores collection order', () async {
+    SharedPreferences.setMockInitialValues({});
+    final handler = PlayerHandler(
+      windowsPlayer: _RetainingPlayer(),
+      streamResolver: (url) async => ResolvedYoutubeStream(
+        uri: Uri.parse('https://audio.test/${Uri.parse(url).queryParameters['v']}'),
+        accessRevision: 0,
+      ),
+    );
+    addTearDown(handler.dispose);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    final items = List.generate(
+      8,
+      (i) => StandaloneStreamQueueItem(
+        url: 'https://www.youtube.com/watch?v=track${i.toString().padLeft(6, '0')}',
+        title: 'Track $i',
+        artist: 'Artist',
+      ),
+    );
+    await handler.playStandaloneStream(
+      url: items.first.url,
+      title: 'First',
+      artist: 'Artist',
+      queueItems: items,
+      queueIndex: 0,
+      relatedQueue: false,
+    );
+    await handler.toggleShuffle();
+    final cycle = <String>[handler.mediaItem.value!.id];
+    Future<void> next() async {
+      final previous = handler.mediaItem.value!.id;
+      await handler.next();
+      final end = DateTime.now().add(const Duration(seconds: 3));
+      while (handler.mediaItem.value?.id == previous || handler.playbackVisualNotifier.value.loading) {
+        if (DateTime.now().isAfter(end)) fail('Standalone navigation did not complete');
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+    }
+
+    for (var i = 1; i < items.length; i++) {
+      await next();
+      cycle.add(handler.mediaItem.value!.id);
+    }
+    expect(cycle.toSet(), items.map((e) => e.url).toSet());
+    await next();
+    expect(handler.mediaItem.value!.id, isNot(cycle.last));
+    expect((await handler.playbackQueueSnapshot()).shuffled, isTrue);
+    await handler.toggleShuffle(); // Random.
+    await next();
+    await handler.toggleShuffle(); // Off.
+    final index = items.indexWhere((e) => e.url == handler.mediaItem.value!.id);
+    expect(
+      (await handler.playbackQueueSnapshot()).upcoming.map((e) => e.id),
+      [...items.skip(index + 1), ...items.take(index)].map((e) => e.url),
+    );
+    expect((await handler.playbackQueueSnapshot()).shuffled, isFalse);
+  }, skip: !Platform.isWindows);
 
   for (final standalone in [false, true]) {
     test(

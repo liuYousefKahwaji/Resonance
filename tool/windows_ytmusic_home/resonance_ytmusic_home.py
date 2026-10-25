@@ -279,17 +279,45 @@ def _music_collection(ytmusic, url):
     return {"title": (collection or {}).get("title") or "YouTube Music", "entries": entries}
 
 
+
+def _music_media_versions(ytmusic, video_id):
+    """Read only YouTube Music's explicit Song/Video pairing, never title-search."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(video_id or "")):
+        raise ValueError("Invalid video ID")
+    tracks = (ytmusic.get_watch_playlist(videoId=video_id, limit=1) or {}).get("tracks") or []
+    for item in tracks:
+        alternate = item.get("counterpart") or {}
+        if item.get("videoId") == video_id:
+            current, other = item, alternate
+        elif alternate.get("videoId") == video_id:
+            current, other = alternate, item
+        else:
+            continue
+        other_id = other.get("videoId")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(other_id or "")):
+            other_id = None
+        audio_only = current.get("videoType") == "MUSIC_VIDEO_TYPE_ATV"
+        return {"originalId": video_id,
+                "songId": video_id if audio_only else (other_id if other.get("videoType") == "MUSIC_VIDEO_TYPE_ATV" else video_id),
+                "videoId": other_id if audio_only else video_id}
+    # Ordinary YouTube videos may not appear in Music. Keep the exact upload.
+    return {"originalId": video_id, "songId": video_id, "videoId": video_id}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser")
     parser.add_argument("--cookies-file")
-    parser.add_argument("--action", choices=("home", "library", "playlist", "history", "add-history", "search", "related"), default="home")
+    parser.add_argument("--action", choices=("home", "library", "playlist", "history", "add-history", "search", "related", "versions"), default="home")
     parser.add_argument("--playlist-url")
     parser.add_argument("--video-id")
     parser.add_argument("--language", choices=("en", "ar"), default="en")
     parser.add_argument("--query")
     parser.add_argument("--limit", type=int, default=24)
     args = parser.parse_args()
+    if args.action == "versions":
+        print(json.dumps(_music_media_versions(YTMusic(language=args.language), _validated_video_id(args.video_id))))
+        return
     if args.action == "search":
         if not args.query or not args.query.strip():
             parser.error("--query is required for search")

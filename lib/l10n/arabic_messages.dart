@@ -1,5 +1,15 @@
 /// Arabic UI translations. Placeholders match the English message templates.
 const arabicMessages = <String, String>{
+  'Random on': 'التبديل العشوائي المستمر مفعّل',
+  'Song': 'أغنية',
+  'Video': 'فيديو',
+  'Loading video…': 'جارٍ تحميل الفيديو…',
+  'No video version is available for this song.': 'لا يتوفر فيديو لهذه الأغنية.',
+  'Could not load video. You can keep listening in Song mode.':
+      'تعذّر تحميل الفيديو. يمكنك متابعة الاستماع في وضع الأغنية.',
+  'Video playback failed. Song playback is still available.': 'تعذّر تشغيل الفيديو. لا يزال وضع الأغنية متاحًا.',
+  'Could not switch to Song. Try playing this track again.':
+      'تعذّر الانتقال إلى وضع الأغنية. حاول تشغيل المقطع مجددًا.',
   'Launch on startup': 'التشغيل عند بدء ويندوز',
   'Retry music': 'إعادة محاولة تشغيل الموسيقى',
   'Open Resonance when you sign in to Windows, even with tray mode enabled.':

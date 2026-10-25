@@ -1,7 +1,7 @@
 name: resonance
 description: "A local music player with youtube support"
 publish_to: 'none'
-version: 3.6.2+20
+version: 3.7.0+21
 
 environment:
   sdk: ^3.9.2
@@ -38,7 +38,8 @@ dependencies:
   flutter_rust_bridge: 2.11.1
   ffmpeg_kit_audio_flutter: 1.1.0
   media_kit: ^1.2.6
-  media_kit_libs_windows_audio: ^1.0.9
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
   crypto: ^3.0.6
   fftea: ^1.5.0+1
   image: ^4.8.0

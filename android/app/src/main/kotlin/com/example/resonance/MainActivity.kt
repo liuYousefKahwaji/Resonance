@@ -309,6 +309,36 @@ class MainActivity : AudioServiceFragmentActivity() {
                         result.success(null)
                     }
 
+                    "getMusicMediaVersions" -> {
+                        val videoId = call.argument<String>("videoId") ?: ""
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = bridge.callAttr("get_music_media_versions", videoId).toString()
+                                withContext(Dispatchers.Main) { result.success(json) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) { result.error("MEDIA_VERSIONS_ERROR", e.message, null) }
+                            }
+                        }
+                    }
+                    "getVideoStreamData" -> {
+                        val url = call.argument<String>("url") ?: ""
+                        val requestId = call.argument<Number>("requestId")?.toLong() ?: 0L
+                        val cancelled = AtomicBoolean(false)
+                        if (requestId != 0L) streamRequests[requestId] = cancelled
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = withYoutubeCookieCopy { cookiePath ->
+                                    bridge.callAttr("get_video_stream_data", url, cookiePath, cancelled).toString()
+                                }
+                                withContext(Dispatchers.Main) { result.success(json) }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) { result.error("VIDEO_STREAM_ERROR", e.message, null) }
+                            } finally {
+                                if (requestId != 0L) streamRequests.remove(requestId, cancelled)
+                            }
+                        }
+                    }
+
                     "getMusicRelated" -> {
                         val videoId = call.argument<String>("videoId") ?: ""
                         val limit = (call.argument<Int>("limit") ?: 25).coerceIn(1, 50)

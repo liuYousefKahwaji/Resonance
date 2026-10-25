@@ -64,6 +64,22 @@ class EventSink:
 
 
 class AndroidYtdlpBridgeTests(unittest.TestCase):
+    def test_video_pair_is_exact_and_keeps_url_specific_headers(self):
+        class Music:
+            def get_watch_playlist(self, **kwargs):
+                return {"tracks": [
+                    {"videoId": "unrelated00", "counterpart": {"videoId": "unrelated01"}},
+                    {"videoId": "abcdefghijk", "videoType": "MUSIC_VIDEO_TYPE_ATV",
+                     "counterpart": {"videoId": "01234567890", "videoType": "MUSIC_VIDEO_TYPE_OMV"}}]}
+        self.assertEqual(bridge._music_media_versions(Music(), "abcdefghijk")["videoId"], "01234567890")
+        self.assertEqual(bridge._music_media_versions(Music(), "01234567890")["songId"], "abcdefghijk")
+        data = bridge._video_stream_payload({"requested_formats": [
+            {"url": "https://video.test/one", "vcodec": "avc1", "acodec": "none", "http_headers": {"X-Video": "yes"}},
+            {"url": "https://audio.test/two", "vcodec": "none", "acodec": "opus", "http_headers": {"X-Audio": "yes"}}]}, FakeYoutubeDL({}))
+        self.assertEqual(data["videoHeaders"], {"X-Video": "yes"})
+        self.assertEqual(data["audioHeaders"], {"X-Audio": "yes"})
+        with self.assertRaises(ValueError): bridge._music_media_versions(Music(), "invalid")
+
     def test_explicit_music_source_uses_songs_and_never_falls_back(self):
         calls = []
         class Music:

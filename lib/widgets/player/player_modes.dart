@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/core/audio/shuffle_order.dart';
 
 class PlayerModes extends StatefulWidget {
   const PlayerModes({super.key});
@@ -31,6 +32,7 @@ class _PlayerModesState extends State<PlayerModes> {
 
     final loopMode = handler.getLoopMode();
     final shuffleOn = handler.getShuffleMode();
+    final randomOn = handler.playbackOrderMode == PlaybackOrderMode.random;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -62,12 +64,20 @@ class _PlayerModesState extends State<PlayerModes> {
         ),
         // Shuffle
         IconButton(
-          icon: Icon(Icons.shuffle_rounded, size: 20, color: shuffleOn ? primary : inactiveColor),
+          icon: Icon(
+            randomOn ? Icons.casino_rounded : Icons.shuffle_rounded,
+            size: 20,
+            color: shuffleOn ? primary : inactiveColor,
+          ),
           onPressed: () async {
             await handler.toggleShuffle();
             setState(() {});
           },
-          tooltip: shuffleOn ? context.tr("Shuffle on") : context.tr("Shuffle off"),
+          tooltip: randomOn
+              ? context.tr('Random on')
+              : shuffleOn
+              ? context.tr("Shuffle on")
+              : context.tr("Shuffle off"),
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
         ),

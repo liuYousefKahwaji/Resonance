@@ -27,6 +27,19 @@ finally:
 
 
 class WindowsYoutubeMusicHomeTests(unittest.TestCase):
+    def test_song_video_pairing_uses_exact_music_counterpart(self):
+        song = {"videoId": "abcdefghijk", "videoType": "MUSIC_VIDEO_TYPE_ATV"}
+        video = {"videoId": "01234567890", "videoType": "MUSIC_VIDEO_TYPE_OMV"}
+        class Music:
+            def get_watch_playlist(self, **kwargs):
+                return {"tracks": [dict(song, counterpart=video)]}
+        self.assertEqual(helper._music_media_versions(Music(), song["videoId"]),
+                         {"originalId": song["videoId"], "songId": song["videoId"], "videoId": video["videoId"]})
+        self.assertEqual(helper._music_media_versions(Music(), video["videoId"])["songId"], song["videoId"])
+        video.clear()
+        self.assertIsNone(helper._music_media_versions(Music(), song["videoId"])["videoId"])
+        with self.assertRaises(ValueError): helper._music_media_versions(Music(), "not an ID")
+
     def test_music_collection_uses_catalog_ids_preserves_order_and_duplicates(self):
         class Music:
             def get_playlist(self, playlist_id, limit):
