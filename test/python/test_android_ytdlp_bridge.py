@@ -689,7 +689,92 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
             "bestaudio[has_drm!=true]/best[has_drm!=true]",
         )
         self.assertNotIn("postprocessors", FakeYoutubeDL.calls[0])
-        self.assertEqual(FakeYoutubeDL.calls[0]["cookiefile"], cookie_file)
+        self.assertNotIn("cookiefile", FakeYoutubeDL.calls[0])
+        self.assertEqual(FakeYoutubeDL.calls[0]["concurrent_fragment_downloads"], 4)
+        self.assertEqual(FakeYoutubeDL.calls[0]["socket_timeout"], 10)
+        self.assertEqual(FakeYoutubeDL.calls[0]["extractor_retries"], 1)
+        self.assertEqual(FakeYoutubeDL.calls[0]["retries"], 3)
+        self.assertIn("[%(id)s]", FakeYoutubeDL.calls[0]["outtmpl"])
+
+    def test_download_public_audio_does_not_require_a_valid_saved_session(self):
+        sink = EventSink()
+        def respond(ydl, _target, download):
+            self.assertNotIn("cookiefile", ydl.options)
+            return {"id": "aaaaaaaaaaa"}
+        FakeYoutubeDL.responder = respond
+        bridge.download("https://youtu.be/aaaaaaaaaaa", "/unused", sink, "missing-cookies.txt")
+        self.assertEqual(sink.events[-1], "done")
+        self.assertEqual(len(FakeYoutubeDL.calls), 1)
+
+    def test_download_can_fall_back_to_account_for_restricted_audio(self):
+        sink = EventSink()
+        with tempfile.TemporaryDirectory() as directory:
+            cookies = os.path.join(directory, "cookies.txt")
+            Path(cookies).write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            def respond(ydl, _target, download):
+                if not ydl.options.get("cookiefile"):
+                    raise RuntimeError("Sign in to confirm your age")
+                return {"id": "aaaaaaaaaaa"}
+            FakeYoutubeDL.responder = respond
+            bridge.download("https://youtu.be/aaaaaaaaaaa", directory, sink, cookies)
+        self.assertEqual(sink.events[-1], "done")
+        self.assertTrue(any(call.get("cookiefile") == cookies for call in FakeYoutubeDL.calls))
+
+    def test_download_retries_initial_network_failure_once(self):
+        sink = EventSink()
+        calls = []
+        def respond(ydl, _target, download):
+            calls.append(download)
+            if len(calls) == 1:
+                raise TimeoutError("The request timed out")
+            return {"id": "aaaaaaaaaaa"}
+        FakeYoutubeDL.responder = respond
+        with patch("time.sleep"):
+            bridge.download("https://youtu.be/aaaaaaaaaaa", "/unused", sink)
+        self.assertEqual(calls, [True, True])
+        self.assertEqual(sink.events[-1], "done")
+
+    def test_download_does_not_retry_network_failure_after_a_complete_track(self):
+        sink = EventSink()
+        def respond(ydl, _target, download):
+            ydl.options["progress_hooks"][0]({"status": "finished", "filename": "/track.webm", "info_dict": {"id": "aaaaaaaaaaa"}})
+            raise TimeoutError("The request timed out")
+        FakeYoutubeDL.responder = respond
+        with patch("time.sleep") as sleep:
+            bridge.download("https://youtu.be/aaaaaaaaaaa", "/unused", sink)
+        self.assertEqual(len(FakeYoutubeDL.calls), 1)
+        sleep.assert_not_called()
+        self.assertTrue(any(event.startswith("track-json:") for event in sink.events))
+
+    def test_download_does_not_retry_rate_limits(self):
+        sink = EventSink()
+        FakeYoutubeDL.responder = lambda *_: (_ for _ in ()).throw(RuntimeError("HTTP Error 429"))
+        with patch("time.sleep") as sleep:
+            bridge.download("https://youtu.be/aaaaaaaaaaa", "/unused", sink)
+        self.assertEqual(len(FakeYoutubeDL.calls), 1)
+        sleep.assert_not_called()
+        self.assertTrue(sink.events[-1].startswith("error:"))
+
+    def test_slow_optional_cover_is_bounded_and_does_not_block_a_completed_audio_download(self):
+        sink = EventSink()
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "track.webm")
+            Path(path).write_bytes(b"audio")
+            def respond(ydl, _target, download):
+                info = {"id": "aaaaaaaaaaa", "title": "Track", "uploader": "Artist", "thumbnail": "https://i.ytimg.com/cover.jpg"}
+                ydl.options["progress_hooks"][0]({"status": "finished", "filename": path, "info_dict": info})
+                return info
+            def slow_cover(request, timeout):
+                self.assertLessEqual(timeout, 4)
+                raise TimeoutError("fixture timeout")
+            FakeYoutubeDL.responder = respond
+            with patch("urllib.request.urlopen", side_effect=slow_cover):
+                bridge.download("https://youtu.be/aaaaaaaaaaa", directory, sink)
+            self.assertEqual(sink.events[-1], "done")
+            track = next(value for value in sink.events if value.startswith("track-json:"))
+            payload = json.loads(base64.b64decode(track.split(":", 1)[1]).decode("utf-8"))
+            self.assertEqual(payload["coverPath"], "")
+            self.assertEqual(payload["path"], path)
 
     def test_music_history_is_normalized_and_bounded(self):
         class FakeMusic:

@@ -176,9 +176,14 @@ class WindowsYtdlpRunner {
     sourceUrl: sourceUrl,
   );
 
-  YoutubeFailure failureForDiagnostics(String diagnostics, {required bool authenticated, String? sourceUrl}) {
+  YoutubeFailure failureForDiagnostics(
+    String diagnostics, {
+    required bool authenticated,
+    String? sourceUrl,
+    bool reportFailure = true,
+  }) {
     final failure = YoutubeFailureClassifier.classify(diagnostics, authenticated: authenticated, sourceUrl: sourceUrl);
-    _accessService?.observeFailure(failure);
+    if (reportFailure) _accessService?.observeFailure(failure);
     return failure;
   }
 

@@ -9,6 +9,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:resonance/l10n/app_strings.dart';
+import 'package:resonance/services/google_drive/playlist_sync_service.dart';
 import 'package:resonance/widgets/library/listening_focus_tab.dart';
 import 'package:resonance/providers/language_provider.dart';
 import 'package:flutter/foundation.dart';
@@ -251,6 +252,7 @@ Future<void> main(List<String> args) async {
 
   final favorites = FavoritesRepository();
   await favorites.refresh();
+  unawaited(PlaylistSyncService.instance.start().catchError((Object _) {}));
   runApp(
     MultiProvider(
       providers: [
@@ -1627,7 +1629,10 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
         transitionDuration: resonanceDuration(context, const Duration(milliseconds: 280)),
       ),
     );
-    if (mounted) setState(() => _artworkRevision++);
+    if (mounted) {
+      setState(() => _artworkRevision++);
+      await _loadPlaylistFromDisk();
+    }
   }
 
   Future<void> _openHistory(BuildContext context) async {

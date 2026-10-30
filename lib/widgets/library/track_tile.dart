@@ -34,6 +34,7 @@ import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/services/youtube/stream_track_metadata_service.dart';
 import 'package:resonance/widgets/common/artwork_thumbnail.dart';
 import 'package:resonance/widgets/common/progressive_network_artwork.dart';
 import 'package:metadata_god/metadata_god.dart';
@@ -166,6 +167,19 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
           _artist = 'YouTube';
           _loading = false;
         });
+      }
+      if (widget.metadataLoader == null) {
+        final metadata = await StreamTrackMetadataService.instance.load(
+          path,
+          isCurrent: () => mounted && widget.trackPath == path,
+        );
+        if (metadata != null && mounted && widget.trackPath == path) {
+          setState(() {
+            _title = metadata.title;
+            _artist = metadata.artist;
+            _artworkUrl = metadata.artworkUrl;
+          });
+        }
       }
       return;
     }

@@ -26,6 +26,8 @@ import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/download_history_repository.dart';
 import 'package:resonance/services/download/youtube_download_gate.dart';
 import 'package:resonance/core/youtube/windows_process_output.dart';
+import 'package:resonance/core/youtube/windows_download_metadata.dart';
+import 'package:resonance/models/youtube_download_result.dart';
 import 'package:resonance/services/youtube_stats_service.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/services/youtube/windows_ytdlp_runner.dart';
@@ -37,13 +39,14 @@ bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacO
 // ─── Binary / downloader logic ────────────────────────────────────────────────
 
 class MediaDownloader {
+  MediaDownloader({WindowsYtdlpRunner? runner}) : _runner = runner ?? WindowsYtdlpRunner.instance;
   static const _audioExtensions = {'mp3', 'wav', 'm4a', 'ogg', 'opus', 'webm', 'aac', 'flac'};
   static const _searchCacheTtl = Duration(minutes: 5);
   static Future<void>? _binaryInitialization;
   static final Map<String, ({DateTime storedAt, List<YoutubeTrack> tracks})> _searchCache = {};
   static final Map<String, Future<List<YoutubeTrack>>> _searchesInFlight = {};
   static final Set<Process> _backgroundSearchProcesses = {};
-  static final WindowsYtdlpRunner _runner = WindowsYtdlpRunner.instance;
+  final WindowsYtdlpRunner _runner;
 
   static void clearSearchCache() {
     _searchCache.clear();
@@ -51,7 +54,7 @@ class MediaDownloader {
   }
 
   Future<String> get binDirPath async {
-    return p.join(p.dirname(Platform.resolvedExecutable), 'bin');
+    return _runner.binDirectory;
   }
 
   Future<void> initBinaries() async {
@@ -251,6 +254,7 @@ class MediaDownloader {
     required Function(String filePath, String? youtubeVideoId) onTrackDownloaded,
     String? historyTitle,
     String? historyArtist,
+    FutureOr<void> Function(YoutubeDownloadResult track)? onTrackPrepared,
   }) => YoutubeDownloadGate.instance.run(
     () => _downloadAudioUnlocked(
       url: url,
@@ -258,7 +262,9 @@ class MediaDownloader {
       onTrackDownloaded: onTrackDownloaded,
       historyTitle: historyTitle,
       historyArtist: historyArtist,
+      onTrackPrepared: onTrackPrepared,
     ),
+    onWaiting: () => onProgress(0, 'Waiting for another download...'),
   );
 
   Future<void> _downloadAudioUnlocked({
@@ -269,7 +275,9 @@ class MediaDownloader {
     required Function(String filePath, String? youtubeVideoId) onTrackDownloaded,
     String? historyTitle,
     String? historyArtist,
+    FutureOr<void> Function(YoutubeDownloadResult track)? onTrackPrepared,
   }) async {
+    onProgress(0, 'Finding audio...');
     final binDir = await binDirPath;
 
     final ffmpegPath = p.join(binDir, 'ffmpeg.exe');
@@ -290,26 +298,41 @@ class MediaDownloader {
       targetDir = (await getApplicationSupportDirectory()).path;
     }
 
-    final outputTemplate = p.join(targetDir, '%(title)s.%(ext)s');
+    final outputTemplate = p.join(targetDir, '%(title)s [%(id)s].%(ext)s');
     final targetDirectory = Directory(targetDir);
     await targetDirectory.create(recursive: true);
     final downloadStartedAt = DateTime.now().subtract(const Duration(seconds: 2));
+    final requestedVideoId = TrackSourceRepository.videoIdFromUrlOrId(url);
+    final singleVideo = requestedVideoId != null && Uri.tryParse(url)?.queryParameters.containsKey('list') != true;
 
     const int maxAttempts = 3;
 
     int attempt = 0;
+    var guest = true;
+    var switchingAccount = false;
 
     while (attempt < maxAttempts) {
       attempt++;
 
-      if (attempt > 1) {
+      if (switchingAccount) {
+        onProgress(0, 'Trying your connected YouTube account...');
+        switchingAccount = false;
+      } else if (attempt > 1) {
         onProgress(0.0, 'Connection dropped. Retrying ($attempt/$maxAttempts)...');
 
-        await Future.delayed(Duration(seconds: attempt * 2));
+        await Future.delayed(Duration(milliseconds: (attempt - 1) * 500));
       }
 
       try {
         final started = await _runner.start([
+          '--socket-timeout',
+          '10',
+          '--extractor-retries',
+          '1',
+          '--retries',
+          '3',
+          '--fragment-retries',
+          '3',
           '--ffmpeg-location',
           ffmpegPath,
 
@@ -349,6 +372,10 @@ class MediaDownloader {
 
           '--yes-playlist',
 
+          '--no-simulate',
+          '--print',
+          windowsDownloadMetadataTemplate,
+
           '--print',
           'after_move:%(filepath)s|%(id)s',
 
@@ -356,7 +383,7 @@ class MediaDownloader {
           outputTemplate,
 
           url,
-        ]);
+        ], guest: guest);
         final process = started.process;
 
         final playlistItemRegex = RegExp(r'\[download\]\s+Downloading item\s+(\d+)\s+of\s+(\d+)');
@@ -366,6 +393,7 @@ class MediaDownloader {
         int totalItems = 1;
         final outputLines = <String>[];
         final printedPaths = <String>[];
+        final metadataById = <String, YoutubeTrack>{};
 
         void handleLine(String line) {
           final trimmed = line.trim();
@@ -406,6 +434,15 @@ class MediaDownloader {
         void handleStdoutLine(String line) {
           final trimmed = line.trim();
           if (trimmed.isEmpty) return;
+          if (trimmed.startsWith(windowsDownloadMetadataPrefix)) {
+            final track = parseWindowsDownloadMetadata(trimmed);
+            if (track != null) {
+              final id = track.videoId;
+              if (id != null) metadataById[id] = track;
+            }
+            onProgress(0, 'Connecting to audio...');
+            return;
+          }
           if (trimmed.contains('resonance_progress:') ||
               trimmed.contains('[download]') ||
               trimmed.contains('[ExtractAudio]') ||
@@ -431,17 +468,29 @@ class MediaDownloader {
 
         final processedPaths = <String>{};
         var importedCount = 0;
+        var completedRequestedVideo = false;
 
         Future<void> importPath(String path, {String? youtubeVideoId}) async {
           final normalized = p.normalize(path);
-          if (processedPaths.add(normalized) && await File(normalized).exists()) {
+          if (processedPaths.add(normalized) &&
+              await File(normalized).exists() &&
+              await File(normalized).length() > 0) {
+            final metadata = metadataById[youtubeVideoId];
+            await onTrackPrepared?.call(
+              YoutubeDownloadResult(
+                localPath: normalized,
+                youtubeVideoId: youtubeVideoId,
+                title: metadata?.title ?? historyTitle,
+                artist: metadata?.artist ?? historyArtist,
+              ),
+            );
             await onTrackDownloaded(normalized, youtubeVideoId);
             try {
               await const DownloadHistoryRepository().recordSuccess(
                 source: youtubeVideoId ?? url,
                 localPath: normalized,
-                title: historyTitle,
-                artist: historyArtist,
+                title: metadata?.title ?? historyTitle,
+                artist: metadata?.artist ?? historyArtist,
               );
             } catch (historyError) {
               debugPrint('Could not save download history: $historyError');
@@ -454,6 +503,16 @@ class MediaDownloader {
           final trimmed = line.trim();
 
           if (trimmed.isEmpty) continue;
+          final completed = parseWindowsDownloadedPath(trimmed);
+          if (completed != null && _looksLikeAudioPath(completed.localPath)) {
+            if (singleVideo && completed.youtubeVideoId != requestedVideoId) continue;
+            final previousCount = importedCount;
+            await importPath(completed.localPath, youtubeVideoId: completed.youtubeVideoId);
+            if (importedCount > previousCount && completed.youtubeVideoId == requestedVideoId) {
+              completedRequestedVideo = true;
+            }
+            continue;
+          }
 
           if (trimmed.contains('has already been downloaded')) {
             final match = alreadyDownloadedRegex.firstMatch(trimmed);
@@ -484,9 +543,28 @@ class MediaDownloader {
 
         final exitCode = await exitCodeFuture;
 
-        if (exitCode != 0) {
-          throw _runner.failureForDiagnostics(
+        if (exitCode != 0 && !(singleVideo && completedRequestedVideo)) {
+          final failure = _runner.failureForDiagnostics(
             outputLines.isEmpty ? 'yt-dlp exited with code $exitCode' : outputLines.join('\n'),
+            authenticated: started.authenticated,
+            sourceUrl: url,
+            reportFailure: false,
+          );
+          // Public songs avoid the browser-cookie import and authenticated
+          // player requests. Restricted/format failures still get the user's
+          // connected account, without a network-retry backoff first.
+          if (guest &&
+              importedCount == 0 &&
+              _runner.hasConfiguredAccess &&
+              failure.kind != YoutubeFailureKind.network &&
+              failure.kind != YoutubeFailureKind.rateLimited) {
+            guest = false;
+            switchingAccount = true;
+            attempt--;
+            continue;
+          }
+          throw _runner.failureForDiagnostics(
+            failure.technicalSummary,
             authenticated: started.authenticated,
             sourceUrl: url,
           );
@@ -498,6 +576,7 @@ class MediaDownloader {
         if (importedCount == 0) {
           await for (final entity in targetDirectory.list()) {
             if (entity is! File || !_looksLikeAudioPath(entity.path)) continue;
+            if (singleVideo && !p.basenameWithoutExtension(entity.path).endsWith('[$requestedVideoId]')) continue;
             final modified = await entity.lastModified();
             if (!modified.isBefore(downloadStartedAt)) {
               await importPath(entity.path, youtubeVideoId: TrackSourceRepository.videoIdFromUrlOrId(url));

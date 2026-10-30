@@ -10,14 +10,15 @@ import 'package:resonance/services/track_source_repository.dart';
 import 'playlist_sort.dart';
 export 'playlist_sort.dart';
 
-enum PlaylistMutationKind { created, replaced, appended, removed, reordered, deleted }
+enum PlaylistMutationKind { created, replaced, appended, removed, reordered, renamed, deleted }
 
 class PlaylistMutation {
   final int playlistNumber;
   final int revision;
   final PlaylistMutationKind kind;
+  final int? promotedFrom;
 
-  const PlaylistMutation(this.playlistNumber, this.revision, this.kind);
+  const PlaylistMutation(this.playlistNumber, this.revision, this.kind, {this.promotedFrom});
 }
 
 class FileService {
@@ -160,14 +161,15 @@ class FileService {
     return names;
   }
 
-  Future<void> renamePlaylist(int number, String name) async {
+  Future<void> renamePlaylist(int number, String name) => _serialize(number, () async {
     if (isFavoritesPlaylist(number)) return;
     final cleanName = _normalizePlaylistName(name);
     if (cleanName.isEmpty) return;
     final names = await getPlaylistNames();
     names[number] = cleanName;
     await _savePlaylistNames(names);
-  }
+    await _publish(number, PlaylistMutationKind.renamed);
+  });
 
   String _normalizePlaylistName(String name) {
     final cleanName = name.trim();
@@ -194,6 +196,14 @@ class FileService {
   /// promoted to number 1 so the primary slot never becomes a new empty list.
   /// Returns the playlist which should become active.
   Future<int> deletePlaylist(int number) async {
+    late int next;
+    await _serialize(number, () async {
+      next = await _deletePlaylist(number);
+    });
+    return next;
+  }
+
+  Future<int> _deletePlaylist(int number) async {
     final numbers = await listPlaylistNumbers();
     if (isFavoritesPlaylist(number) ||
         numbers.where((value) => !isFavoritesPlaylist(value)).length <= 1 ||
@@ -223,7 +233,11 @@ class FileService {
     }
     await _savePlaylistNames(names);
     await setActivePlaylistNumber(nextActive);
-    await _publish(number, PlaylistMutationKind.deleted);
+    await _publish(
+      number,
+      PlaylistMutationKind.deleted,
+      promotedFrom: number == defaultPlaylistNumber ? remaining.first : null,
+    );
     return nextActive;
   }
 
@@ -383,6 +397,38 @@ class FileService {
     await _writeTracks(playlistNumber, file, normalized, manual: kind == PlaylistMutationKind.reordered);
     await _publish(playlistNumber, kind);
   });
+
+  /// A slow cloud read must never overwrite edits made while it was in flight.
+  /// Uses the ordinary writer/sorting/mutation path; never touches audio files.
+  Future<bool> applySyncedPlaylist(
+    int number, {
+    required List<String> expectedTracks,
+    required String expectedName,
+    required List<String> tracks,
+    required String name,
+    required bool Function() isCurrent,
+    Future<void> Function()? onApplied,
+  }) async {
+    var applied = false;
+    await _serialize(number, () async {
+      if (!isCurrent() || !await (await _playlistFile(number)).exists()) return;
+      final current = await readPlaylistTracks(number);
+      final names = await getPlaylistNames();
+      if (!isCurrent() || names[number] != expectedName || jsonEncode(current) != jsonEncode(expectedTracks)) return;
+      if (jsonEncode(current) != jsonEncode(tracks)) {
+        await _writeTracks(number, await _playlistFile(number), tracks);
+        await _publish(number, PlaylistMutationKind.replaced);
+      }
+      if (!isFavoritesPlaylist(number) && expectedName != _normalizePlaylistName(name)) {
+        names[number] = _normalizePlaylistName(name);
+        await _savePlaylistNames(names);
+        await _publish(number, PlaylistMutationKind.renamed);
+      }
+      await onApplied?.call();
+      applied = true;
+    });
+    return applied;
+  }
 
   /// Replace surviving stream references atomically, preserving playlist order.
   /// A track removed while downloading must not be added back.
@@ -609,11 +655,11 @@ class FileService {
     }
   }
 
-  Future<void> _publish(int playlistNumber, PlaylistMutationKind kind) async {
+  Future<void> _publish(int playlistNumber, PlaylistMutationKind kind, {int? promotedFrom}) async {
     final key = '${await _localPath}|$playlistNumber';
     final revision = (_revisions[key] ?? 0) + 1;
     _revisions[key] = revision;
-    _mutations.add(PlaylistMutation(playlistNumber, revision, kind));
+    _mutations.add(PlaylistMutation(playlistNumber, revision, kind, promotedFrom: promotedFrom));
     if (isFavoritesPlaylist(playlistNumber) && kind != PlaylistMutationKind.reordered) {
       for (final number in await listPlaylistNumbers()) {
         if (isFavoritesPlaylist(number) || !(await playlistSortState(number)).favoritesFirst) continue;

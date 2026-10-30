@@ -18,7 +18,20 @@ import 'package:resonance/services/youtube_transfer_service.dart';
 enum _ImportStage { receiving, reconstructing, preview, downloading, failures, creating, complete, error }
 
 class PlaylistImportScreen extends StatefulWidget {
-  const PlaylistImportScreen({super.key});
+  const PlaylistImportScreen({
+    super.key,
+    this.initialManifest,
+    this.youtube,
+    this.files,
+    this.sources,
+    this.onImported,
+  });
+
+  final PlaylistTransferManifest? initialManifest;
+  final YoutubeTransferService? youtube;
+  final FileService? files;
+  final TrackSourceRepository? sources;
+  final void Function(int playlistNumber, bool streaming, bool keepInSync)? onImported;
 
   @override
   State<PlaylistImportScreen> createState() => _PlaylistImportScreenState();
@@ -26,8 +39,9 @@ class PlaylistImportScreen extends StatefulWidget {
 
 class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
   final PlaylistTransferSession _session = PlaylistTransferSession();
-  final TrackSourceRepository _sources = const TrackSourceRepository();
-  final YoutubeTransferService _youtube = YoutubeTransferService();
+  late final TrackSourceRepository _sources = widget.sources ?? const TrackSourceRepository();
+  late final YoutubeTransferService _youtube = widget.youtube ?? YoutubeTransferService();
+  late final FileService _files = widget.files ?? FileService();
   final List<String> _acceptedRawPayloads = [];
   final List<String> _notices = [];
   MobileScannerController? _scannerController;
@@ -50,15 +64,34 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
   var _stopRequested = false;
   bool _cancelledDuringDownload = false;
   String? _createdPlaylistName;
+  bool _keepInSync = false;
 
   @override
   void initState() {
     super.initState();
-    if (Platform.isAndroid) {
+    if (widget.initialManifest case final manifest?) {
+      _stage = _ImportStage.reconstructing;
+      unawaited(_openManifest(manifest));
+    } else if (Platform.isAndroid) {
       _scannerController = MobileScannerController(
         formats: const [BarcodeFormat.qrCode],
         detectionSpeed: DetectionSpeed.noDuplicates,
       );
+    }
+  }
+
+  Future<void> _openManifest(PlaylistTransferManifest manifest) async {
+    try {
+      PlaylistTransferCodec.validateManifest(manifest);
+      _manifest = manifest;
+      await _preparePreview();
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _fatalError = error is PlaylistTransferException ? error.message : 'Could not prepare this playlist.';
+          _stage = _ImportStage.error;
+        });
+      }
     }
   }
 
@@ -171,10 +204,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
     final manifest = _manifest!;
     final uniqueIds = manifest.youtubeVideoIds.toSet().toList(growable: false);
     _resolvedById.clear();
-    for (final videoId in uniqueIds) {
-      final localPath = await _sources.findLocalTrackByYoutubeId(videoId);
-      if (localPath != null) _resolvedById[videoId] = localPath;
-    }
+    _resolvedById.addAll(await _sources.findLocalTracksByYoutubeIds(uniqueIds));
     _missingIds = [
       for (final videoId in uniqueIds)
         if (!_resolvedById.containsKey(videoId)) videoId,
@@ -211,6 +241,8 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
       try {
         final result = await _youtube.downloadVideo(
           videoId,
+          historyTitle: _manifest!.trackMetadata[videoId]?.title,
+          historyArtist: _manifest!.trackMetadata[videoId]?.artist,
           onProgress: (percentage, status) {
             if (mounted) {
               setState(() {
@@ -255,35 +287,9 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
       _currentDownloadIndex = 0;
       _downloadPercentage = 0;
     });
-    for (var index = 0; index < ids.length; index++) {
-      if (_stopRequested) {
-        _cancelledDuringDownload = true;
-        break;
-      }
-      final videoId = ids[index];
-      setState(() {
-        _currentDownloadIndex = index + 1;
-        _currentVideoId = videoId;
-        _downloadPercentage = 0;
-        _downloadStatus = 'Reading stream metadata…';
-      });
-      final url = TrackSourceRepository.canonicalUrlFor(videoId);
-      try {
-        final candidate = await _youtube.lookup(videoId);
-        await _youtube.rememberStream(candidate);
-      } catch (_) {
-        // Metadata improves the display name but is not required for a valid
-        // YouTube playlist entry.
-      }
-      _resolvedById[videoId] = url;
-      _streamedCount++;
-      if (mounted) {
-        setState(() {
-          _downloadPercentage = 100;
-          _downloadStatus = 'Stream ready';
-        });
-      }
-    }
+    _resolvedById.addAll(await _youtube.prepareStreams(_manifest!));
+    _streamedCount = ids.length;
+    _currentDownloadIndex = ids.length;
     if (!mounted) return;
     if (_cancelledDuringDownload) {
       setState(() => _stage = _ImportStage.failures);
@@ -312,7 +318,8 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
     }
     setState(() => _stage = _ImportStage.creating);
     try {
-      final created = await FileService().createImportedPlaylist(manifest.playlistName, orderedPaths);
+      final created = await _files.createImportedPlaylist(manifest.playlistName, orderedPaths);
+      widget.onImported?.call(created.number, _isStreaming, _keepInSync);
       if (mounted) {
         setState(() {
           _createdPlaylistName = created.displayName;
@@ -492,6 +499,14 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
         _metric('Need downloading', _missingIds.length.toString()),
         _metric('Invalid sources', '0'),
         const Divider(height: 28),
+        if (widget.onImported != null)
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: Text(context.tr('Keep in sync')),
+            subtitle: Text(context.tr('Sync playlist edits between your connected devices.')),
+            value: _keepInSync,
+            onChanged: (value) => setState(() => _keepInSync = value),
+          ),
         Text(context.tr("Download destination"), style: TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
         SelectableText(_downloadDestination ?? context.tr("Default download folder")),

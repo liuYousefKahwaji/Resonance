@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/widgets/settings/language_selector.dart';
+import 'package:resonance/widgets/settings/google_drive_settings_card.dart';
 import 'package:flutter/services.dart';
 import 'package:metadata_god/metadata_god.dart';
 import 'package:path/path.dart' as p;
@@ -995,6 +996,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   );
                 },
               ),
+            ],
+
+            if (Platform.isAndroid || Platform.isWindows) ...[
+              _SectionHeader(label: context.tr('Google Drive')),
+              const GoogleDriveSettingsCard(),
             ],
 
             // ── Downloads ───────────────────────────────────────────

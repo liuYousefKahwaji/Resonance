@@ -8,6 +8,24 @@ import 'package:resonance/services/playlist_transfer_codec.dart';
 void main() {
   const ids = ['aaaaaaaaaaa', 'bbbbbbbbbbb', 'aaaaaaaaaaa', 'ccccccccccc'];
 
+  test('optional transfer names survive the QR roundtrip for immediate stream import', () {
+    final manifest = PlaylistTransferManifest.fromJson({
+      'version': 1,
+      'playlistName': 'رحلة',
+      'youtubeVideoIds': ['aaaaaaaaaaa', 'aaaaaaaaaaa'],
+      'trackMetadata': {
+        'aaaaaaaaaaa': {'title': 'أغنية', 'artist': 'Artist'},
+      },
+    });
+    final session = PlaylistTransferSession();
+    for (final chunk in PlaylistTransferCodec.encode(manifest).qrPayloads) {
+      session.acceptChunk(chunk);
+    }
+    expect(session.reconstructManifest().toJson()['trackMetadata'], {
+      'aaaaaaaaaaa': {'title': 'أغنية', 'artist': 'Artist'},
+    });
+  });
+
   PlaylistTransferManifest roundTrip(EncodedPlaylistTransfer encoded, {bool reverse = false}) {
     final session = PlaylistTransferSession();
     final payloads = reverse ? encoded.qrPayloads.reversed : encoded.qrPayloads;

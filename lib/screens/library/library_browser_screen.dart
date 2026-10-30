@@ -15,6 +15,7 @@ import 'package:resonance/widgets/player/playback_range_dialog.dart';
 import 'package:resonance/widgets/player/playback_range_indicator.dart';
 import 'package:resonance/models/smart_playlist.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
+import 'package:resonance/screens/google_drive/drive_music_screen.dart';
 import 'package:resonance/services/library_catalog.dart';
 import 'package:resonance/services/listening_statistics.dart';
 import 'package:resonance/services/smart_playlist_repository.dart';
@@ -89,6 +90,11 @@ class _LibraryBrowserScreenState extends State<LibraryBrowserScreen> {
     appBar: AppBar(
       title: Text(context.tr('Browse library')),
       actions: [
+        IconButton(
+          tooltip: context.tr('Drive music'),
+          icon: const Icon(Icons.cloud_outlined),
+          onPressed: () => Navigator.push<void>(context, MaterialPageRoute(builder: (_) => const DriveMusicScreen())),
+        ),
         if (Platform.isWindows)
           IconButton(
             onPressed: importing ? null : _importFolder,

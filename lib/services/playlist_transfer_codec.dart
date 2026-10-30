@@ -29,21 +29,32 @@ class PlaylistTransferException implements Exception {
   String toString() => message;
 }
 
+class PlaylistTransferTrackMetadata {
+  const PlaylistTransferTrackMetadata({required this.title, required this.artist});
+  final String title;
+  final String artist;
+  Map<String, dynamic> toJson() => {'title': title, 'artist': artist};
+}
+
 class PlaylistTransferManifest {
   final int version;
   final String playlistName;
   final List<String> youtubeVideoIds;
+  final Map<String, PlaylistTransferTrackMetadata> trackMetadata;
 
   const PlaylistTransferManifest({
     this.version = PlaylistTransferCodec.protocolVersion,
     required this.playlistName,
     required this.youtubeVideoIds,
+    this.trackMetadata = const {},
   });
 
-  Map<String, dynamic> toJson() => {
+  Map<String, dynamic> toJson({bool includeMetadata = true}) => {
     'version': version,
     'playlistName': playlistName,
     'youtubeVideoIds': youtubeVideoIds,
+    if (includeMetadata && trackMetadata.isNotEmpty)
+      'trackMetadata': trackMetadata.map((id, value) => MapEntry(id, value.toJson())),
   };
 
   factory PlaylistTransferManifest.fromJson(Map<String, dynamic> json) {
@@ -54,10 +65,34 @@ class PlaylistTransferManifest {
         'The playlist transfer does not contain a track list.',
       );
     }
+    final metadata = <String, PlaylistTransferTrackMetadata>{};
+    final rawMetadata = json['trackMetadata'];
+    if (rawMetadata != null) {
+      if (rawMetadata is! Map || rawMetadata.length > PlaylistTransferCodec.maxPlaylistEntries) {
+        throw const PlaylistTransferException(
+          PlaylistTransferError.invalidManifest,
+          'The playlist transfer has invalid track names.',
+        );
+      }
+      for (final entry in rawMetadata.entries) {
+        final value = entry.value;
+        if (entry.key is! String || value is! Map || value['title'] is! String || value['artist'] is! String) {
+          throw const PlaylistTransferException(
+            PlaylistTransferError.invalidManifest,
+            'The playlist transfer has invalid track names.',
+          );
+        }
+        metadata[entry.key as String] = PlaylistTransferTrackMetadata(
+          title: value['title'] as String,
+          artist: value['artist'] as String,
+        );
+      }
+    }
     return PlaylistTransferManifest(
       version: json['version'] is int ? json['version'] as int : -1,
       playlistName: json['playlistName']?.toString() ?? '',
       youtubeVideoIds: ids.map((value) => value.toString()).toList(growable: false),
+      trackMetadata: Map.unmodifiable(metadata),
     );
   }
 }
@@ -97,7 +132,7 @@ class PlaylistTransferCodec {
     PlaylistTransferManifest manifest, {
     int chunkDataLength = defaultChunkDataLength,
   }) {
-    _validateManifest(manifest);
+    validateManifest(manifest);
     if (chunkDataLength < 64 || chunkDataLength > 1800) {
       throw RangeError.range(chunkDataLength, 64, 1800, 'chunkDataLength');
     }
@@ -143,7 +178,7 @@ class PlaylistTransferCodec {
     );
   }
 
-  static void _validateManifest(PlaylistTransferManifest manifest) {
+  static void validateManifest(PlaylistTransferManifest manifest, {bool allowEmpty = false}) {
     if (manifest.version != protocolVersion) {
       throw const PlaylistTransferException(
         PlaylistTransferError.unsupportedVersion,
@@ -157,7 +192,7 @@ class PlaylistTransferCodec {
         'The playlist transfer has an invalid display name.',
       );
     }
-    if (manifest.youtubeVideoIds.isEmpty || manifest.youtubeVideoIds.length > maxPlaylistEntries) {
+    if ((!allowEmpty && manifest.youtubeVideoIds.isEmpty) || manifest.youtubeVideoIds.length > maxPlaylistEntries) {
       throw const PlaylistTransferException(
         PlaylistTransferError.invalidManifest,
         'The playlist transfer has an invalid number of entries.',
@@ -168,6 +203,22 @@ class PlaylistTransferCodec {
         throw PlaylistTransferException(
           PlaylistTransferError.invalidManifest,
           'The playlist transfer contains an invalid YouTube video ID: $id',
+        );
+      }
+    }
+    final ids = manifest.youtubeVideoIds.toSet();
+    for (final entry in manifest.trackMetadata.entries) {
+      final value = entry.value;
+      if (!ids.contains(entry.key) ||
+          value.title.trim().isEmpty ||
+          value.artist.trim().isEmpty ||
+          value.title.length > 1000 ||
+          value.artist.length > 1000 ||
+          value.title.contains('\u0000') ||
+          value.artist.contains('\u0000')) {
+        throw const PlaylistTransferException(
+          PlaylistTransferError.invalidManifest,
+          'The playlist transfer has invalid track names.',
         );
       }
     }
@@ -327,7 +378,7 @@ class PlaylistTransferSession {
       );
     }
     final manifest = PlaylistTransferManifest.fromJson(Map<String, dynamic>.from(decoded));
-    PlaylistTransferCodec._validateManifest(manifest);
+    PlaylistTransferCodec.validateManifest(manifest);
     return manifest;
   }
 

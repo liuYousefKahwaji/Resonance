@@ -89,6 +89,13 @@ The working tree may contain features intended for the next release. See the rel
 - Use Resonance Sync on Android to host or join a local-network listening session.
 - Pair the Android Companion with Windows for authenticated LAN playback control.
 
+### Google Drive
+
+- Connect your Google account in Settings to save playlists and optionally keep their names, order and track changes in sync between devices. Each device chooses streaming or automatic downloads for new tracks.
+- Open **Drive music** from Settings or the cloud button in **Browse library** to find folders containing audio, play a track, or add a folder to your library for streaming or download.
+- Upload selected audio files or a playlist's local tracks to **ResonanceMusic/Audio**. Transfers show progress, cancellation and retry controls; identical uploads are reused.
+- Browsing music already in Drive asks for optional read-only access. Playlist sync and uploads of app-managed files work without this extra permission. Android catches up on reopening; closed-app transfers are not guaranteed.
+
 ### Appearance and language
 
 - Choose **English** or **Arabic** in Settings. Arabic includes translated menus and right-to-left layouts.

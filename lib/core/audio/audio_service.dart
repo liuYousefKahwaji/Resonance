@@ -32,6 +32,8 @@ import 'package:metadata_god/metadata_god.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
 import 'package:resonance/services/youtube/youtube_playback_history_coordinator.dart';
 import 'package:resonance/services/local_playback_history_coordinator.dart';
+import 'package:resonance/services/google_drive/drive_music_models.dart';
+import 'package:resonance/services/google_drive/drive_music_service.dart';
 import 'package:resonance/services/android_auto_catalog.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
@@ -1193,6 +1195,16 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   // ─── Stream URL resolution ────────────────────────────────────────
   Future<ResolvedYoutubeStream> _resolveStream(String url) async {
+    // Drive IDs stay stable in playlists. Authorization is obtained only at
+    // playback time and must never enter the persistent YouTube URL cache.
+    if (DriveMusicRef.parse(url) != null && _streamResolver == null) {
+      await DriveMusicService.instance.drive.initialize();
+      if (!_watchingDriveAccount) {
+        _watchingDriveAccount = true;
+        DriveMusicService.instance.drive.addListener(_driveAccountChanged);
+      }
+      return DriveMusicService.instance.resolve(url);
+    }
     final accessRevision = _youtubeAccessService?.revision ?? 0;
     final cached = _streamUrlCache[url];
     if (cached != null &&
@@ -1213,6 +1225,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         _streamResolutionInFlight.remove(url);
       }
     }
+  }
+
+  bool _watchingDriveAccount = false;
+  void _driveAccountChanged() {
+    final ref = DriveMusicRef.parse(mediaItem.value?.id ?? '');
+    if (ref != null && DriveMusicService.instance.drive.account?.id != ref.accountId) unawaited(stop());
   }
 
   Future<ResolvedYoutubeStream> _resolveStreamUncached(String url, int accessRevision) async {
@@ -4415,6 +4433,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    if (_watchingDriveAccount) DriveMusicService.instance.drive.removeListener(_driveAccountChanged);
     await _standaloneVideo?.close();
     await voiceChat?.shutdown();
     await stopPlaybackRangePreview(resume: false);

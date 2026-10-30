@@ -934,7 +934,7 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None) -> None:
         ).decode("ascii")
         return f"track-json:{encoded}"
 
-    output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
+    output_template = os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s")
 
     current_item = [1]
     total_items = [1]
@@ -975,9 +975,19 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None) -> None:
                     try:
                         cover_path = filepath + ".cover"
                         request = Request(thumbnail_url, headers={"User-Agent": "Mozilla/5.0"})
-                        with urlopen(request, timeout=20) as response, open(cover_path, "wb") as cover:
-                            cover.write(response.read())
+                        event_sink.success("progress:99.0:Loading cover art…")
+                        with urlopen(request, timeout=4) as response:
+                            content = response.read(2 * 1024 * 1024 + 1)
+                        if len(content) > 2 * 1024 * 1024:
+                            raise ValueError("Thumbnail exceeds download limit")
+                        with open(cover_path, "wb") as cover:
+                            cover.write(content)
                     except Exception:
+                        try:
+                            if os.path.isfile(cover_path):
+                                os.remove(cover_path)
+                        except OSError:
+                            pass
                         cover_path = ""
                 event_sink.success(track_event(filepath, title, artist, cover_path, video_id))
                 current_item[0] += 1
@@ -1004,6 +1014,7 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None) -> None:
         # in the Android Python runtime; Flutter converts the result afterward.
         "format": "bestaudio[has_drm!=true]/best[has_drm!=true]",
         "outtmpl": output_template,
+        "concurrent_fragment_downloads": 4,
         "progress_hooks": [progress_hook],
         # Keep valid Unicode. yt-dlp still replaces only separators/control
         # characters which are actually invalid for the target filesystem.
@@ -1012,12 +1023,37 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None) -> None:
         # Conversion is handled by the app's bundled FFmpegKit library.
         # Never ask yt-dlp to locate desktop ffmpeg/ffprobe executables on Android.
         "yes_playlist": True,
-        "extractor_retries": 3,
-        "socket_timeout": 20,
+        "extractor_retries": 1,
+        "socket_timeout": 10,
+        "retries": 3,
+        "fragment_retries": 3,
     }
 
     try:
-        info, _ = _extract_info(url, opts, download=True, cookie_file=cookie_file)
+        event_sink.success("progress:0:Finding audio...")
+        for attempt in range(2):
+            try:
+                info, _ = _extract_info(url, opts, download=True, cookie_file=cookie_file,
+                                        prefer_guest=True)
+                break
+            except Exception as error:
+                # A failed initial connection is not retried by yt-dlp's media
+                # retries. Retry it once, but never replay completed items or
+                # hammer an account/rate-limit/permanently unavailable error.
+                message = str(error).lower()
+                transient = isinstance(error, (TimeoutError, ConnectionError)) or any(
+                    marker in message for marker in (
+                        "timed out", "connection reset", "connection aborted",
+                        "remote end closed", "network is unreachable",
+                        "temporary failure in name resolution", "http error 502",
+                        "http error 503", "http error 504",
+                    )
+                )
+                if attempt or current_item[0] > 1 or not transient:
+                    raise
+                event_sink.success("progress:0:Connection dropped. Retrying...")
+                import time
+                time.sleep(0.5)
         entries = info.get("entries") if info else None
         if entries:
             total_items[0] = len(list(entries))

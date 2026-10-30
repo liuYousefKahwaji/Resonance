@@ -32,6 +32,7 @@ import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/core/youtube/android_download_event.dart';
 import 'package:resonance/services/download_history_repository.dart';
 import 'package:resonance/services/download/youtube_download_gate.dart';
+import 'package:resonance/services/download/android_download_session.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:resonance/core/youtube/youtube_failure_classifier.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
@@ -39,7 +40,6 @@ import 'package:resonance/widgets/youtube/youtube_failure_dialog.dart';
 
 class AndroidYoutubeDownloader {
   static const _method = MethodChannel('resonance/android_youtube');
-  static const _event = EventChannel('resonance/android_youtube/events');
   static const _searchCacheTtl = Duration(minutes: 5);
   static final Map<String, ({DateTime storedAt, List<YoutubeTrack> tracks})> _searchCache = {};
   static final Map<String, Future<List<YoutubeTrack>>> _searchesInFlight = {};
@@ -118,8 +118,7 @@ class AndroidYoutubeDownloader {
   }
 
   Stream<String> download(String url, String outputDir) {
-    _method.invokeMethod('download', {'url': url, 'outputDir': outputDir});
-    return _event.receiveBroadcastStream().map((e) => e as String);
+    return AndroidDownloadSession.open(url, outputDir);
   }
 
   Future<String> _resolveOutputDir() async {
@@ -139,6 +138,7 @@ class AndroidYoutubeDownloader {
     String? historyArtist,
   }) => YoutubeDownloadGate.instance.run(
     () => _downloadAudioUnlocked(url, onProgress: onProgress, historyTitle: historyTitle, historyArtist: historyArtist),
+    onWaiting: () => onProgress(0, 'Waiting for another download...'),
   );
 
   Future<List<YoutubeDownloadResult>> _downloadAudioUnlocked(
@@ -249,7 +249,18 @@ Future<String> convertAndroidYoutubeAudioToMp3(
   String? title,
   String? artist,
   String? coverPath,
+  Future<({bool success, String diagnostics})> Function(List<String> arguments)? encode,
 }) async {
+  Future<({bool success, String diagnostics})> nativeEncode(List<String> arguments) async {
+    final session = await FFmpegKit.executeWithArguments(arguments);
+    final rc = await session.getReturnCode();
+    return (
+      success: ReturnCode.isSuccess(rc),
+      diagnostics: ReturnCode.isSuccess(rc) ? '' : (await session.getAllLogsAsString() ?? ''),
+    );
+  }
+
+  final runEncoder = encode ?? nativeEncode;
   final finalPath = p.join(p.dirname(inputPath), '${p.basenameWithoutExtension(inputPath)}.mp3');
   final outputPath = p.equals(inputPath, finalPath) ? '$finalPath.resonance.mp3' : finalPath;
   final hasCover = coverPath != null && coverPath.isNotEmpty && await File(coverPath).exists();
@@ -275,11 +286,18 @@ Future<String> convertAndroidYoutubeAudioToMp3(
     ]);
   }
   args.addAll(['-codec:a', 'libmp3lame', '-b:a', '192k', outputPath]);
-  final session = await FFmpegKit.executeWithArguments(args);
-  final rc = await session.getReturnCode();
-  if (!ReturnCode.isSuccess(rc)) {
-    final logs = await session.getAllLogsAsString();
-    throw Exception('Audio conversion failed: ${(logs ?? '').trim()}');
+  var result = await runEncoder(args);
+  if (!result.success && hasCover) {
+    // Artwork is optional. A broken image/unsupported image codec must not
+    // discard valid audio or turn a transferred song into a failed download.
+    final audioOnly = <String>['-y', '-i', inputPath, '-vn', '-map_metadata', '0'];
+    if (title != null && title.isNotEmpty) audioOnly.addAll(['-metadata', 'title=$title']);
+    if (artist != null && artist.isNotEmpty) audioOnly.addAll(['-metadata', 'artist=$artist']);
+    audioOnly.addAll(['-codec:a', 'libmp3lame', '-b:a', '192k', outputPath]);
+    result = await runEncoder(audioOnly);
+  }
+  if (!result.success) {
+    throw Exception('Audio conversion failed: ${result.diagnostics.trim()}');
   }
   final output = File(outputPath);
   if (!await output.exists() || await output.length() == 0) {

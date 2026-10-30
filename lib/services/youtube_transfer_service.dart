@@ -4,11 +4,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/models/youtube_download_result.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/services/playlist_transfer_codec.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/widgets/youtube/android_youtube.dart' as android_youtube;
 import 'package:resonance/widgets/youtube/windows_youtube.dart' as windows_youtube;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:resonance/core/youtube/youtube_access_models.dart';
 
 class YoutubeSearchCandidate {
   final String title;
@@ -37,12 +37,27 @@ class YoutubeSearchCandidate {
 
 class YoutubeTransferService {
   final TrackSourceRepository sourceRepository;
+  final windows_youtube.MediaDownloader? windowsDownloader;
 
-  YoutubeTransferService({this.sourceRepository = const TrackSourceRepository()});
+  YoutubeTransferService({this.sourceRepository = const TrackSourceRepository(), this.windowsDownloader});
+  bool get _usesWindows => windowsDownloader != null || Platform.isWindows;
+
+  Future<Map<String, String>> prepareStreams(PlaylistTransferManifest manifest) async {
+    PlaylistTransferCodec.validateManifest(manifest);
+    await MetadataCacheService.setStreams({
+      for (final entry in manifest.trackMetadata.entries)
+        TrackSourceRepository.canonicalUrlFor(entry.key): CachedTrackMetadata(
+          title: entry.value.title,
+          artist: entry.value.artist,
+          artworkUrl: TrackSourceRepository.thumbnailUrlFor(entry.key),
+        ),
+    });
+    return {for (final id in manifest.youtubeVideoIds) id: TrackSourceRepository.canonicalUrlFor(id)};
+  }
 
   Future<List<YoutubeSearchCandidate>> search(String query) async {
-    if (Platform.isWindows) {
-      final downloader = windows_youtube.MediaDownloader();
+    if (_usesWindows) {
+      final downloader = windowsDownloader ?? windows_youtube.MediaDownloader();
       await downloader.initBinaries();
       final results = await downloader.search(query);
       return [
@@ -80,9 +95,9 @@ class YoutubeTransferService {
     final videoId = TrackSourceRepository.videoIdFromUrlOrId(urlOrVideoId);
     if (videoId == null) throw ArgumentError.value(urlOrVideoId, 'urlOrVideoId', 'Invalid YouTube URL or video ID');
     final url = TrackSourceRepository.canonicalUrlFor(videoId);
-    final track = Platform.isWindows
+    final track = _usesWindows
         ? await (() async {
-            final downloader = windows_youtube.MediaDownloader();
+            final downloader = windowsDownloader ?? windows_youtube.MediaDownloader();
             await downloader.initBinaries();
             return downloader.lookup(url);
           })()
@@ -118,34 +133,40 @@ class YoutubeTransferService {
     final url = TrackSourceRepository.canonicalUrlFor(videoId);
     var resolvedTitle = _nonEmpty(historyTitle);
     var resolvedArtist = _nonEmpty(historyArtist);
+    final cached = await MetadataCacheService.get(url);
+    resolvedTitle ??= _nonEmpty(cached?.title);
+    resolvedArtist ??= _nonEmpty(cached?.artist);
     YoutubeDownloadResult result;
-    if (Platform.isWindows) {
-      final downloader = windows_youtube.MediaDownloader();
+    if (_usesWindows) {
+      final downloader = windowsDownloader ?? windows_youtube.MediaDownloader();
       await downloader.initBinaries();
-      if (resolvedTitle == null || resolvedArtist == null) {
-        try {
-          final metadata = await downloader.lookup(url);
-          resolvedTitle ??= _nonEmpty(metadata.title);
-          resolvedArtist ??= _nonEmpty(metadata.artist);
-        } on YoutubeFailure catch (failure) {
-          if (failure.isAccessFailure) rethrow;
-        } catch (_) {
-          // Metadata improves download history, but must not make the actual
-          // transfer fail when yt-dlp can still download the source.
-        }
-      }
       final downloaded = <YoutubeDownloadResult>[];
+      final details = <String, YoutubeDownloadResult>{};
       await downloader.downloadAudio(
         url: url,
         onProgress: onProgress,
         historyTitle: resolvedTitle,
         historyArtist: resolvedArtist,
+        onTrackPrepared: (track) {
+          details[track.localPath] = track;
+        },
         onTrackDownloaded: (path, downloadedVideoId) async {
-          downloaded.add(YoutubeDownloadResult(localPath: path, youtubeVideoId: downloadedVideoId ?? videoId));
+          final track = details[path];
+          downloaded.add(
+            YoutubeDownloadResult(
+              localPath: path,
+              youtubeVideoId: downloadedVideoId ?? videoId,
+              title: track?.title ?? resolvedTitle,
+              artist: track?.artist ?? resolvedArtist,
+            ),
+          );
         },
       );
       if (downloaded.isEmpty) throw Exception('The download finished without a local audio file.');
-      result = downloaded.firstWhere((item) => item.youtubeVideoId == videoId, orElse: () => downloaded.first);
+      result = downloaded.firstWhere(
+        (item) => item.youtubeVideoId == videoId,
+        orElse: () => throw StateError('The downloaded audio did not match the requested song.'),
+      );
     } else if (Platform.isAndroid) {
       final downloaded = await android_youtube.AndroidYoutubeDownloader().downloadAudio(
         url,
@@ -154,7 +175,10 @@ class YoutubeTransferService {
         historyArtist: resolvedArtist,
       );
       if (downloaded.isEmpty) throw Exception('The download finished without a local audio file.');
-      result = downloaded.firstWhere((item) => item.youtubeVideoId == videoId, orElse: () => downloaded.first);
+      result = downloaded.firstWhere(
+        (item) => item.youtubeVideoId == videoId,
+        orElse: () => throw StateError('The downloaded audio did not match the requested song.'),
+      );
     } else {
       throw UnsupportedError('Playlist transfer downloads are supported on Windows and Android.');
     }
@@ -164,6 +188,15 @@ class YoutubeTransferService {
       method: sourceMethod,
       lastVerifiedAt: DateTime.now().toUtc(),
     );
+    if (_nonEmpty(result.title) != null && _nonEmpty(result.artist) != null) {
+      await MetadataCacheService.set(result.localPath, result.title!, result.artist!);
+      await MetadataCacheService.set(
+        url,
+        result.title!,
+        result.artist!,
+        artworkUrl: TrackSourceRepository.thumbnailUrlFor(videoId),
+      );
+    }
     return YoutubeDownloadResult(
       localPath: result.localPath,
       youtubeVideoId: videoId,

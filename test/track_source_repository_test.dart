@@ -8,6 +8,39 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('batch import availability ignores missing/remote mappings and does not rewrite source history', () async {
+    SharedPreferences.setMockInitialValues({});
+    final directory = await Directory.systemTemp.createTemp('resonance-source-batch-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = await File('${directory.path}/song.mp3').writeAsString('fixture');
+    const repository = TrackSourceRepository();
+    await repository.saveSource(
+      localPath: file.path,
+      youtubeVideoId: 'aaaaaaaaaaa',
+      method: TrackSourceMethod.downloadedByResonance,
+    );
+    await repository.saveSource(
+      localPath: '${directory.path}/missing.mp3',
+      youtubeVideoId: 'bbbbbbbbbbb',
+      method: TrackSourceMethod.downloadedByResonance,
+    );
+    await repository.saveSource(
+      localPath: 'https://www.youtube.com/watch?v=ccccccccccc',
+      youtubeVideoId: 'ccccccccccc',
+      method: TrackSourceMethod.matchedDuringTransfer,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    final before = prefs.getString(TrackSourceRepository.storageKey);
+    final result = await repository.findLocalTracksByYoutubeIds([
+      'aaaaaaaaaaa',
+      'bbbbbbbbbbb',
+      'ccccccccccc',
+      'aaaaaaaaaaa',
+    ]);
+    expect(result, {'aaaaaaaaaaa': file.path});
+    expect(prefs.getString(TrackSourceRepository.storageKey), before);
+  });
+
   test('source mapping saves and looks up by track and YouTube ID', () async {
     SharedPreferences.setMockInitialValues({});
     final directory = await Directory.systemTemp.createTemp('resonance-source-');

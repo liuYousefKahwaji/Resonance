@@ -143,17 +143,18 @@ class MainActivity : AudioServiceFragmentActivity() {
 
         // ── EventChannel ─────────────────────────────────────────────────────
         var activeSink: EventChannel.EventSink? = null
-        val pendingEvents = mutableListOf<String>()
+        var listeningDownloadId: Long? = null
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
                     activeSink = sink
-                    pendingEvents.toList().forEach { sink.success(it) }
-                    pendingEvents.clear()
+                    listeningDownloadId = ((arguments as? Map<*, *>)?.get("requestId") as? Number)?.toLong()
+                    listeningDownloadId?.let { sink.success("ready:$it") }
                 }
                 override fun onCancel(arguments: Any?) {
                     activeSink = null
+                    listeningDownloadId = null
                 }
             })
 
@@ -232,6 +233,11 @@ class MainActivity : AudioServiceFragmentActivity() {
 
                     // ── download ──────────────────────────────────────────────
                     "download" -> {
+                        val requestId = call.argument<Number>("requestId")?.toLong()
+                        if (requestId == null || requestId != listeningDownloadId || activeSink == null) {
+                            result.error("DOWNLOAD_LISTENER_MISSING", "Download listener is not ready", null)
+                            return@setMethodCallHandler
+                        }
                         val url = call.argument<String>("url") ?: ""
                         val outputDir = call.argument<String>("outputDir")
                             ?: getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.absolutePath
@@ -242,7 +248,9 @@ class MainActivity : AudioServiceFragmentActivity() {
                         // Acknowledge immediately; progress comes via EventChannel.
                         result.success(null)
 
-                        val sinkProvider: () -> EventChannel.EventSink? = { activeSink }
+                        val events = KotlinEventSink { message ->
+                            if (listeningDownloadId == requestId) activeSink?.success(message)
+                        }
 
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
@@ -251,20 +259,12 @@ class MainActivity : AudioServiceFragmentActivity() {
                                         "download",
                                         url,
                                         outputDir,
-                                        KotlinEventSink(sinkProvider, pendingEvents),
+                                        events,
                                         cookiePath,
                                     )
                                 }
                             } catch (e: Exception) {
-                                Handler(Looper.getMainLooper()).post {
-                                    val message = "error:${e.message}"
-                                    val sink = activeSink
-                                    if (sink != null) {
-                                        sink.success(message)
-                                    } else {
-                                        pendingEvents.add(message)
-                                    }
-                                }
+                                events.success("error:${e.message}")
                             }
                         }
                     }
@@ -1022,17 +1022,11 @@ class MainActivity : AudioServiceFragmentActivity() {
 // object (for example "b") which has no attribute named "success".
 @Keep
 class KotlinEventSink(
-    private val sinkProvider: () -> EventChannel.EventSink?,
-    private val pendingEvents: MutableList<String>,
+    private val deliver: (String) -> Unit,
 ) {
     fun success(message: String) {
         Handler(Looper.getMainLooper()).post {
-            val sink = sinkProvider()
-            if (sink != null) {
-                sink.success(message)
-            } else {
-                pendingEvents.add(message)
-            }
+            deliver(message)
         }
     }
 }

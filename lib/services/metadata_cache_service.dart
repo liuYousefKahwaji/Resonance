@@ -113,13 +113,19 @@ class MetadataCacheService {
   }
 
   static Future<void> flush() async {
-    _persistDebounce?.cancel(); _persistDebounce = null;
-    await _loadingFuture; await _pendingPersist; await _persist();
+    _persistDebounce?.cancel();
+    _persistDebounce = null;
+    await _loadingFuture;
+    await _pendingPersist;
+    await _persist();
   }
 
   static Future<void> reloadAfterRestore() async {
-    _persistDebounce?.cancel(); _persistDebounce = null;
-    await _pendingPersist; _cache = null; _loadingFuture = null;
+    _persistDebounce?.cancel();
+    _persistDebounce = null;
+    await _pendingPersist;
+    _cache = null;
+    _loadingFuture = null;
     await _ensureLoaded();
   }
 
@@ -192,6 +198,23 @@ class MetadataCacheService {
     };
 
     _schedulePersist();
+  }
+
+  /// Seed a transferred playlist in one memory update and one debounced write.
+  /// Import must not wait for remote extraction just to display track names.
+  static Future<void> setStreams(Map<String, CachedTrackMetadata> tracks) async {
+    await _ensureLoaded();
+    for (final entry in tracks.entries) {
+      if (!_isStreamUrl(entry.key)) throw ArgumentError('Expected stream metadata');
+      _cache![entry.key] = {
+        'title': entry.value.title,
+        'artist': entry.value.artist,
+        'mtime': 0,
+        'isStream': true,
+        if (entry.value.artworkUrl != null) 'artworkUrl': entry.value.artworkUrl,
+      };
+    }
+    if (tracks.isNotEmpty) _schedulePersist();
   }
 
   /// Removes a single entry (e.g. when a track is deleted from the library).

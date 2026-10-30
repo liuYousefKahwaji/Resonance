@@ -45,6 +45,9 @@ migrate_working_dir/
 /AGENTS.md
 /docs/
 
+# Local Google OAuth build configuration (never user access/refresh tokens).
+/google-drive.local.json
+
 # Symbolication related
 app.*.symbols
 

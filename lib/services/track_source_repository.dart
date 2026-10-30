@@ -81,6 +81,24 @@ class TrackSourceRepository {
     return file.path;
   }
 
+  /// Read one identity snapshot for an import preview. Do not reparse/rewrite
+  /// the whole preferences map once per track just to check local availability.
+  Future<Map<String, String>> findLocalTracksByYoutubeIds(Iterable<String> videoIds) async {
+    final wanted = videoIds.where(isValidYoutubeVideoId).toSet();
+    final result = <String, String>{};
+    if (wanted.isEmpty) return result;
+    final records = await _loadRecords();
+    for (final record in records.values) {
+      if (!wanted.contains(record.youtubeVideoId) ||
+          result.containsKey(record.youtubeVideoId) ||
+          _isNetworkUrl(record.localPath)) {
+        continue;
+      }
+      if (await File(record.localPath).exists()) result[record.youtubeVideoId] = record.localPath;
+    }
+    return result;
+  }
+
   Future<TrackSourceRecord> saveSource({
     required String localPath,
     required String youtubeVideoId,

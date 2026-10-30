@@ -110,6 +110,9 @@ class YoutubePlaylistImportService {
     var streamed = 0;
     var cancelled = false;
     final uniqueEntries = unique.values.toList(growable: false);
+    final localTracks = mode == YoutubePlaylistImportMode.download
+        ? await sourceRepository.findLocalTracksByYoutubeIds(unique.keys)
+        : const <String, String>{};
 
     for (var index = 0; index < uniqueEntries.length; index++) {
       if (isCancelled?.call() ?? false) {
@@ -142,7 +145,7 @@ class YoutubePlaylistImportService {
           report(100, 'Stream ready');
         } else {
           report(0, 'Checking local downloads…');
-          final existing = await sourceRepository.findLocalTrackByYoutubeId(entry.videoId);
+          final existing = localTracks[entry.videoId];
           if (existing != null) {
             resolvedById[entry.videoId] = existing;
             reused++;

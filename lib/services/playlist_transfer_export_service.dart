@@ -43,13 +43,15 @@ class PlaylistSourceScan {
   final List<String> playlistTracks;
   final Map<String, String> resolvedByPath;
   final List<UnresolvedPlaylistTrack> unresolved;
+  final Map<String, PlaylistTransferTrackMetadata> metadataByPath;
 
-  const PlaylistSourceScan({
+  PlaylistSourceScan({
     required this.playlistName,
     required this.playlistTracks,
     required this.resolvedByPath,
     required this.unresolved,
-  });
+    Map<String, PlaylistTransferTrackMetadata>? metadataByPath,
+  }) : metadataByPath = metadataByPath ?? {};
 
   List<String> get resolvedVideoIds => [
     for (final path in playlistTracks)
@@ -58,8 +60,14 @@ class PlaylistSourceScan {
 
   int get skippedEntryCount => playlistTracks.length - resolvedVideoIds.length;
 
-  PlaylistTransferManifest createManifest() =>
-      PlaylistTransferManifest(playlistName: playlistName, youtubeVideoIds: resolvedVideoIds);
+  PlaylistTransferManifest createManifest() => PlaylistTransferManifest(
+    playlistName: playlistName,
+    youtubeVideoIds: resolvedVideoIds,
+    trackMetadata: {
+      for (final path in playlistTracks)
+        if (resolvedByPath[path] != null && metadataByPath[path] != null) resolvedByPath[path]!: metadataByPath[path]!,
+    },
+  );
 }
 
 class PlaylistSourceMatch {
@@ -95,10 +103,18 @@ class PlaylistTransferExportService {
     final resolved = <String, String>{};
     final unresolved = <UnresolvedPlaylistTrack>[];
     final counts = <String, int>{};
+    final metadataByPath = <String, PlaylistTransferTrackMetadata>{};
     for (final path in tracks) {
       counts[path] = (counts[path] ?? 0) + 1;
     }
     for (final path in counts.keys) {
+      final cached = await MetadataCacheService.get(path);
+      if (cached != null && cached.title.trim().isNotEmpty && cached.artist.trim().isNotEmpty) {
+        metadataByPath[path] = PlaylistTransferTrackMetadata(title: cached.title, artist: cached.artist);
+      } else if (!path.startsWith('http')) {
+        final tags = await _metadataFor(path);
+        metadataByPath[path] = PlaylistTransferTrackMetadata(title: tags.title, artist: tags.artist);
+      }
       final saved = await sourceRepository.getSourceForTrack(path);
       if (saved != null && TrackSourceRepository.isValidYoutubeVideoId(saved.youtubeVideoId)) {
         resolved[path] = saved.youtubeVideoId;
@@ -114,7 +130,7 @@ class PlaylistTransferExportService {
         );
         continue;
       }
-      final metadata = await _metadataFor(path);
+      final metadata = metadataByPath[path] ?? PlaylistTransferTrackMetadata(title: path, artist: 'Unknown Artist');
       unresolved.add(
         UnresolvedPlaylistTrack(
           localPath: path,
@@ -129,6 +145,7 @@ class PlaylistTransferExportService {
       playlistTracks: List.unmodifiable(tracks),
       resolvedByPath: resolved,
       unresolved: unresolved,
+      metadataByPath: metadataByPath,
     );
   }
 
@@ -172,6 +189,12 @@ class PlaylistTransferExportService {
         method: match.manuallyChanged ? TrackSourceMethod.manuallySelected : TrackSourceMethod.matchedDuringTransfer,
       );
       scan.resolvedByPath[match.track.localPath] = selected.videoId;
+      if (selected.title.trim().isNotEmpty && selected.uploader.trim().isNotEmpty) {
+        scan.metadataByPath[match.track.localPath] = PlaylistTransferTrackMetadata(
+          title: selected.title,
+          artist: selected.uploader,
+        );
+      }
     }
   }
 

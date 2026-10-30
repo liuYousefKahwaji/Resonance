@@ -120,7 +120,13 @@ jobs:
       - run: flutter test --no-pub
       - run: python -m pip install -r tool/release/requirements.txt
       - run: python -m unittest discover -s tool/release/tests -v
-      - run: flutter build windows --release --no-pub
+      - name: Build Windows with optional Google Drive integration
+        env:
+          GOOGLE_DRIVE_WINDOWS_CLIENT_ID: ${{ vars.GOOGLE_DRIVE_WINDOWS_CLIENT_ID }}
+          GOOGLE_DRIVE_WINDOWS_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_WINDOWS_CLIENT_SECRET }}
+        run: |
+          python tool/google_drive/build_config.py --output "$env:RUNNER_TEMP/google-drive.json"
+          flutter build windows --release --no-pub "--dart-define-from-file=$env:RUNNER_TEMP/google-drive.json"
       - run: python tool/release/release.py windows --root build/windows/x64/runner/Release --output build/canonical-windows
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -194,7 +200,12 @@ jobs:
           path.write_bytes(base64.b64decode(value, validate=True)); path.chmod(0o600)
           PY
       - run: flutter pub get
-      - run: flutter build apk --release --target-platform android-arm64 --no-pub
+      - name: Build Android with optional Google Drive integration
+        env:
+          GOOGLE_DRIVE_ANDROID_SERVER_CLIENT_ID: ${{ vars.GOOGLE_DRIVE_ANDROID_SERVER_CLIENT_ID }}
+        run: |
+          python tool/google_drive/build_config.py --output "$RUNNER_TEMP/google-drive.json"
+          flutter build apk --release --target-platform android-arm64 --no-pub --dart-define-from-file="$RUNNER_TEMP/google-drive.json"
       - name: Kotlin unit tests
         working-directory: android
         run: chmod +x gradlew && ./gradlew :app:testReleaseUnitTest -Ptarget-platform=android-arm64

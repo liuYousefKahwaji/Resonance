@@ -4,9 +4,22 @@ import 'package:resonance/services/playlist_transfer_export_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/youtube_transfer_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:resonance/services/metadata_cache_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('export carries already-known names without another YouTube lookup', () async {
+    SharedPreferences.setMockInitialValues({});
+    await MetadataCacheService.clear();
+    addTearDown(MetadataCacheService.flush);
+    const url = 'https://www.youtube.com/watch?v=aaaaaaaaaaa';
+    await MetadataCacheService.set(url, 'أغنية', 'Artist');
+    final scan = await const PlaylistTransferExportService().scanPlaylist('Mix', [url, url]);
+    final manifest = scan.createManifest();
+    expect(manifest.youtubeVideoIds, ['aaaaaaaaaaa', 'aaaaaaaaaaa']);
+    expect(manifest.trackMetadata['aaaaaaaaaaa']!.title, 'أغنية');
+  });
 
   const firstCandidate = YoutubeSearchCandidate(
     title: 'First result',
