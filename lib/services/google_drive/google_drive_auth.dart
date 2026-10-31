@@ -1,3 +1,4 @@
+import 'package:google_sign_in_platform_interface/google_sign_in_platform_interface.dart' as google_platform;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -44,12 +45,15 @@ class AndroidGoogleDriveAuth implements GoogleDriveAuth {
   AndroidGoogleDriveAuth({this.config = const GoogleDriveConfig()});
   final GoogleDriveConfig config;
   GoogleSignInAccount? _user;
+  GoogleDriveAccount? _savedAccount;
+  String? _savedEmail;
   @override
   bool musicLibraryAccess = false;
   Future<void>? _initialization;
   Future<void> _preferenceQueue = Future.value();
   bool _initialized = false;
   static const _connectedKey = 'google_drive_android_connected_v1';
+  static const _accountKey = 'google_drive_android_account_v2';
   int _epoch = 0;
   final _signIn = GoogleSignIn.instance;
 
@@ -57,23 +61,40 @@ class AndroidGoogleDriveAuth implements GoogleDriveAuth {
   GoogleDriveAccount? get account {
     final user = _user;
     return user == null
-        ? null
+        ? _savedAccount
         : GoogleDriveAccount(id: user.id, name: user.displayName ?? user.email, photoUrl: user.photoUrl);
   }
 
-  Future<void> _initialize() => _initialization ??= () async {
-    if (config.androidServerClientId.isEmpty) {
-      throw const GoogleDriveException('Google Drive is not configured in this build yet.');
-    }
-    await _signIn.initialize(serverClientId: config.androidServerClientId);
-    _initialized = true;
-  }();
+  Future<void> _initialize() => _initialization ??=
+      () async {
+        if (config.androidServerClientId.isEmpty) {
+          throw const GoogleDriveException('Google Drive is not configured in this build yet.');
+        }
+        await _signIn.initialize(serverClientId: config.androidServerClientId);
+        _initialized = true;
+      }().catchError((Object error, StackTrace stack) {
+        _initialization = null;
+        Error.throwWithStackTrace(error, stack);
+      });
 
-  Future<void> _remember(int epoch, bool connected) {
+  Future<void> _remember(int epoch, bool connected, {GoogleSignInAccount? user}) {
     final write = _preferenceQueue.then((_) async {
       if (epoch != _epoch) return;
       final preferences = await SharedPreferences.getInstance();
-      if (epoch == _epoch) await preferences.setBool(_connectedKey, connected);
+      if (epoch != _epoch) return;
+      if (connected && user != null) {
+        await preferences.setString(
+          _accountKey,
+          jsonEncode({
+            'account': {'id': user.id, 'name': user.displayName ?? user.email, 'photoUrl': user.photoUrl},
+            'email': user.email,
+            'musicLibraryAccess': musicLibraryAccess,
+          }),
+        );
+      }
+      if (epoch != _epoch) return;
+      await preferences.setBool(_connectedKey, connected);
+      if (!connected) await preferences.remove(_accountKey);
     });
     _preferenceQueue = write.catchError((Object _) {});
     return write;
@@ -85,19 +106,22 @@ class AndroidGoogleDriveAuth implements GoogleDriveAuth {
     final epoch = _epoch;
     final preferences = await SharedPreferences.getInstance();
     if (preferences.getBool(_connectedKey) != true || epoch != _epoch) return;
-    await _initialize();
-    if (epoch != _epoch) return;
-    final user = await _signIn.attemptLightweightAuthentication();
-    final music =
-        user != null &&
-        await user.authorizationClient.authorizationForScopes(const [
-              googleDriveFileScope,
-              googleDriveMusicReadScope,
-            ]) !=
-            null;
-    if (epoch == _epoch) {
-      _user = user;
-      musicLibraryAccess = music;
+    // Credential Manager's lightweight authentication can display an account
+    // chooser on every launch. Restore display identity locally instead; real
+    // authorization is always requested silently for that exact email below.
+    final encoded = preferences.getString(_accountKey);
+    if (encoded == null || encoded.length > 65536) return;
+    try {
+      final json = jsonDecode(encoded) as Map<String, dynamic>;
+      final email = json['email'];
+      final saved = GoogleDriveAccount.fromJson(Map<String, dynamic>.from(json['account'] as Map));
+      if (email is! String || !email.contains('@') || email.length > 320) return;
+      if (epoch != _epoch) return;
+      _savedAccount = saved;
+      _savedEmail = email;
+      musicLibraryAccess = json['musicLibraryAccess'] == true;
+    } catch (_) {
+      /* Explicit Connect repairs a missing/invalid saved identity. */
     }
   }
 
@@ -110,40 +134,79 @@ class AndroidGoogleDriveAuth implements GoogleDriveAuth {
     if (epoch != _epoch) throw const GoogleDriveCancelled();
     await user.authorizationClient.authorizeScopes(const [googleDriveFileScope]);
     if (epoch != _epoch) throw const GoogleDriveCancelled();
-    await _remember(epoch, true);
-    if (epoch != _epoch) throw const GoogleDriveCancelled();
-    final music =
-        await user.authorizationClient.authorizationForScopes(const [
-          googleDriveFileScope,
-          googleDriveMusicReadScope,
-        ]) !=
-        null;
+    var music = false;
+    try {
+      music =
+          await user.authorizationClient.authorizationForScopes(const [
+            googleDriveFileScope,
+            googleDriveMusicReadScope,
+          ]) !=
+          null;
+    } catch (_) {
+      // Optional music-library consent must not discard a valid playlist login.
+    }
     if (epoch != _epoch) throw const GoogleDriveCancelled();
     _user = user;
+    _savedAccount = GoogleDriveAccount(id: user.id, name: user.displayName ?? user.email, photoUrl: user.photoUrl);
+    _savedEmail = user.email;
     musicLibraryAccess = music;
+    await _remember(epoch, true, user: user);
   }
 
   @override
   Future<void> enableMusicLibrary() async {
     final epoch = _epoch;
-    final user = _user;
-    if (user == null) throw const GoogleDriveException('Connect Google Drive to continue.');
-    await user.authorizationClient.authorizeScopes(const [googleDriveFileScope, googleDriveMusicReadScope]);
-    if (epoch != _epoch || _user?.id != user.id) throw const GoogleDriveCancelled();
+    if (account == null) throw const GoogleDriveException('Connect Google Drive to continue.');
+    await _initialize();
+    if (epoch != _epoch) throw const GoogleDriveCancelled();
+    final auth = await _authorization(const [googleDriveFileScope, googleDriveMusicReadScope], prompt: true);
+    if (epoch != _epoch) throw const GoogleDriveCancelled();
+    if (auth == null) throw const GoogleDriveException('Reconnect Google Drive to browse music.');
     musicLibraryAccess = true;
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_accountKey);
+    if (saved != null && epoch == _epoch) {
+      final json = jsonDecode(saved) as Map<String, dynamic>;
+      json['musicLibraryAccess'] = true;
+      // Share the preference write queue so Logout always wins.
+      final task = _preferenceQueue.then((_) async {
+        if (epoch == _epoch) await prefs.setString(_accountKey, jsonEncode(json));
+      });
+      _preferenceQueue = task.catchError((Object _) {});
+      await task;
+    }
+  }
+
+  Future<google_platform.ClientAuthorizationTokenData?> _authorization(List<String> scopes, {bool prompt = false}) {
+    final email = _savedEmail ?? _user?.email;
+    if (email == null) throw const GoogleDriveException('Reconnect Google Drive to continue.');
+    return google_platform.GoogleSignInPlatform.instance.clientAuthorizationTokensForScopes(
+      google_platform.ClientAuthorizationTokensForScopesParameters(
+        request: google_platform.AuthorizationRequestDetails(
+          scopes: scopes,
+          userId: account?.id,
+          email: email,
+          promptIfUnauthorized: prompt,
+        ),
+      ),
+    );
   }
 
   @override
   Future<String> accessToken({bool refresh = false}) async {
     final epoch = _epoch;
-    final user = _user;
-    if (user == null) throw const GoogleDriveException('Connect Google Drive to continue.');
-    final client = user.authorizationClient;
+    if (account == null) throw const GoogleDriveException('Connect Google Drive to continue.');
+    await _initialize();
+    if (epoch != _epoch) throw const GoogleDriveCancelled();
     final scopes = [googleDriveFileScope, if (musicLibraryAccess) googleDriveMusicReadScope];
-    var authorization = await client.authorizationForScopes(scopes);
+    var authorization = await _authorization(scopes);
+    if (epoch != _epoch) throw const GoogleDriveCancelled();
     if (refresh && authorization != null) {
-      await client.clearAuthorizationToken(accessToken: authorization.accessToken);
-      authorization = await client.authorizationForScopes(scopes);
+      await google_platform.GoogleSignInPlatform.instance.clearAuthorizationToken(
+        google_platform.ClearAuthorizationTokenParams(accessToken: authorization.accessToken),
+      );
+      if (epoch != _epoch) throw const GoogleDriveCancelled();
+      authorization = await _authorization(scopes);
     }
     if (epoch != _epoch) throw const GoogleDriveCancelled();
     if (authorization == null) throw const GoogleDriveException('Reconnect Google Drive to allow playlist access.');
@@ -154,6 +217,8 @@ class AndroidGoogleDriveAuth implements GoogleDriveAuth {
   Future<void> logout() async {
     final epoch = ++_epoch;
     _user = null;
+    _savedAccount = null;
+    _savedEmail = null;
     musicLibraryAccess = false;
     await _remember(epoch, false);
     if (_initialized) await _signIn.signOut();

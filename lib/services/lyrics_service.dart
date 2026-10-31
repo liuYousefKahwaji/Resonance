@@ -9,17 +9,41 @@ import 'package:path_provider/path_provider.dart';
 import 'package:resonance/models/lyrics.dart';
 import 'package:resonance/services/lyrics_parser.dart';
 
+class LyricsLookupException implements Exception {
+  const LyricsLookupException(this.message, {this.retryAt});
+  final String message;
+  final DateTime? retryAt;
+  @override
+  String toString() => message;
+}
+
 class LyricsService {
   static const _cacheVersion = 3;
   static const _requestTimeout = Duration(seconds: 5);
   static const _lrclibRequestGap = Duration(milliseconds: 300);
-  static const _lrclibUserAgent = 'Resonance/2.8.0 (https://github.com/liuYousefKahwaji/Resonance)';
+  static const _lrclibUserAgent = 'Resonance/4.0.1 (https://github.com/liuYousefKahwaji/Resonance)';
   static final Map<String, LyricsDocument> _memory = {};
   static final Map<String, Future<LyricsDocument?>> _inFlight = {};
   static Future<void> _lrclibQueue = Future.value();
   static DateTime? _lastLrclibRequest;
+  static DateTime? _lrclibRetryAt;
 
-  const LyricsService();
+  @visibleForTesting
+  static void resetLrclibBackoff() => _lrclibRetryAt = null;
+
+  const LyricsService({this.lrclibClientFactory, this.lrclibTimeout = _requestTimeout});
+  @visibleForTesting
+  final HttpClient Function()? lrclibClientFactory;
+  final Duration lrclibTimeout;
+  HttpClient _lrclibClient() => lrclibClientFactory?.call() ?? (HttpClient()..connectionTimeout = lrclibTimeout);
+  static String searchQueryForTrack(String title, String artist) {
+    final metadata = _lookupMetadata(title, artist);
+    // Many YouTube uploads put the real artist in "Artist - Song" while
+    // reporting an unrelated uploader as artist. Manual search is broad and
+    // explicitly selected, so avoid adding that uploader to an already named song.
+    if (metadata.title.contains(' - ')) return metadata.title.replaceAll(' - ', ' ').trim();
+    return [metadata.artist, metadata.title].where((e) => e.isNotEmpty).join(' ');
+  }
 
   Future<LyricsDocument?> fetch({
     required String trackId,
@@ -134,14 +158,16 @@ class LyricsService {
     if (duration != null && duration.inSeconds > 0) query['d'] = '${duration.inSeconds}';
     final client = HttpClient()..connectionTimeout = _requestTimeout;
     try {
-      final response = await (await client.getUrl(
-        Uri.https('lyrics-api.boidu.dev', '/getLyrics', query),
-      )).close().timeout(_requestTimeout);
+      final response =
+          await (await client.getUrl(Uri.https('lyrics-api.boidu.dev', '/getLyrics', query)).timeout(_requestTimeout))
+              .close()
+              .timeout(_requestTimeout);
       if (response.statusCode != HttpStatus.ok) {
-        await response.drain<void>();
+        await response.drain<void>().timeout(_requestTimeout);
         return null;
       }
-      final payload = jsonDecode(await utf8.decoder.bind(response).join()) as Map<String, dynamic>;
+      final payload =
+          jsonDecode(await utf8.decoder.bind(response).join().timeout(_requestTimeout)) as Map<String, dynamic>;
       final score = (payload['score'] as num?)?.toDouble();
       final ttml = payload['ttml']?.toString() ?? '';
       if (ttml.isEmpty || (score != null && score < 65)) return null;
@@ -159,29 +185,37 @@ class LyricsService {
     if (title.isEmpty) return null;
     final client = HttpClient()..connectionTimeout = _requestTimeout;
     try {
-      final request = await client.postUrl(Uri.https('amlldb.bikonoo.com', '/api/search-lyrics'));
+      final request = await client
+          .postUrl(Uri.https('amlldb.bikonoo.com', '/api/search-lyrics'))
+          .timeout(_requestTimeout);
       request.headers.contentType = ContentType.json;
       request.headers.set(HttpHeaders.userAgentHeader, 'Resonance/2.7.0');
       request.add(utf8.encode(jsonEncode({'query': title, 'type': 'title'})));
       final response = await request.close().timeout(_requestTimeout);
       if (response.statusCode != HttpStatus.ok) {
-        await response.drain<void>();
+        await response.drain<void>().timeout(_requestTimeout);
         return null;
       }
-      final decoded = jsonDecode(await utf8.decoder.bind(response).join());
+      final decoded = jsonDecode(await utf8.decoder.bind(response).join().timeout(_requestTimeout));
       if (decoded is! List) return null;
       final candidates = decoded.whereType<Map>().map((item) => Map<String, dynamic>.from(item));
       final candidate = _bestAmllCandidate(candidates, title: title, artist: artist);
       final file = candidate?['file']?.toString();
       if (file == null || !RegExp(r'^[A-Za-z0-9._-]+\.ttml$').hasMatch(file)) return null;
-      final rawResponse = await (await client.getUrl(
-        Uri.https('amlldb.bikonoo.com', '/raw-lyrics/${Uri.encodeComponent(file)}'),
-      )).close().timeout(_requestTimeout);
+      final rawResponse =
+          await (await client
+                  .getUrl(Uri.https('amlldb.bikonoo.com', '/raw-lyrics/${Uri.encodeComponent(file)}'))
+                  .timeout(_requestTimeout))
+              .close()
+              .timeout(_requestTimeout);
       if (rawResponse.statusCode != HttpStatus.ok) {
-        await rawResponse.drain<void>();
+        await rawResponse.drain<void>().timeout(_requestTimeout);
         return null;
       }
-      final document = LyricsParser.parseTtml(await utf8.decoder.bind(rawResponse).join(), source: 'AMLL');
+      final document = LyricsParser.parseTtml(
+        await utf8.decoder.bind(rawResponse).join().timeout(_requestTimeout),
+        source: 'AMLL',
+      );
       return document.timingQuality == LyricTimingQuality.word ? document : null;
     } catch (error) {
       debugPrint('AMLL lookup failed: $error');
@@ -198,7 +232,7 @@ class LyricsService {
     Duration? duration,
   }) async {
     if (title.isEmpty) return null;
-    final client = HttpClient()..connectionTimeout = _requestTimeout;
+    final client = _lrclibClient();
     try {
       final exactQuery = <String, String>{'track_name': title};
       if (artist.isNotEmpty) exactQuery['artist_name'] = artist;
@@ -250,7 +284,7 @@ class LyricsService {
   Future<List<LrclibCandidate>> searchLrclibCandidates(String query) async {
     final cleaned = query.trim();
     if (cleaned.isEmpty) return const [];
-    final client = HttpClient()..connectionTimeout = _requestTimeout;
+    final client = _lrclibClient();
     try {
       final found = await _getLrclibJson(client, Uri.https('lrclib.net', '/api/search', {'q': cleaned}));
       if (found is! List) return const [];
@@ -261,7 +295,8 @@ class LyricsService {
           .toList(growable: false);
     } catch (error) {
       debugPrint('LRCLIB candidate search failed: $error');
-      return const [];
+      if (error is LyricsLookupException) rethrow;
+      throw const LyricsLookupException('Could not reach LRCLIB. Check your connection and try again.');
     } finally {
       client.close(force: true);
     }
@@ -285,7 +320,7 @@ class LyricsService {
 
   Future<LyricsDocument?> _fetchLrclibById(int id) async {
     if (id <= 0) return null;
-    final client = HttpClient()..connectionTimeout = _requestTimeout;
+    final client = _lrclibClient();
     try {
       final found = await _getLrclibJson(client, Uri.https('lrclib.net', '/api/get/$id'));
       return found is Map ? _lrclibDocument(Map<String, dynamic>.from(found)) : null;
@@ -297,40 +332,81 @@ class LyricsService {
     }
   }
 
-  Future<dynamic> _getLrclibJson(HttpClient client, Uri uri) {
-    final completer = Completer<dynamic>();
-    _lrclibQueue = _lrclibQueue.catchError((_) {}).then((_) async {
-      try {
-        final previous = _lastLrclibRequest;
-        if (previous != null) {
-          final remaining = _lrclibRequestGap - DateTime.now().difference(previous);
-          if (!remaining.isNegative) await Future<void>.delayed(remaining);
+  Future<dynamic> _getLrclibJson(HttpClient client, Uri uri) => _performLrclibRequest(client, uri);
+
+  // Serialize start times, not whole responses: a stalled automatic lookup
+  // must not hold every subsequent manual search behind it.
+  Future<void> _lrclibSlot() {
+    final slot = _lrclibQueue.catchError((_) {}).then((_) async {
+      void checkBackoff() {
+        final retryAt = _lrclibRetryAt;
+        if (retryAt != null && DateTime.now().isBefore(retryAt)) {
+          throw LyricsLookupException('LRCLIB is temporarily unavailable. Please try again later.', retryAt: retryAt);
         }
-        completer.complete(await _performLrclibRequest(client, uri));
-      } catch (error, stackTrace) {
-        completer.completeError(error, stackTrace);
       }
+
+      checkBackoff();
+      final last = _lastLrclibRequest;
+      if (last != null) {
+        final wait = _lrclibRequestGap - DateTime.now().difference(last);
+        if (wait > Duration.zero) await Future<void>.delayed(wait > _lrclibRequestGap ? _lrclibRequestGap : wait);
+      }
+      checkBackoff();
+      _lastLrclibRequest = DateTime.now();
     });
-    return completer.future;
+    _lrclibQueue = slot;
+    return slot;
   }
 
   Future<dynamic> _performLrclibRequest(HttpClient client, Uri uri) async {
     for (var attempt = 0; attempt < 2; attempt++) {
-      _lastLrclibRequest = DateTime.now();
-      final request = await client.getUrl(uri);
+      await _lrclibSlot();
+      final request = await client.getUrl(uri).timeout(lrclibTimeout);
       request.headers.set(HttpHeaders.userAgentHeader, _lrclibUserAgent);
-      final response = await request.close().timeout(_requestTimeout);
-      if (response.statusCode == HttpStatus.tooManyRequests && attempt == 0) {
-        final retrySeconds = int.tryParse(response.headers.value(HttpHeaders.retryAfterHeader) ?? '') ?? 1;
-        await response.drain<void>();
-        await Future<void>.delayed(Duration(seconds: retrySeconds.clamp(1, 10).toInt()));
-        continue;
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      final response = await request.close().timeout(lrclibTimeout);
+      final status = response.statusCode;
+      if (status == 429 || status == 503 || status == 502 || status == 504) {
+        final hint = response.headers.value(HttpHeaders.retryAfterHeader);
+        var delay = const Duration(seconds: 1);
+        final seconds = int.tryParse(hint ?? '');
+        if (seconds != null && seconds >= 0) {
+          delay = Duration(seconds: seconds);
+        } else if (hint != null) {
+          try {
+            final remaining = HttpDate.parse(hint).difference(DateTime.now());
+            if (remaining > Duration.zero) delay = remaining;
+          } catch (_) {
+            /* A malformed hint uses a short bounded retry. */
+          }
+        }
+        final retryAt = DateTime.now().add(delay);
+        if (_lrclibRetryAt == null || retryAt.isAfter(_lrclibRetryAt!)) _lrclibRetryAt = retryAt;
+        await response.drain<void>().timeout(lrclibTimeout);
+        if (attempt == 0 && delay <= const Duration(seconds: 3)) {
+          await Future<void>.delayed(delay);
+          continue;
+        }
+        throw LyricsLookupException(
+          status == 429 || status == 503
+              ? 'LRCLIB is busy. Try again in a moment.'
+              : 'LRCLIB is temporarily unavailable. Please try again later.',
+          retryAt: _lrclibRetryAt,
+        );
       }
-      if (response.statusCode != HttpStatus.ok) {
-        await response.drain<void>();
+      if (status == 404) {
+        await response.drain<void>().timeout(lrclibTimeout);
         return null;
       }
-      return jsonDecode(await utf8.decoder.bind(response).join());
+      if (status != 200) {
+        await response.drain<void>().timeout(lrclibTimeout);
+        throw LyricsLookupException(
+          status == 429 || status >= 500
+              ? 'LRCLIB is busy. Try again in a moment.'
+              : 'Could not reach LRCLIB. Check your connection and try again.',
+        );
+      }
+      return jsonDecode(await utf8.decoder.bind(response).join().timeout(lrclibTimeout));
     }
     return null;
   }
@@ -450,6 +526,10 @@ class LyricsService {
   static ({String title, String artist}) _lookupMetadata(String rawTitle, String rawArtist) {
     var title = _cleanTitle(rawTitle);
     var artist = _cleanArtist(rawArtist);
+    final suffix = title.lastIndexOf(' - ');
+    if (artist.isNotEmpty && suffix > 0 && _normalized(title.substring(suffix + 3)) == _normalized(artist)) {
+      title = title.substring(0, suffix).trim();
+    }
     final separator = title.indexOf(' - ');
     if (separator > 0) {
       final prefix = _cleanArtist(title.substring(0, separator));

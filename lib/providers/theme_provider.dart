@@ -14,6 +14,7 @@ class ThemeProvider extends ChangeNotifier {
   bool _fullThemePalette = true;
   bool _rounderCorners = false;
   bool _modernLayout = true;
+  bool _sidebarCollapsed = false;
   bool _cinematicIntro = false;
   bool _artworkPlayerColors = false;
   bool _windowsNativeControls = Platform.isWindows;
@@ -30,6 +31,7 @@ class ThemeProvider extends ChangeNotifier {
   bool get fullThemePalette => _fullThemePalette;
   bool get rounderCorners => _rounderCorners;
   bool get modernLayout => _modernLayout;
+  bool get sidebarCollapsed => _sidebarCollapsed;
   bool get cinematicIntro => _cinematicIntro;
   bool get artworkPlayerColors => _artworkPlayerColors;
   bool get windowsNativeControls => _windowsNativeControls;
@@ -51,6 +53,7 @@ class ThemeProvider extends ChangeNotifier {
     _fullThemePalette = prefs.getBool('theme_full_palette') ?? true;
     _rounderCorners = prefs.getBool('rounder_corners') ?? false;
     _modernLayout = prefs.getBool('modern_layout') ?? true;
+    _sidebarCollapsed = prefs.getBool('modern_sidebar_collapsed') ?? false;
     _cinematicIntro = prefs.getBool('cinematic_intro') ?? false;
     _windowsNativeControls = prefs.getBool('windows_native_controls') ?? Platform.isWindows;
     _listeningFocus = prefs.getString('listening_focus') == ListeningFocus.stream.name
@@ -112,6 +115,12 @@ class ThemeProvider extends ChangeNotifier {
     _modernLayout = enabled;
     notifyListeners();
     await (await SharedPreferences.getInstance()).setBool('modern_layout', enabled);
+  }
+
+  Future<void> setSidebarCollapsed(bool value) async {
+    _sidebarCollapsed = value;
+    notifyListeners();
+    await (await SharedPreferences.getInstance()).setBool('modern_sidebar_collapsed', value);
   }
 
   Future<void> setCinematicIntro(bool enabled) async {

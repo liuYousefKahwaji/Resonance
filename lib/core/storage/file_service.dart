@@ -411,6 +411,23 @@ class FileService {
   /// Returns normalized track entries for an explicit playlist. Callers which
   /// need to mutate a playlist should use the methods below so rapid operations
   /// cannot overwrite one another.
+  Future<List<String>> readPlaylistPreview(int number) async {
+    final file = await _playlistFile(number);
+    if (!await file.exists()) return const [];
+    try {
+      return await file
+          .openRead()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .map((line) => line.trim())
+          .where((line) => line.isNotEmpty && !line.startsWith('#'))
+          .take(4)
+          .toList();
+    } on FileSystemException {
+      return const [];
+    }
+  }
+
   Future<List<String>> readPlaylistTracks(int playlistNumber) async {
     final contents = await readTextFromPlaylist(playlistNumber);
     return contents

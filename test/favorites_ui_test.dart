@@ -70,7 +70,9 @@ void main() {
       expect(ink.highlightColor, Colors.transparent);
     }
     handler.playbackVisualNotifier.value = const PlaybackVisualState(trackId: track, playing: true);
-    await tester.pumpAndSettle();
+    // Active rows pulse continuously; allow the finite state/menu transitions to finish.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     final playingLines = tester
         .widgetList<AnimatedContainer>(find.byType(AnimatedContainer))
         .where((container) => container.constraints?.maxWidth == 3 && container.constraints?.maxHeight == 32);
@@ -82,13 +84,17 @@ void main() {
     }
     handler.shuffled = true;
     handler.playbackModeRevision.value++;
-    await tester.pumpAndSettle();
+    // Active rows pulse continuously; allow the finite state/menu transitions to finish.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     expect(_cue(Icons.shuffle_rounded), findsNWidgets(2));
     for (final icon in tester.widgetList<Icon>(_cue(Icons.shuffle_rounded))) {
       expect(icon.color, FavoritesRepository.gold);
     }
     await tester.tap(find.byTooltip('Track actions').last);
-    await tester.pumpAndSettle();
+    // Active rows pulse continuously; allow the finite state/menu transitions to finish.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('Remove from favorites'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });

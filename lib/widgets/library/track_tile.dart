@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/library/current_track_surface.dart';
 import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/providers/theme_provider.dart';
@@ -664,7 +665,8 @@ class _TrackTileContent extends StatelessWidget {
                 ? 2
                 : 3,
           ),
-          child: AnimatedContainer(
+          child: CurrentTrackSurface(
+            enabled: isCurrentTrack,
             duration: resonanceDuration(context, resonanceMotion(context).stateChange),
             curve: resonanceMotion(context).standardCurve,
             decoration: BoxDecoration(

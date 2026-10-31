@@ -1,5 +1,12 @@
 /// Arabic UI translations. Placeholders match the English message templates.
 const arabicMessages = <String, String>{
+  "Collapse sidebar": "تصغير الشريط الجانبي",
+  "Expand sidebar": "توسيع الشريط الجانبي",
+  "LRCLIB is busy. Try again in a moment.": "خدمة LRCLIB مشغولة. حاول مجددًا بعد قليل.",
+  "LRCLIB is temporarily unavailable. Please try again later.": "خدمة LRCLIB غير متاحة مؤقتًا. حاول مجددًا لاحقًا.",
+  "Retry in {0}s": "أعد المحاولة بعد {0} ث",
+  "Could not reach LRCLIB. Check your connection and try again.":
+      "تعذر الاتصال بخدمة LRCLIB. تحقق من اتصالك وحاول مجددًا.",
   'Playback stopped. Check your connection and try again.': 'توقف التشغيل. تحقق من اتصالك وحاول مجددًا.',
   'Could not change playlist. Refresh and try again.': 'تعذر تعديل قائمة التشغيل. حدّثها وحاول مجددًا.',
   "Undo": "تراجع",

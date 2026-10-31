@@ -447,12 +447,15 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
   bool _exitInProgress = false;
   bool _uiVisible = true;
   bool _queueDrawerOpen = false;
+  bool _mobileQueueOpen = false;
   final Set<int> _selectedTrackIndices = <int>{};
   bool? _windowsChromeEnabled;
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   bool _handlingAndroidAction = false;
   bool _streamControlsExpanded = false;
   bool _modernSearch = false;
+  Map<int, List<String>> _playlistArtworkTracks = {};
+  final _playlistArtworkGenerations = <int, int>{};
   bool _settingsRouteOpen = false;
   bool _streamControlsAutoOpened = false;
 
@@ -483,7 +486,16 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     DownloadQueueController.instance.addListener(_refreshCompletedDownloads);
     _loadPlaylistFromDisk();
     _playlistMutationSubscription = FileService.mutations.listen((mutation) {
-      if (mutation.playlistNumber != activePlaylistNumber || !mounted) return;
+      if (!mounted) return;
+      if (mutation.playlistNumber != activePlaylistNumber &&
+          !{
+            PlaylistMutationKind.created,
+            PlaylistMutationKind.deleted,
+            PlaylistMutationKind.renamed,
+          }.contains(mutation.kind)) {
+        unawaited(_refreshPlaylistArtworkPreview(mutation.playlistNumber));
+        return;
+      }
       _playlistRefreshTimer?.cancel();
       _playlistRefreshTimer = Timer(const Duration(milliseconds: 30), () => unawaited(_loadPlaylistFromDisk()));
     });
@@ -675,6 +687,15 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     if (mounted) unawaited(_loadPlaylistFromDisk());
   }
 
+  Future<void> _refreshPlaylistArtworkPreview(int number) async {
+    final generation = (_playlistArtworkGenerations[number] ?? 0) + 1;
+    _playlistArtworkGenerations[number] = generation;
+    final tracks = await FileService().readPlaylistPreview(number);
+    if (mounted && generation == _playlistArtworkGenerations[number] && playlistNumbers.contains(number)) {
+      setState(() => _playlistArtworkTracks = {..._playlistArtworkTracks, number: tracks});
+    }
+  }
+
   Future<void> _loadPlaylistFromDisk() async {
     final generation = ++_playlistLoadGeneration;
     final service = FileService();
@@ -682,12 +703,17 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     final active = await service.getActivePlaylistNumber();
     final fileData = await service.readTextFromFile();
     final names = await service.getPlaylistNames();
+    final previews = <int, List<String>>{};
+    for (final number in numbers) {
+      previews[number] = await service.readPlaylistPreview(number);
+    }
     if (mounted && generation == _playlistLoadGeneration) {
       _trackItemKeys.clear();
       setState(() {
         playlistNumbers = numbers;
         activePlaylistNumber = active;
         playlistNames = names;
+        _playlistArtworkTracks = previews;
         playlist = fileData.split('\n').where((line) => line.isNotEmpty).skip(1).toList();
         _selectedTrackIndices.clear();
         isLoading = false;
@@ -1672,6 +1698,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
                         appBar: themeProvider.modernLayout ? null : _buildAppBar(nestedContext),
                         body: themeProvider.modernLayout
                             ? ModernMusicShell(
+                                enableMobileSwipes: Platform.isAndroid,
+                                sidebarCollapsed: themeProvider.sidebarCollapsed,
+                                onSidebarCollapsed: themeProvider.setSidebarCollapsed,
                                 selected: themeProvider.listeningFocus == ListeningFocus.local
                                     ? 2
                                     : _modernSearch
@@ -1694,6 +1723,12 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
                                       name: FileService.isFavoritesPlaylist(number)
                                           ? nestedContext.tr('Favorites')
                                           : playlistNames[number] ?? nestedContext.tr('Playlist {0}', [number]),
+                                      artwork: PlaylistArtwork(
+                                        tracks: _playlistArtworkTracks[number] ?? const [],
+                                        favorite: FileService.isFavoritesPlaylist(number),
+                                        revision: _artworkRevision,
+                                        iconSize: 18,
+                                      ),
                                       selected: number == activePlaylistNumber,
                                       favorite: FileService.isFavoritesPlaylist(number),
                                       onSelected: () {
@@ -1704,7 +1739,10 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
                                     ),
                                 ],
                                 downloads: _buildRootDownloadQueueToggle(),
-                                content: _buildModernBody(nestedContext),
+                                content: Platform.isAndroid ? const SizedBox.shrink() : _buildModernBody(nestedContext),
+                                pageBuilder: Platform.isAndroid
+                                    ? (context, index) => _buildModernBody(context, destination: index)
+                                    : null,
                                 player: CompactPlayer(
                                   handler: widget.handler,
                                   onExpand: (path) => unawaited(_handleNowPlayingArtworkTap(path)),
@@ -1970,8 +2008,8 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     },
   );
 
-  Widget _buildModernBody(BuildContext context) {
-    final body = _buildBody(context, modern: true);
+  Widget _buildModernBody(BuildContext context, {int? destination}) {
+    final body = _buildBody(context, modern: true, destination: destination);
     if (!Platform.isWindows) return body;
     return LayoutBuilder(
       builder: (context, constraints) => Row(
@@ -1995,18 +2033,20 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildBody(BuildContext nestedContext, {bool modern = false}) {
-    if (nestedContext.watch<ThemeProvider>().listeningFocus == ListeningFocus.stream) {
+  Widget _buildBody(BuildContext nestedContext, {bool modern = false, int? destination}) {
+    final focus = nestedContext.watch<ThemeProvider>().listeningFocus;
+    final search = modern && (destination == null ? _modernSearch : destination == 1);
+    if (destination == null ? focus == ListeningFocus.stream : destination != 2) {
       return Column(
         children: [
           Expanded(
             child: YoutubeSearchScreen(
-              key: ValueKey('discover-$activePlaylistNumber-${modern && _modernSearch}'),
+              key: ValueKey('discover-$activePlaylistNumber-$search'),
               playlistNumber: activePlaylistNumber,
               playlistName: playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber',
               embedded: true,
-              startOnMusicHome: !(modern && _modernSearch) && YoutubeAccessService.active?.isConfigured == true,
-              searchOnly: modern && _modernSearch,
+              startOnMusicHome: !search && YoutubeAccessService.active?.isConfigured == true,
+              searchOnly: search,
               compactResults: modern,
               onLibraryChanged: () => unawaited(_loadPlaylistFromDisk()),
               onOpenLibrary: () => nestedContext.read<ThemeProvider>().setListeningFocus(ListeningFocus.local),
@@ -2202,27 +2242,23 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
       return;
     }
     if (!Platform.isAndroid) return;
-    showModalBottomSheet<void>(
-      context: context,
-      useSafeArea: true,
-      isScrollControlled: true,
-      enableDrag: true,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        final height = MediaQuery.sizeOf(sheetContext).height;
-        return SizedBox(
-          height: (height * 0.62).clamp(360.0, 560.0),
-          child: UpcomingQueuePanel(
-            compact: true,
-            mediaItemStream: widget.handler.mediaItem,
-            initialMediaItem: widget.handler.mediaItem.value,
-            revision: widget.handler.playbackModeRevision,
-            loadSnapshot: widget.handler.playbackQueueSnapshot,
-            resolveArtwork: widget.handler.queueArtworkUri,
-            onClose: () => Navigator.pop(sheetContext),
-          ),
-        );
-      },
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null || _mobileQueueOpen) return;
+    _mobileQueueOpen = true;
+    unawaited(
+      showUpcomingQueueSheet(
+        navigator,
+        panel: (close) => UpcomingQueuePanel(
+          compact: true,
+          mediaItemStream: widget.handler.mediaItem,
+          initialMediaItem: widget.handler.mediaItem.value,
+          revision: widget.handler.playbackModeRevision,
+          loadSnapshot: widget.handler.playbackQueueSnapshot,
+          resolveArtwork: widget.handler.queueArtworkUri,
+          onPlay: widget.handler.playPlaybackQueueEntry,
+          onClose: close,
+        ),
+      ).whenComplete(() => _mobileQueueOpen = false),
     );
   }
 

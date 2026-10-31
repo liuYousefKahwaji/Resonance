@@ -8,6 +8,23 @@ import 'package:flutter/material.dart';
 import 'package:resonance/widgets/common/progressive_network_artwork.dart';
 import 'package:resonance/models/playback_queue_snapshot.dart';
 
+/// Accept a Navigator rather than an owner's context above MaterialApp.
+Future<void> showUpcomingQueueSheet(NavigatorState navigator, {required Widget Function(VoidCallback close) panel}) {
+  final context = navigator.overlay?.context;
+  if (!navigator.mounted || context == null) return Future.value();
+  return showModalBottomSheet<void>(
+    context: context,
+    useSafeArea: true,
+    isScrollControlled: true,
+    enableDrag: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) {
+      final height = MediaQuery.sizeOf(sheetContext).height;
+      return SizedBox(height: (height * .68).clamp(0.0, 560.0), child: panel(() => Navigator.pop(sheetContext)));
+    },
+  );
+}
+
 class UpcomingQueuePanel extends StatelessWidget {
   final Stream<MediaItem?> mediaItemStream;
   final MediaItem? initialMediaItem;

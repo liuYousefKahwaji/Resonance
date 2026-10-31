@@ -7,10 +7,17 @@ import 'package:resonance/widgets/common/progressive_network_artwork.dart';
 
 /// A small mosaic of existing track art, without resolving any stream URLs.
 class PlaylistArtwork extends StatefulWidget {
-  const PlaylistArtwork({super.key, required this.tracks, required this.favorite, this.revision = 0});
+  const PlaylistArtwork({
+    super.key,
+    required this.tracks,
+    required this.favorite,
+    this.revision = 0,
+    this.iconSize = 34,
+  });
   final List<String> tracks;
   final bool favorite;
   final int revision;
+  final double iconSize;
   @override
   State<PlaylistArtwork> createState() => _PlaylistArtworkState();
 }
@@ -30,15 +37,16 @@ class _PlaylistArtworkState extends State<PlaylistArtwork> {
         ? Future.value(const [])
         : Future.wait(
             _paths.map((path) async {
+              String? cachedArtwork;
               try {
-                if (Uri.tryParse(path)?.hasScheme == true && !File(path).isAbsolute) {
-                  return (await MetadataCacheService.get(path))?.artworkUrl;
-                }
+                cachedArtwork = (await MetadataCacheService.get(path))?.artworkUrl;
+                if (Uri.tryParse(path)?.hasScheme == true && !File(path).isAbsolute) return cachedArtwork;
                 final bytes = (await MetadataGod.readMetadata(file: path)).picture?.data;
-                return bytes == null || bytes.isEmpty ? null : Uint8List.fromList(bytes);
-              } catch (_) {
-                return null;
-              }
+                if (bytes != null && bytes.isNotEmpty) return Uint8List.fromList(bytes);
+              } catch (_) {}
+              // Original-format downloads keep their artwork in metadata cache
+              // instead of rewriting the audio file to embed a picture.
+              return cachedArtwork;
             }),
           );
   }
@@ -62,7 +70,11 @@ class _PlaylistArtworkState extends State<PlaylistArtwork> {
     Widget fallback() => ColoredBox(
       color: Color.alphaBlend(accent.withValues(alpha: .12), colors.surface),
       child: Center(
-        child: Icon(widget.favorite ? Icons.star_rounded : Icons.music_note_rounded, color: accent, size: 34),
+        child: Icon(
+          widget.favorite ? Icons.star_rounded : Icons.music_note_rounded,
+          color: accent,
+          size: widget.iconSize,
+        ),
       ),
     );
     Widget artwork(Object? item) => switch (item) {

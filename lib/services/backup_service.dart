@@ -40,6 +40,7 @@ class BackupService {
     'intro_enabled',
     'audio_download_format',
     'modern_layout',
+    'modern_sidebar_collapsed',
     'cinematic_intro',
     'seek_step_seconds',
     'playback_settings_scope',

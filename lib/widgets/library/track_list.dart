@@ -65,6 +65,8 @@ class TrackList extends StatefulWidget {
 
 class _TrackListState extends State<TrackList> {
   bool _isScrolling = false;
+  final _blurStrength = ValueNotifier<double>(0);
+  DateTime? _scrollStamp;
   final _search = TextEditingController();
   final _focus = FocusNode();
   final Map<String, CachedTrackMetadata> _metadata = {};
@@ -77,6 +79,7 @@ class _TrackListState extends State<TrackList> {
     _generation++;
     _search.dispose();
     _focus.dispose();
+    _blurStrength.dispose();
     super.dispose();
   }
 
@@ -217,11 +220,20 @@ class _TrackListState extends State<TrackList> {
   }
 
   bool _handleScroll(ScrollNotification notification) {
+    if (notification.depth != 0 || notification.metrics.axis != Axis.vertical) return false;
+    if (notification is ScrollUpdateNotification) {
+      final now = DateTime.now();
+      final seconds = _scrollStamp == null ? .016 : now.difference(_scrollStamp!).inMicroseconds / 1000000;
+      _scrollStamp = now;
+      final speed = (notification.scrollDelta ?? 0).abs() / seconds.clamp(.008, .1);
+      _blurStrength.value = (_blurStrength.value * .55 + (speed / 2000).clamp(0.0, 1.0) * .45);
+    }
     final scrolling = notification is ScrollStartNotification || notification is ScrollUpdateNotification;
     final stopped = notification is ScrollEndNotification;
     if (scrolling && !_isScrolling) {
       setState(() => _isScrolling = true);
     } else if (stopped && _isScrolling) {
+      _scrollStamp = null;
       setState(() => _isScrolling = false);
     }
     return false;
@@ -310,8 +322,15 @@ class _TrackListState extends State<TrackList> {
                   child: ValueListenableBuilder<bool>(
                     valueListenable: ScrollEffectsPreferences.instance.motionBlurEnabled,
                     child: list,
-                    builder: (context, motionBlurEnabled, child) =>
-                        TrackListMotionBlurSurface(enabled: motionBlurEnabled && _isScrolling, child: child!),
+                    builder: (context, motionBlurEnabled, child) => ValueListenableBuilder<double>(
+                      valueListenable: _blurStrength,
+                      child: child,
+                      builder: (context, strength, child) => TrackListMotionBlurSurface(
+                        enabled: motionBlurEnabled && _isScrolling,
+                        strength: strength,
+                        child: child!,
+                      ),
+                    ),
                   ),
                 ),
         ),
@@ -326,19 +345,24 @@ class _TrackListState extends State<TrackList> {
 @visibleForTesting
 class TrackListMotionBlurSurface extends StatelessWidget {
   final bool enabled;
+  final double strength;
   final Widget child;
-
-  const TrackListMotionBlurSurface({super.key, required this.enabled, required this.child});
-
+  const TrackListMotionBlurSurface({super.key, required this.enabled, required this.child, this.strength = 1});
   @override
-  Widget build(BuildContext context) => ImageFiltered(
-    enabled: enabled,
-    // This full-list filter is intentionally opt-in. It is disabled by
-    // default because low-end Android GPUs often pay more for the blur than
-    // the visual effect is worth.
-    imageFilter: ui.ImageFilter.blur(sigmaX: 0.22, sigmaY: 0.36),
-    child: child,
-  );
+  Widget build(BuildContext context) {
+    final allowed = enabled && !MediaQuery.disableAnimationsOf(context);
+    return TweenAnimationBuilder<double>(
+      tween: Tween(end: allowed ? strength.clamp(0.0, 1.0) : 0.0),
+      duration: resonanceDuration(context, Duration(milliseconds: allowed ? 70 : 140)),
+      curve: Curves.easeOut,
+      child: child,
+      builder: (context, value, child) => ImageFiltered(
+        enabled: value > .02,
+        imageFilter: ui.ImageFilter.blur(sigmaX: value * .12, sigmaY: value * 2.1),
+        child: child!,
+      ),
+    );
+  }
 }
 
 class _EmptyState extends StatelessWidget {

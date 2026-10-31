@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-The current source version is **4.0.0** (build **24**), matching `version: 4.0.0+24` in [`pubspec.yaml`](pubspec.yaml). This overhaul introduces a new default listening layout, fuller Android player controls, desktop-style Windows prompts, faster original-format downloads, improved stream switching and recovery, Undo for playlist edits, paused session restoration, track link actions, and an optional cinematic intro with the original startup sound. See the [4.0.0 patch notes](release/v4.0.0/patchnotes.md) for details and [GitHub Releases](https://github.com/liuYousefKahwaji/Resonance/releases/latest) for packaged builds.
+The current source version is **4.0.1** (build **25**), matching `version: 4.0.1+25` in [`pubspec.yaml`](pubspec.yaml). This follow-up improves lyrics search, sidebar artwork and navigation, Android queue controls and Google Drive account restoration. See the [4.0.1 patch notes](release/v4.0.1/patchnotes.md), the [4.0 overhaul](release/v4.0.0/patchnotes.md), and [GitHub Releases](https://github.com/liuYousefKahwaji/Resonance/releases/latest) for packaged builds.
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 

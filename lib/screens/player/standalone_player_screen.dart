@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/player/lyrics_picker.dart';
 import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -890,28 +891,18 @@ class _StandaloneVideoSurface extends StatelessWidget {
 }
 
 void _showAndroidUpcomingQueue(BuildContext context, PlayerHandler handler, {required bool allowSelection}) {
-  showModalBottomSheet<void>(
-    context: context,
-    useSafeArea: true,
-    isScrollControlled: true,
-    enableDrag: true,
-    backgroundColor: Colors.transparent,
-    builder: (sheetContext) {
-      final height = MediaQuery.sizeOf(sheetContext).height;
-      return SizedBox(
-        height: (height * 0.62).clamp(360.0, 560.0),
-        child: UpcomingQueuePanel(
-          compact: true,
-          mediaItemStream: handler.mediaItem,
-          initialMediaItem: handler.mediaItem.value,
-          revision: handler.playbackModeRevision,
-          loadSnapshot: handler.playbackQueueSnapshot,
-          resolveArtwork: handler.queueArtworkUri,
-          onPlay: allowSelection ? handler.playPlaybackQueueEntry : null,
-          onClose: () => Navigator.pop(sheetContext),
-        ),
-      );
-    },
+  showUpcomingQueueSheet(
+    Navigator.of(context),
+    panel: (close) => UpcomingQueuePanel(
+      compact: true,
+      mediaItemStream: handler.mediaItem,
+      initialMediaItem: handler.mediaItem.value,
+      revision: handler.playbackModeRevision,
+      loadSnapshot: handler.playbackQueueSnapshot,
+      resolveArtwork: handler.queueArtworkUri,
+      onPlay: allowSelection ? handler.playPlaybackQueueEntry : null,
+      onClose: close,
+    ),
   );
 }
 
@@ -1109,11 +1100,8 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
   Future<void> _chooseLyrics() async {
     final item = widget.item;
     if (item == null) return;
-    final picker = _LyricsPicker(
-      initialQuery: [
-        item.artist,
-        item.title,
-      ].whereType<String>().map((part) => part.trim()).where((part) => part.isNotEmpty).join(' '),
+    final picker = LyricsPicker(
+      initialQuery: LyricsService.searchQueryForTrack(item.title, item.artist ?? ''),
       targetDuration: widget.handler.currentSourceDuration ?? item.duration,
     );
     final candidate = Platform.isWindows
@@ -1724,188 +1712,6 @@ class _LyricsMessage extends StatelessWidget {
       ),
     ),
   );
-}
-
-class _LyricsPicker extends StatefulWidget {
-  final String initialQuery;
-  final Duration? targetDuration;
-
-  const _LyricsPicker({required this.initialQuery, required this.targetDuration});
-
-  @override
-  State<_LyricsPicker> createState() => _LyricsPickerState();
-}
-
-class _LyricsPickerState extends State<_LyricsPicker> {
-  late final TextEditingController _queryController;
-  List<LrclibCandidate> _results = const [];
-  bool _loading = true;
-  bool _searched = false;
-  int _generation = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _queryController = TextEditingController(text: widget.initialQuery);
-    _search();
-  }
-
-  @override
-  void dispose() {
-    _generation++;
-    _queryController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _search() async {
-    final query = _queryController.text.trim();
-    if (query.isEmpty) return;
-    final generation = ++_generation;
-    setState(() {
-      _loading = true;
-      _searched = true;
-    });
-    final results = await const LyricsService().searchLrclibCandidates(query);
-    if (!mounted || generation != _generation) return;
-    setState(() {
-      _results = results;
-      _loading = false;
-    });
-  }
-
-  String _duration(Duration duration) {
-    final minutes = duration.inMinutes;
-    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
-  }
-
-  String? _difference(LrclibCandidate candidate) {
-    final target = widget.targetDuration;
-    if (target == null || target.inSeconds <= 0 || candidate.duration.inSeconds <= 0) return null;
-    final difference = candidate.duration.inSeconds - target.inSeconds;
-    if (difference == 0) return 'exact duration';
-    return '${difference > 0 ? '+' : ''}${difference}s';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Material(
-      color: theme.colorScheme.surface,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsetsDirectional.fromSTEB(20, 18, 12, 12),
-            child: Row(
-              children: [
-                Expanded(child: Text(context.tr("Choose lyrics"), style: theme.textTheme.titleLarge)),
-                IconButton(
-                  tooltip: context.tr("Close"),
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: TextField(
-              key: const Key('lyrics-search-field'),
-              controller: _queryController,
-              autofocus: Platform.isWindows,
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _search(),
-              decoration: InputDecoration(
-                hintText: context.tr("Artist and song title"),
-                prefixIcon: const Icon(Icons.search_rounded),
-                suffixIcon: IconButton(
-                  tooltip: context.tr("Search"),
-                  onPressed: _search,
-                  icon: const Icon(Icons.arrow_forward),
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsetsDirectional.fromSTEB(20, 10, 20, 8),
-            child: Text(
-              context.tr(
-                "Automatic matching only accepts results within 3 seconds. You can deliberately choose any version here.",
-              ),
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
-          ),
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _results.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        _searched
-                            ? context.tr("No LRCLIB results for this search.")
-                            : context.tr("Search LRCLIB to choose a result."),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsetsDirectional.fromSTEB(12, 4, 12, 24),
-                    itemCount: _results.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final candidate = _results[index];
-                      final difference = _difference(candidate);
-                      final details = [
-                        candidate.artistName,
-                        if (candidate.albumName.isNotEmpty) candidate.albumName,
-                      ].where((part) => part.isNotEmpty).join(' · ');
-                      return ListTile(
-                        key: ValueKey('lrclib-candidate-${candidate.id}'),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                        title: Text(candidate.trackName, maxLines: 2, overflow: TextOverflow.ellipsis),
-                        subtitle: Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(details, maxLines: 2, overflow: TextOverflow.ellipsis),
-                        ),
-                        trailing: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 116),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(_duration(candidate.duration), style: theme.textTheme.labelLarge),
-                              Text(
-                                candidate.instrumental
-                                    ? context.tr("Instrumental")
-                                    : candidate.hasSyncedLyrics
-                                    ? context.tr("Synced")
-                                    : context.tr("Plain"),
-                                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary),
-                              ),
-                              if (difference != null)
-                                Text(
-                                  difference,
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                    color: difference == 'exact duration'
-                                        ? theme.colorScheme.primary
-                                        : theme.colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                        onTap: () => Navigator.pop(context, candidate),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _ArtworkBox extends StatelessWidget {
