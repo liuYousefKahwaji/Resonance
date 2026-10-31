@@ -1,4 +1,6 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'dart:async';
+import 'package:resonance/widgets/common/track_link_menu.dart';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -78,7 +80,7 @@ class _LibraryBrowserScreenState extends State<LibraryBrowserScreen> {
   }
 
   Future<void> _edit([SmartPlaylist? current]) async {
-    final result = await showDialog<SmartPlaylist>(
+    final result = await showResonanceDialog<SmartPlaylist>(
       context: context,
       builder: (_) => SmartPlaylistEditor(catalog: catalog, current: current),
     );
@@ -405,7 +407,7 @@ class _LibraryTracksScreenState extends State<LibraryTracksScreen> {
                     await _snapshot();
                   }
                   if (action == 'edit' && rules != null && mounted) {
-                    final edited = await showDialog<SmartPlaylist>(
+                    final edited = await showResonanceDialog<SmartPlaylist>(
                       context: context,
                       builder: (_) => SmartPlaylistEditor(catalog: widget.catalog, current: rules),
                     );
@@ -474,8 +476,9 @@ class _LibraryTracksScreenState extends State<LibraryTracksScreen> {
                     ),
                     subtitle: Text(track.artist, maxLines: 1, overflow: TextOverflow.ellipsis),
                     onTap: () => _play(list, index),
-                    trailing: PopupMenuButton<String>(
-                      onSelected: (action) async {
+                    trailing: TrackLinkMenu(
+                      trackId: track.path,
+                      onExtraSelected: (action) async {
                         if (action == 'trim') {
                           await showPlaybackRangeDialog(
                             context,
@@ -492,7 +495,7 @@ class _LibraryTracksScreenState extends State<LibraryTracksScreen> {
                           await widget.smart!.save(SmartPlaylist.fromJson(json));
                         }
                       },
-                      itemBuilder: (context) => [
+                      extraEntries: [
                         if (!track.path.startsWith('http'))
                           PopupMenuItem(value: 'trim', child: Text(context.tr('Trim playback'))),
                         PopupMenuItem(
@@ -615,7 +618,7 @@ class _SmartPlaylistEditorState extends State<SmartPlaylistEditor> {
         )
         .toList();
     final preview = _value().evaluate(widget.catalog.tracks, stats.aggregate());
-    return AlertDialog(
+    return ResonanceDialog(
       title: Text(context.tr('Smart playlist')),
       content: SizedBox(
         width: 540,

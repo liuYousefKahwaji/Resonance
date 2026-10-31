@@ -14,6 +14,11 @@ class PlaylistShuffleOrder {
   List<String> get paths => List.unmodifiable(_paths);
   int get index => _index;
 
+  void restore(List<String> paths, int index) {
+    _paths = List.of(paths);
+    _index = index >= 0 && index < paths.length ? index : -1;
+  }
+
   /// A new full cycle, without immediately repeating the outgoing song.
   void restartCycle(List<String> tracks, {String? previous, required bool Function(String, String) same}) {
     _paths = List.of(tracks)..shuffle(_random);

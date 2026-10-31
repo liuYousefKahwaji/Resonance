@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
@@ -91,7 +92,7 @@ class _PlaylistSourceResolutionScreenState extends State<PlaylistSourceResolutio
   }
 
   Future<void> _editMatch(PlaylistSourceMatch match) async {
-    final result = await showDialog<_SourceEditorResult>(
+    final result = await showResonanceDialog<_SourceEditorResult>(
       context: context,
       builder: (_) => _SourceMatchEditorDialog(
         youtube: _youtube,
@@ -420,7 +421,7 @@ class _SourceMatchEditorDialogState extends State<_SourceMatchEditorDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => ResonanceDialog(
     title: Text(context.tr("Replace “{0}”", [widget.track.title]), maxLines: 2, overflow: TextOverflow.ellipsis),
     content: SizedBox(
       width: 620,

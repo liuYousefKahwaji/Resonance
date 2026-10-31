@@ -1,4 +1,7 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
+import 'package:resonance/widgets/player/playback_settings.dart';
 import 'dart:async';
+import 'package:resonance/services/download/download_preferences.dart';
 import 'dart:io';
 import 'dart:convert';
 
@@ -83,6 +86,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   TrayMode _selectedMode = TrayMode.closeToTray;
   bool _discordEnabled = true;
   bool _introEnabled = true;
+  AudioDownloadFormat _downloadFormat = AudioDownloadFormat.original;
   bool _androidAutoUpdates = false;
   bool _checkingUpdate = false;
   String _downloadDirectory = 'Default App Folder';
@@ -96,7 +100,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final SettingsService _settingsService = SettingsService();
 
   Future<void> _pickCustomThemeColor(ThemeProvider provider) async {
-    final result = await showDialog<Color>(
+    final result = await showResonanceDialog<Color>(
       context: context,
       builder: (_) => _CustomColorPicker(initialColor: provider.customColor),
     );
@@ -120,6 +124,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadSeekStep();
     _loadPlaybackPreferences();
     _loadIntroPreference();
+    unawaited(
+      DownloadPreferences.format().then((value) {
+        if (mounted) setState(() => _downloadFormat = value);
+      }),
+    );
     _loadAndroidAutoUpdates();
     unawaited(ScrollEffectsPreferences.instance.initialize());
     if (_isDesktop) {
@@ -274,10 +283,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _settingsService.setTrayMode(mode);
     setState(() => _selectedMode = mode);
     if (mounted) {
-      showDialog(
+      showResonanceDialog(
         context: context,
         barrierDismissible: false,
-        builder: (context) => AlertDialog(
+        builder: (context) => ResonanceDialog(
           title: Text(context.tr("Restart Required")),
           content: Text(context.tr("Tray mode changes need a restart to take effect.")),
           actions: [
@@ -309,9 +318,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _fillMissingCovers() async {
     if (_coverLookupRunning) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showResonanceDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => ResonanceDialog(
         title: Text(context.tr("Fill missing covers?")),
         content: Text(
           context.tr(
@@ -670,6 +679,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 _Divider(),
                 Consumer<ThemeProvider>(
+                  builder: (context, provider, _) => _SettingsTile(
+                    icon: Icons.space_dashboard_outlined,
+                    title: context.tr('New listening layout'),
+                    subtitle: context.tr(
+                      'Discover, Search and Library with a compact player; turn off for the classic layout',
+                    ),
+                    trailing: Switch(value: provider.modernLayout, onChanged: provider.setModernLayout),
+                  ),
+                ),
+                _Divider(),
+                Consumer<ThemeProvider>(
                   builder: (context, themeProvider, child) {
                     return _SettingsTile(
                       icon: Icons.color_lens_rounded,
@@ -689,6 +709,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: context.tr("Show the Resonance pulse when the app opens"),
                   trailing: Switch(value: _introEnabled, onChanged: _toggleIntro),
                 ),
+                if (_introEnabled) ...[
+                  _Divider(),
+                  Consumer<ThemeProvider>(
+                    builder: (context, provider, _) => _SettingsTile(
+                      icon: Icons.movie_filter_outlined,
+                      title: context.tr('Cinematic intro'),
+                      subtitle: context.tr('A new opening animation with the original Resonance sound'),
+                      trailing: Switch(value: provider.cinematicIntro, onChanged: provider.setCinematicIntro),
+                    ),
+                  ),
+                ],
                 if (Platform.isAndroid) ...[
                   _Divider(),
                   ValueListenableBuilder<bool>(
@@ -921,6 +952,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _Divider(),
                 _SettingsTile(
                   icon: Icons.tune_rounded,
+                  title: context.tr('Playback Settings'),
+                  subtitle: context.tr('Speed, pitch, equalizer and track volume'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => showPlaybackSettings(context, handler: handler),
+                ),
+                _Divider(),
+                _SettingsTile(
+                  icon: Icons.tune_rounded,
                   title: context.tr("Playback Settings Scope"),
                   subtitle: _playbackSettingsScope == PlaybackSettingsScope.global
                       ? context.tr("Use the same speed, pitch, and equalizer for every track")
@@ -1007,6 +1046,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SectionHeader(label: context.tr("Downloads")),
             _SettingsCard(
               children: [
+                _SettingsTile(
+                  icon: Icons.audio_file_outlined,
+                  title: context.tr('Download format'),
+                  subtitle: context.tr('Original avoids conversion; MP3 is useful for other players'),
+                  trailing: DropdownButton<AudioDownloadFormat>(
+                    value: _downloadFormat,
+                    underline: const SizedBox.shrink(),
+                    items: [
+                      DropdownMenuItem(value: AudioDownloadFormat.original, child: Text(context.tr('Original'))),
+                      const DropdownMenuItem(value: AudioDownloadFormat.mp3, child: Text('MP3')),
+                    ],
+                    onChanged: (value) async {
+                      if (value == null) return;
+                      setState(() => _downloadFormat = value);
+                      await DownloadPreferences.setFormat(value);
+                    },
+                  ),
+                ),
+                _Divider(),
                 _SettingsTile(
                   icon: Icons.folder_open_rounded,
                   title: context.tr("Download Location"),
@@ -1334,7 +1392,7 @@ class _CustomColorPickerState extends State<_CustomColorPicker> {
     final color = _selected.toColor();
     final outline = Theme.of(context).colorScheme.outline;
     final lightness = HSLColor.fromColor(color).lightness.clamp(0.08, 0.92);
-    return AlertDialog(
+    return ResonanceDialog(
       title: Text(context.tr("Choose your color")),
       content: SizedBox(
         width: 350,

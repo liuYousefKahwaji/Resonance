@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'dart:async';
 import 'dart:io';
@@ -37,9 +38,9 @@ Future<void> showAppUpdatePrompt(BuildContext context, AvailableUpdate update) a
 }
 
 Future<void> _showAppUpdatePrompt(BuildContext context, AvailableUpdate update) async {
-  final accept = await showDialog<bool>(
+  final accept = await showResonanceDialog<bool>(
     context: context,
-    builder: (context) => AlertDialog(
+    builder: (context) => ResonanceDialog(
       title: Text(context.tr("Resonance {0} is available", [update.version])),
       content: SizedBox(
         width: 460,
@@ -119,12 +120,12 @@ Future<void> _showAppUpdatePrompt(BuildContext context, AvailableUpdate update) 
   if (Platform.isWindows) {
     progressShown = true;
     unawaited(
-      showDialog<void>(
+      showResonanceDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) => PopScope(
           canPop: false,
-          child: AlertDialog(
+          child: ResonanceDialog(
             title: Text(context.tr("Updating Resonance to {0}", [update.version])),
             content: SizedBox(
               width: 400,

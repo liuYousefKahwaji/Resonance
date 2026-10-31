@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -67,10 +68,10 @@ class _GoogleDrivePlaylistsScreenState extends State<GoogleDrivePlaylistsScreen>
       if (manifest.youtubeVideoIds.isEmpty) {
         setState(() => _working = false);
         var keep = false;
-        final add = await showDialog<bool>(
+        final add = await showResonanceDialog<bool>(
           context: context,
           builder: (dialog) => StatefulBuilder(
-            builder: (dialog, update) => AlertDialog(
+            builder: (dialog, update) => ResonanceDialog(
               title: Text(manifest.playlistName),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -151,9 +152,9 @@ class _GoogleDrivePlaylistsScreenState extends State<GoogleDrivePlaylistsScreen>
     try {
       final names = await files.getPlaylistNames();
       if (!mounted) return;
-      final selected = await showDialog<int>(
+      final selected = await showResonanceDialog<int>(
         context: context,
-        builder: (dialog) => SimpleDialog(
+        builder: (dialog) => ResonanceChoiceDialog(
           title: Text(context.tr('Save a playlist to Drive')),
           children: [
             for (final entry in names.entries)
@@ -192,10 +193,10 @@ class _GoogleDrivePlaylistsScreenState extends State<GoogleDrivePlaylistsScreen>
         throw const GoogleDriveException('This Drive playlist no longer exists.');
       }
       var keepInSync = existing != null && sync?.forFile(existing.id) != null;
-      final action = await showDialog<String>(
+      final action = await showResonanceDialog<String>(
         context: context,
         builder: (dialog) => StatefulBuilder(
-          builder: (dialog, setDialogState) => AlertDialog(
+          builder: (dialog, setDialogState) => ResonanceDialog(
             title: Text(
               context.tr(existing == null ? 'Save playlist to Google Drive?' : 'This playlist is already on Drive'),
             ),
@@ -279,9 +280,9 @@ class _GoogleDrivePlaylistsScreenState extends State<GoogleDrivePlaylistsScreen>
 
   Future<void> _delete(DrivePlaylist playlist) async {
     if (_busy) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showResonanceDialog<bool>(
       context: context,
-      builder: (dialog) => AlertDialog(
+      builder: (dialog) => ResonanceDialog(
         title: Text(dialog.tr('Delete from Drive?')),
         content: Text(
           dialog.tr(

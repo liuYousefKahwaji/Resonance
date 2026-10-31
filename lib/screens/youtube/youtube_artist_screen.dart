@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:resonance/widgets/common/track_link_menu.dart';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -72,11 +73,12 @@ Future<void> openYoutubeArtist(
             try {
               await playback;
             } catch (_) {
-              if (context.mounted && route.isCurrent) Navigator.pop(context);
-              await player;
+              if (context.mounted && route.isCurrent && handler.mediaItem.value?.id == selected.url) {
+                Navigator.pop(context);
+              }
               rethrow;
             }
-            await player;
+            unawaited(player);
           },
     ),
   ),
@@ -693,6 +695,7 @@ class _ArtistTrackRow extends StatelessWidget {
                         style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                       ),
               ),
+              TrackLinkMenu(trackId: track.url),
             ],
           ),
         ),

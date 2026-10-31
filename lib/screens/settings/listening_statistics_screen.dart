@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -273,9 +274,9 @@ class _ListeningStatisticsScreenState extends State<ListeningStatisticsScreen> {
             const SizedBox(height: 20),
             TextButton.icon(
               onPressed: () async {
-                final confirmed = await showDialog<bool>(
+                final confirmed = await showResonanceDialog<bool>(
                   context: context,
-                  builder: (context) => AlertDialog(
+                  builder: (context) => ResonanceDialog(
                     title: Text(context.tr('Clear listening statistics?')),
                     content: Text(context.tr('This removes the recap history from this device.')),
                     actions: [

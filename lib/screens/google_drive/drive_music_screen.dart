@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -282,9 +283,9 @@ class _DriveMusicScreenState extends State<DriveMusicScreen> {
     try {
       final names = await service.files.getPlaylistNames();
       if (!mounted) return;
-      final number = await showDialog<int>(
+      final number = await showResonanceDialog<int>(
         context: context,
-        builder: (context) => SimpleDialog(
+        builder: (context) => ResonanceChoiceDialog(
           title: Text(context.tr('Choose a playlist')),
           children: [
             for (final entry in names.entries)
@@ -304,9 +305,9 @@ class _DriveMusicScreenState extends State<DriveMusicScreen> {
         return;
       }
       if (!mounted) return;
-      final confirm = await showDialog<bool>(
+      final confirm = await showResonanceDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => ResonanceDialog(
           title: Text(context.tr('Upload local tracks?')),
           content: Text(
             context.tr('{0} local tracks will upload to ResonanceMusic/Audio. Streamed tracks are skipped.', [

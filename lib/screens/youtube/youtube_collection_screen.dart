@@ -1,6 +1,7 @@
 import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'dart:async';
+import 'package:resonance/widgets/common/track_link_menu.dart';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -34,6 +35,7 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
   Object? _error;
   String? _playingUrl;
   int _generation = 0;
+  int _playGeneration = 0;
   final _scrollController = ScrollController();
 
   @override
@@ -82,16 +84,17 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
   }
 
   Future<void> _play(YoutubeTrack track, {List<YoutubeTrack>? queue}) async {
-    if (_playingUrl != null) return;
+    if (_playingUrl == track.url) return;
+    final generation = ++_playGeneration;
     setState(() => _playingUrl = track.url);
     try {
       await widget.onPlay(track, queue ?? _tracks);
     } catch (error) {
-      if (mounted) {
+      if (mounted && generation == _playGeneration) {
         await showYoutubeFailure(context, error, sourceUrl: track.url, actionLabel: context.tr("Could not play track"));
       }
     } finally {
-      if (mounted) setState(() => _playingUrl = null);
+      if (mounted && generation == _playGeneration) setState(() => _playingUrl = null);
     }
   }
 
@@ -161,7 +164,7 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
     final colors = theme.colorScheme;
     final alignment = wide ? CrossAxisAlignment.start : CrossAxisAlignment.center;
     final textAlign = wide ? TextAlign.start : TextAlign.center;
-    final canPlay = !_loading && _error == null && _tracks.isNotEmpty && _playingUrl == null;
+    final canPlay = !_loading && _error == null && _tracks.isNotEmpty;
     final art = widget.item.thumbnailUrl ?? (_tracks.isNotEmpty ? _tracks.first.thumbnailUrl : null);
     return Column(
       crossAxisAlignment: alignment,
@@ -302,7 +305,7 @@ class _YoutubeCollectionScreenState extends State<YoutubeCollectionScreen> {
     index: index,
     wide: wide,
     busy: _playingUrl == _tracks[index].url,
-    onTap: _playingUrl == null ? () => _play(_tracks[index]) : null,
+    onTap: () => _play(_tracks[index]),
   );
 
   Widget _status(BuildContext context) {
@@ -499,6 +502,7 @@ class _CollectionTrackRowState extends State<_CollectionTrackRow> {
                   track.formattedDuration,
                   style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                 ),
+                TrackLinkMenu(trackId: track.url),
               ],
             ),
           ),

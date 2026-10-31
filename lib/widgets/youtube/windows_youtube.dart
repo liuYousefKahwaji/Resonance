@@ -1,6 +1,9 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
+import 'package:resonance/widgets/common/track_link_menu.dart';
+import 'package:resonance/services/download/download_preferences.dart';
 
 import 'dart:convert';
 
@@ -299,6 +302,7 @@ class MediaDownloader {
     }
 
     final outputTemplate = p.join(targetDir, '%(title)s [%(id)s].%(ext)s');
+    final convertToMp3 = await DownloadPreferences.format() == AudioDownloadFormat.mp3;
     final targetDirectory = Directory(targetDir);
     await targetDirectory.create(recursive: true);
     final downloadStartedAt = DateTime.now().subtract(const Duration(seconds: 2));
@@ -310,6 +314,8 @@ class MediaDownloader {
     int attempt = 0;
     var guest = true;
     var switchingAccount = false;
+    var cachedInfo = singleVideo ? _runner.audioInfoFor(url) : null;
+    var refreshFromStart = false;
 
     while (attempt < maxAttempts) {
       attempt++;
@@ -324,7 +330,8 @@ class MediaDownloader {
       }
 
       try {
-        final started = await _runner.start([
+        final arguments = <String>[
+          if (refreshFromStart) '--no-continue',
           '--socket-timeout',
           '10',
           '--extractor-retries',
@@ -343,17 +350,15 @@ class MediaDownloader {
           '4',
 
           '--windows-filenames',
-          '-x',
-
-          '--audio-format',
-          'mp3',
-
-          '--embed-metadata',
-
-          '--embed-thumbnail',
-
-          '--convert-thumbnails',
-          'jpg',
+          if (convertToMp3) ...[
+            '-x',
+            '--audio-format',
+            'mp3',
+            '--embed-metadata',
+            '--embed-thumbnail',
+            '--convert-thumbnails',
+            'jpg',
+          ],
 
           // --progress forces progress output even when stderr is not a TTY
           // (i.e. when piped). Without this yt-dlp silently suppresses all
@@ -382,8 +387,11 @@ class MediaDownloader {
           '-o',
           outputTemplate,
 
-          url,
-        ], guest: guest);
+          if (cachedInfo == null) url,
+        ];
+        final started = cachedInfo == null
+            ? await _runner.start(arguments, guest: guest)
+            : await _runner.startWithAudioInfo(arguments, cachedInfo, guest: guest);
         final process = started.process;
 
         final playlistItemRegex = RegExp(r'\[download\]\s+Downloading item\s+(\d+)\s+of\s+(\d+)');
@@ -476,6 +484,18 @@ class MediaDownloader {
               await File(normalized).exists() &&
               await File(normalized).length() > 0) {
             final metadata = metadataById[youtubeVideoId];
+            final title = metadata?.title ?? historyTitle;
+            final artist = metadata?.artist ?? historyArtist;
+            if (title != null && artist != null) {
+              await MetadataCacheService.set(
+                normalized,
+                title,
+                artist,
+                artworkUrl:
+                    metadata?.thumbnailUrl ??
+                    (youtubeVideoId == null ? null : TrackSourceRepository.thumbnailUrlFor(youtubeVideoId)),
+              );
+            }
             await onTrackPrepared?.call(
               YoutubeDownloadResult(
                 localPath: normalized,
@@ -544,6 +564,14 @@ class MediaDownloader {
         final exitCode = await exitCodeFuture;
 
         if (exitCode != 0 && !(singleVideo && completedRequestedVideo)) {
+          if (cachedInfo != null && importedCount == 0) {
+            cachedInfo = null;
+            refreshFromStart = true;
+            _runner.forgetAudioInfo(url);
+            onProgress(0, 'Refreshing audio link...');
+            attempt--;
+            continue;
+          }
           final failure = _runner.failureForDiagnostics(
             outputLines.isEmpty ? 'yt-dlp exited with code $exitCode' : outputLines.join('\n'),
             authenticated: started.authenticated,
@@ -589,6 +617,14 @@ class MediaDownloader {
 
         return;
       } catch (e) {
+        if (cachedInfo != null) {
+          cachedInfo = null;
+          refreshFromStart = true;
+          _runner.forgetAudioInfo(url);
+          onProgress(0, 'Refreshing audio link...');
+          attempt--;
+          continue;
+        }
         debugPrint('Download failure on attempt $attempt: $e');
 
         if (e is YoutubeFailure && e.kind != YoutubeFailureKind.network) attempt = maxAttempts;
@@ -873,10 +909,9 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: resonanceBorderRadius(context, 16)),
-
-      child: AnimatedSize(
+    return ResonanceDialog(
+      contentPadding: EdgeInsets.zero,
+      content: AnimatedSize(
         duration: const Duration(milliseconds: 200),
 
         curve: Curves.easeOut,
@@ -1165,6 +1200,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     // ── Stream button ──────────────────────────────────
+                    TrackLinkMenu(trackId: result.url),
                     IconButton(
                       icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary),
                       tooltip: context.tr("Stream Now"),

@@ -1,3 +1,6 @@
+import 'package:provider/provider.dart';
+import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
@@ -6,15 +9,23 @@ import 'package:resonance/screens/settings/youtube_access_screen.dart';
 import 'package:resonance/services/youtube/youtube_access_service.dart';
 
 Future<void> showYoutubeFailure(BuildContext context, Object error, {String? sourceUrl, String? actionLabel}) async {
+  final playbackFailure = context.read<PlayerHandler?>()?.playbackFailureNotifier.value;
+  // Active stream failures have a non-modal recovery banner on every route.
+  // Search/download errors still use their ordinary prompt.
+  if (playbackFailure != null &&
+      identical(error, playbackFailure.error) &&
+      (sourceUrl == null || sourceUrl == playbackFailure.track.id)) {
+    return;
+  }
   final service = YoutubeAccessService.active;
   final failure = error is YoutubeFailure
       ? error.withSourceUrl(sourceUrl)
       : YoutubeFailureClassifier.classify(error, authenticated: service?.isConfigured ?? false, sourceUrl: sourceUrl);
   service?.observeFailure(failure);
   if (!context.mounted) return;
-  await showDialog<void>(
+  await showResonanceDialog<void>(
     context: context,
-    builder: (dialogContext) => AlertDialog(
+    builder: (dialogContext) => ResonanceDialog(
       title: Text(
         failure.isAccessFailure
             ? context.tr("YouTube verification required")

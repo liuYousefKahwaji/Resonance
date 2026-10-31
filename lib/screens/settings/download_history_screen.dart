@@ -1,6 +1,8 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:io';
+import 'package:resonance/widgets/common/track_link_menu.dart';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
@@ -91,9 +93,9 @@ class _DownloadHistoryScreenState extends State<DownloadHistoryScreen> {
   }
 
   Future<void> _clear() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showResonanceDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => ResonanceDialog(
         title: Text(context.tr("Clear download history?")),
         content: Text(context.tr("This removes history entries only. Downloaded audio files will not be deleted.")),
         actions: [
@@ -251,6 +253,7 @@ class _HistoryCard extends StatelessWidget {
               tooltip: context.tr("Play downloaded track"),
               icon: const Icon(Icons.play_arrow_rounded),
             ),
+            TrackLinkMenu(trackId: entry.source.isNotEmpty ? entry.source : entry.localPath),
             PopupMenuButton<_HistoryAction>(
               tooltip: context.tr("History actions"),
               onSelected: (action) {

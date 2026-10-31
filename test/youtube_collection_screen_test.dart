@@ -29,6 +29,35 @@ ExternalPlaylist playlist([List<ExternalPlaylistTrack>? tracks]) => ExternalPlay
 );
 
 void main() {
+  testWidgets('another song supersedes a pending selection and ignores its late failure', (tester) async {
+    final first = Completer<void>();
+    final second = Completer<void>();
+    final selected = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: YoutubeCollectionScreen(
+          item: item,
+          loader: (_) async => playlist(),
+          onPlay: (track, _) {
+            selected.add(track.title);
+            return track.title == 'First song' ? first.future : second.future;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('First song'));
+    await tester.pump();
+    await tester.tap(find.text('Second song'));
+    await tester.pump();
+    expect(selected, ['First song', 'Second song']);
+    first.completeError(StateError('obsolete connection failure'));
+    await tester.pump();
+    expect(find.text('Could not play track'), findsNothing);
+    second.complete();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('browsing does not play; choosing the second song supplies the full collection', (tester) async {
     final loading = Completer<ExternalPlaylist>();
     YoutubeTrack? selected;

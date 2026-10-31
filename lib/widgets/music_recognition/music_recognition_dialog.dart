@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
@@ -73,7 +74,7 @@ Future<MusicRecognitionResult?> showMusicRecognitionDialog(
   MusicRecognitionSource? initialSource,
   bool tileTriggered = false,
   bool? androidOverride,
-}) => showDialog<MusicRecognitionResult>(
+}) => showResonanceDialog<MusicRecognitionResult>(
   context: context,
   barrierDismissible: true,
   builder: (_) => MusicRecognitionDialog(
@@ -281,7 +282,7 @@ class _MusicRecognitionDialogState extends State<MusicRecognitionDialog> {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) unawaited(_close());
       },
-      child: AlertDialog(
+      child: ResonanceDialog(
         key: const Key('music-recognition-dialog'),
         scrollable: true,
         insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),

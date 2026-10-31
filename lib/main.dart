@@ -1,4 +1,10 @@
+import 'package:resonance/widgets/player/playback_recovery_banner.dart';
+import 'package:resonance/app/route_transitions.dart';
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'dart:async';
+import 'package:resonance/widgets/library/modern_music_shell.dart';
+import 'package:resonance/widgets/player/compact_player.dart';
+import 'package:resonance/widgets/player/cinematic_intro.dart';
 import 'package:resonance/widgets/library/playlist_sort_dialog.dart';
 import 'package:resonance/widgets/library/favorite_tracks_button.dart';
 import 'dart:io';
@@ -49,6 +55,7 @@ import 'package:media_kit/media_kit.dart' as mk;
 import 'package:just_audio/just_audio.dart' as ja;
 import 'package:path/path.dart' as p;
 import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/widgets/library/playlist_artwork.dart';
 import 'package:resonance/services/music_recognition/music_recognition_service.dart';
 import 'package:resonance/services/track_source_repository.dart';
 import 'package:resonance/services/favorites_repository.dart';
@@ -428,6 +435,10 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
   ja.AudioPlayer? _introPlayer;
   mk.Player? _windowsIntroPlayer;
   Timer? _introTimer;
+  final _introPosition = ValueNotifier<Duration>(Duration.zero);
+  StreamSubscription<Duration>? _introPositionSubscription;
+  StreamSubscription<bool>? _introCompletionSubscription;
+  int _introEpoch = 0;
   final ScrollController _playlistScrollController = ScrollController();
   int _trackPulse = 0;
   int _artworkRevision = 0;
@@ -441,6 +452,8 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   bool _handlingAndroidAction = false;
   bool _streamControlsExpanded = false;
+  bool _modernSearch = false;
+  bool _settingsRouteOpen = false;
   bool _streamControlsAutoOpened = false;
 
   final SettingsService _settingsService = SettingsService();
@@ -520,32 +533,51 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
   }
 
   Future<void> _initIntro() async {
+    final epoch = ++_introEpoch;
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool('intro_enabled') ?? true;
-    if (!mounted) return;
+    if (!mounted || epoch != _introEpoch) return;
     setState(() => _showOnboarding = prefs.getBool('onboarding_completed') != true);
     if (!enabled) {
       setState(() => _showIntro = false);
       return;
     }
+    // A backend initialization failure must never hold the app behind a splash.
+    _introTimer = Timer(const Duration(seconds: 5), () => unawaited(_dismissIntro()));
     try {
       if (Platform.isWindows) {
         // Keep the intro on the same libmpv/media_kit backend as normal
         // Windows playback. just_audio_windows uses WinRT MediaPlayer and
         // leaves an additional native audio session alive for the whole app.
         _windowsIntroPlayer = mk.Player();
+        _introPositionSubscription = _windowsIntroPlayer!.stream.position.listen((value) {
+          if (mounted && epoch == _introEpoch) _introPosition.value = value;
+        });
+        _introCompletionSubscription = _windowsIntroPlayer!.stream.completed.listen((done) {
+          if (done && mounted && epoch == _introEpoch) unawaited(_dismissIntro());
+        });
         await _windowsIntroPlayer!.open(mk.Media('asset:///assets/audio/intro.mp3'), play: true);
       } else {
         _introPlayer = ja.AudioPlayer();
+        _introPositionSubscription = _introPlayer!.positionStream.listen((value) {
+          if (mounted && epoch == _introEpoch) _introPosition.value = value;
+        });
+        _introCompletionSubscription = _introPlayer!.processingStateStream
+            .map((state) => state == ja.ProcessingState.completed)
+            .listen((done) {
+              if (done && mounted && epoch == _introEpoch) unawaited(_dismissIntro());
+            });
         await _introPlayer!.setAsset('assets/audio/intro.mp3');
-        unawaited(_introPlayer!.play());
+        if (mounted && epoch == _introEpoch) unawaited(_introPlayer!.play().catchError((Object _) {}));
       }
     } catch (_) {
-      await _disposeIntroAudio();
+      if (epoch == _introEpoch) await _dismissIntro();
+      return;
     }
+    if (!mounted || epoch != _introEpoch) return;
+    _introTimer?.cancel();
     _introTimer = Timer(const Duration(milliseconds: 3100), () {
-      if (mounted) setState(() => _showIntro = false);
-      unawaited(_disposeIntroAudio());
+      unawaited(_dismissIntro());
     });
   }
 
@@ -561,12 +593,17 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
   }
 
   Future<void> _dismissIntro() async {
+    ++_introEpoch;
     _introTimer?.cancel();
-    await _disposeIntroAudio();
     if (mounted && _showIntro) setState(() => _showIntro = false);
+    await _disposeIntroAudio();
   }
 
   Future<void> _disposeIntroAudio() async {
+    await _introPositionSubscription?.cancel();
+    await _introCompletionSubscription?.cancel();
+    _introPositionSubscription = null;
+    _introCompletionSubscription = null;
     final intro = _introPlayer;
     final windowsIntro = _windowsIntroPlayer;
     _introPlayer = null;
@@ -710,9 +747,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     }
 
     final resolved = scan.resolvedVideoIds.length;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showResonanceDialog<bool>(
       context: navigatorContext,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => ResonanceDialog(
         title: Text(navigatorContext.tr("Generate playlist QR codes?")),
         content: Text(
           context.tr('Playlist: {0}\n\nTracks in playlist: {1}\nSources resolved: {2}\nSkipped: {3}\n\n{4}', [
@@ -775,12 +812,12 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
 
   void _showTransferProgress(BuildContext context, String message) {
     unawaited(
-      showDialog<void>(
+      showResonanceDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (_) => PopScope(
           canPop: false,
-          child: AlertDialog(
+          child: ResonanceDialog(
             content: Row(
               children: [
                 const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5)),
@@ -801,9 +838,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
         ? initialValue
         : initialValue.substring(0, FileService.maxPlaylistNameLength);
     final controller = TextEditingController(text: safeInitialValue);
-    final result = await showDialog<String>(
+    final result = await showResonanceDialog<String>(
       context: navigatorContext,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => ResonanceDialog(
         title: Text(title),
         content: TextField(
           controller: controller,
@@ -843,6 +880,40 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     await _loadPlaylistFromDisk();
   }
 
+  void _showPlaylistUndo(PlaylistUndo? undo, String message) {
+    final promptContext = _navigatorKey.currentState?.overlay?.context;
+    if (!mounted || promptContext == null || !promptContext.mounted) return;
+    final messenger = ScaffoldMessenger.of(promptContext);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 8),
+        content: Text(message),
+        action: undo == null
+            ? null
+            : SnackBarAction(
+                label: promptContext.tr('Undo'),
+                onPressed: () async {
+                  try {
+                    final restored = await undo.undo();
+                    if (!mounted) return;
+                    await _loadPlaylistFromDisk();
+                    if (!restored && promptContext.mounted) {
+                      messenger.showSnackBar(
+                        SnackBar(content: Text(promptContext.tr('Cannot undo because the playlist changed.'))),
+                      );
+                    }
+                  } catch (error) {
+                    if (promptContext.mounted) {
+                      messenger.showSnackBar(SnackBar(content: Text(promptContext.tr('Could not undo: {0}', [error]))));
+                    }
+                  }
+                },
+              ),
+      ),
+    );
+  }
+
   Future<void> _deleteActivePlaylist() async {
     await _deletePlaylist(activePlaylistNumber);
   }
@@ -864,9 +935,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     final name = FileService.isFavoritesPlaylist(number)
         ? context.tr('Favorites')
         : playlistNames[number] ?? 'Playlist $number';
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showResonanceDialog<bool>(
       context: navigatorContext,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => ResonanceDialog(
         title: Text(context.tr("Delete playlist?")),
         content: Text(context.tr("Delete \"{0}\"? Your audio files will not be deleted.", [name])),
         actions: [
@@ -881,8 +952,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     );
     if (confirmed != true) return;
     setState(() => isLoading = true);
-    await FileService().deletePlaylist(number);
+    final undo = await FileService().deletePlaylistWithUndo(number);
     await _loadPlaylistFromDisk();
+    _showPlaylistUndo(undo, navigatorContext.tr('Playlist deleted. Undo restores a local copy.'));
   }
 
   Future<void> _showPlaylistActions(int number) async {
@@ -1008,15 +1080,26 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
 
   void _handleReorder(int oldIndex, int newIndex) async {
     if (newIndex > oldIndex) newIndex -= 1;
-    setState(() {
-      final item = playlist.removeAt(oldIndex);
-      playlist.insert(newIndex, item);
-      _trackItemKeys.clear();
-      _pulsingTrackIndex = null;
-      _selectedTrackIndices.clear();
-    });
-    await FileService().reorderPlaylist(playlist);
-    widget.handler.playbackModeRevision.value++;
+    final before = List<String>.of(playlist);
+    final updated = List<String>.of(before);
+    updated.insert(newIndex, updated.removeAt(oldIndex));
+    try {
+      final undo = await FileService().editPlaylistsWithUndo(
+        {activePlaylistNumber: updated},
+        expected: {activePlaylistNumber: before},
+        manual: true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedTrackIndices.clear();
+        _trackItemKeys.clear();
+        _pulsingTrackIndex = null;
+      });
+      await _loadPlaylistFromDisk();
+      _showPlaylistUndo(undo, _navigatorKey.currentContext!.tr('Track order changed.'));
+    } catch (_) {
+      if (mounted) await _loadPlaylistFromDisk();
+    }
   }
 
   void _toggleTrackSelection(int index) {
@@ -1086,21 +1169,26 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     if (tracks.isEmpty) return;
     final service = FileService();
     try {
-      for (final track in tracks) {
-        await service.writeTextToPlaylist(target, '$track\n', append: true);
-      }
+      final sourceNumber = activePlaylistNumber;
+      final sourceBefore = List<String>.of(playlist);
+      final targetBefore = await service.readPlaylistTracks(target);
+      final undo = await service.editPlaylistsWithUndo(
+        {
+          target: [...targetBefore, ...tracks],
+          if (move) sourceNumber: tracksWithoutSelection(sourceBefore, indices),
+        },
+        expected: {target: targetBefore, if (move) sourceNumber: sourceBefore},
+      );
       if (move) {
-        final remaining = tracksWithoutSelection(playlist, indices);
-        await service.replacePlaylistTracks(activePlaylistNumber, remaining, kind: PlaylistMutationKind.removed);
         for (final track in tracks) {
           widget.handler.removeTrackFromActivePlaybackOrder(track);
         }
         if (mounted) {
           setState(() {
-            playlist = remaining;
             _selectedTrackIndices.clear();
             _trackItemKeys.clear();
           });
+          await _loadPlaylistFromDisk();
         }
       } else {
         _clearTrackSelection();
@@ -1108,16 +1196,13 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
       widget.handler.playbackModeRevision.value++;
       if (mounted) {
         final targetName = playlistNames[target] ?? 'Playlist $target';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.tr("{0} {1} tracks to “{2}”.", [
-                context.tr(move ? 'Moved' : 'Copied'),
-                tracks.length,
-                targetName,
-              ]),
-            ),
-          ),
+        _showPlaylistUndo(
+          undo,
+          _navigatorKey.currentContext!.tr('{0} {1} tracks to “{2}”.', [
+            _navigatorKey.currentContext!.tr(move ? 'Moved' : 'Copied'),
+            tracks.length,
+            targetName,
+          ]),
         );
       }
     } catch (error) {
@@ -1138,9 +1223,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     if (navigatorContext == null) return;
     final count = validTrackSelectionIndices(playlist.length, _selectedTrackIndices).length;
     if (count == 0) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showResonanceDialog<bool>(
       context: navigatorContext,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => ResonanceDialog(
         title: Text(context.tr("Remove selected tracks?")),
         content: Text(
           context.tr("Remove {0} {1} from this playlist? The audio files will be kept.", [
@@ -1157,19 +1242,27 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     if (confirmed != true || !mounted) return;
     final tracks = selectedTracks(playlist, _selectedTrackIndices);
     final remaining = tracksWithoutSelection(playlist, _selectedTrackIndices);
-    await FileService().replacePlaylistTracks(activePlaylistNumber, remaining, kind: PlaylistMutationKind.removed);
-    for (final track in tracks) {
-      widget.handler.removeTrackFromActivePlaybackOrder(track);
+    try {
+      final undo = await FileService().editPlaylistsWithUndo(
+        {activePlaylistNumber: remaining},
+        expected: {activePlaylistNumber: List.of(playlist)},
+      );
+      for (final track in tracks) {
+        widget.handler.removeTrackFromActivePlaybackOrder(track);
+      }
+      if (!mounted) return;
+      setState(() {
+        _selectedTrackIndices.clear();
+        _trackItemKeys.clear();
+      });
+      await _loadPlaylistFromDisk();
+      _showPlaylistUndo(undo, navigatorContext.tr('Removed {0} tracks from this playlist.', [count]));
+    } catch (_) {
+      if (mounted) {
+        await _loadPlaylistFromDisk();
+        _showPlaylistUndo(null, navigatorContext.tr('Could not change playlist. Refresh and try again.'));
+      }
     }
-    if (!mounted) return;
-    setState(() {
-      playlist = remaining;
-      _selectedTrackIndices.clear();
-      _trackItemKeys.clear();
-    });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(context.tr("Removed {0} tracks from this playlist.", [count]))));
   }
 
   List<String> _uniqueTrackPaths(Iterable<String> paths) {
@@ -1186,9 +1279,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     if (navigatorContext == null) return;
     final tracks = _uniqueTrackPaths(selectedTracks(playlist, _selectedTrackIndices));
     if (tracks.isEmpty) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showResonanceDialog<bool>(
       context: navigatorContext,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => ResonanceDialog(
         icon: Icon(Icons.delete_forever_rounded, color: Theme.of(dialogContext).colorScheme.error),
         title: Text(context.tr("Delete selected tracks everywhere?")),
         content: Text(
@@ -1247,9 +1340,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     final cached = await MetadataCacheService.get(trackPath);
     if (!mounted) return;
     final displayName = cached?.title ?? p.basenameWithoutExtension(trackPath);
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showResonanceDialog<bool>(
       context: navigatorContext,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => ResonanceDialog(
         icon: Icon(Icons.delete_forever_rounded, color: Theme.of(dialogContext).colorScheme.error),
         title: Text(context.tr("Delete track everywhere?")),
         content: Text(
@@ -1512,7 +1605,13 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
           navigatorKey: _navigatorKey,
           debugShowCheckedModeBanner: false,
           builder: (context, child) {
-            if (!windowsNativeControls) return child ?? const SizedBox.shrink();
+            final navigator = Column(
+              children: [
+                Expanded(child: resonanceNavigatorSemantics(context, child ?? const SizedBox.shrink())),
+                PlaybackRecoveryBanner(handler: widget.handler, navigatorKey: _navigatorKey),
+              ],
+            );
+            if (!windowsNativeControls) return navigator;
             final theme = Theme.of(context);
             return Column(
               children: [
@@ -1531,7 +1630,7 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-                Expanded(child: child ?? const SizedBox.shrink()),
+                Expanded(child: navigator),
               ],
             );
           },
@@ -1556,9 +1655,10 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
           themeAnimationCurve: Curves.easeInOutCubic,
           home: Builder(
             builder: (nestedContext) {
-              return _showIntro
-                  ? _IntroOverlay(onDismiss: () => unawaited(_dismissIntro()))
-                  : _showOnboarding
+              if (_showIntro && !themeProvider.cinematicIntro) {
+                return _IntroOverlay(onDismiss: () => unawaited(_dismissIntro()));
+              }
+              final content = _showOnboarding
                   ? OnboardingScreen(
                       onFinished: () {
                         setState(() => _showOnboarding = false);
@@ -1566,37 +1666,89 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
                       },
                     )
                   : TickerMode(
-                      enabled: _uiVisible,
+                      enabled: _uiVisible && !_showIntro,
                       child: Scaffold(
                         backgroundColor: Theme.of(nestedContext).scaffoldBackgroundColor,
-                        appBar: _buildAppBar(nestedContext),
-                        body: AnimatedSwitcher(
-                          duration: resonanceDuration(nestedContext, const Duration(milliseconds: 320)),
-                          switchInCurve: Curves.easeOutCubic,
-                          transitionBuilder: (child, animation) {
-                            final enteringDiscover = child.key == const ValueKey(ListeningFocus.stream);
-                            return FadeTransition(
-                              opacity: animation,
-                              child: SlideTransition(
-                                position: Tween<Offset>(
-                                  begin: Offset(enteringDiscover ? 0.04 : -0.04, 0),
-                                  end: Offset.zero,
-                                ).animate(animation),
-                                child: child,
+                        appBar: themeProvider.modernLayout ? null : _buildAppBar(nestedContext),
+                        body: themeProvider.modernLayout
+                            ? ModernMusicShell(
+                                selected: themeProvider.listeningFocus == ListeningFocus.local
+                                    ? 2
+                                    : _modernSearch
+                                    ? 1
+                                    : 0,
+                                onSelected: (index) {
+                                  setState(() => _modernSearch = index == 1);
+                                  unawaited(
+                                    themeProvider.setListeningFocus(
+                                      index == 2 ? ListeningFocus.local : ListeningFocus.stream,
+                                    ),
+                                  );
+                                },
+                                onSettings: () => _openSettings(nestedContext),
+                                onHistory: () => _openHistory(nestedContext),
+                                onCreatePlaylist: () => unawaited(_createPlaylist()),
+                                playlists: [
+                                  for (final number in playlistNumbers)
+                                    ModernPlaylistDestination(
+                                      name: FileService.isFavoritesPlaylist(number)
+                                          ? nestedContext.tr('Favorites')
+                                          : playlistNames[number] ?? nestedContext.tr('Playlist {0}', [number]),
+                                      selected: number == activePlaylistNumber,
+                                      favorite: FileService.isFavoritesPlaylist(number),
+                                      onSelected: () {
+                                        unawaited(_switchPlaylist(number));
+                                        unawaited(themeProvider.setListeningFocus(ListeningFocus.local));
+                                      },
+                                      onActions: () => _showPlaylistActions(number),
+                                    ),
+                                ],
+                                downloads: _buildRootDownloadQueueToggle(),
+                                content: _buildModernBody(nestedContext),
+                                player: CompactPlayer(
+                                  handler: widget.handler,
+                                  onExpand: (path) => unawaited(_handleNowPlayingArtworkTap(path)),
+                                  onQueue: _toggleUpcomingQueue,
+                                ),
+                              )
+                            : AnimatedSwitcher(
+                                duration: resonanceDuration(nestedContext, const Duration(milliseconds: 320)),
+                                switchInCurve: Curves.easeOutCubic,
+                                transitionBuilder: (child, animation) {
+                                  final enteringDiscover = child.key == const ValueKey(ListeningFocus.stream);
+                                  return FadeTransition(
+                                    alwaysIncludeSemantics: Theme.of(nestedContext).platform == TargetPlatform.windows,
+                                    opacity: animation,
+                                    child: SlideTransition(
+                                      position: Tween<Offset>(
+                                        begin: Offset(enteringDiscover ? 0.04 : -0.04, 0),
+                                        end: Offset.zero,
+                                      ).animate(animation),
+                                      child: child,
+                                    ),
+                                  );
+                                },
+                                // Drop the outgoing page immediately: the library
+                                // owns track GlobalKeys that must never be mounted
+                                // twice during rapid focus switches.
+                                layoutBuilder: (currentChild, _) => currentChild ?? const SizedBox.shrink(),
+                                child: KeyedSubtree(
+                                  key: ValueKey(themeProvider.listeningFocus),
+                                  child: _buildBody(nestedContext),
+                                ),
                               ),
-                            );
-                          },
-                          // Drop the outgoing page immediately: the library
-                          // owns track GlobalKeys that must never be mounted
-                          // twice during rapid focus switches.
-                          layoutBuilder: (currentChild, _) => currentChild ?? const SizedBox.shrink(),
-                          child: KeyedSubtree(
-                            key: ValueKey(themeProvider.listeningFocus),
-                            child: _buildBody(nestedContext),
-                          ),
-                        ),
                       ),
                     );
+              if (!_showIntro) return content;
+              // Prepare the actual page underneath the cinematic opening. Its
+              // removal reveals a ready page instead of starting another load.
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  IgnorePointer(child: content),
+                  CinematicIntro(position: _introPosition, onDismiss: () => unawaited(_dismissIntro())),
+                ],
+              );
             },
           ),
         );
@@ -1615,23 +1767,23 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
   }
 
   Future<void> _openSettings(BuildContext context) async {
-    await Navigator.push(
-      context,
-      PageRouteBuilder(
-        pageBuilder: (_, __, ___) => SettingsScreen(onExit: _exitApp),
-        transitionsBuilder: (_, anim, __, child) => FadeTransition(
-          opacity: anim,
-          child: SlideTransition(
-            position: Tween<Offset>(begin: const Offset(0, 0.025), end: Offset.zero).animate(anim),
-            child: child,
-          ),
+    if (_settingsRouteOpen) return;
+    _settingsRouteOpen = true;
+    try {
+      await Navigator.push(
+        context,
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) => SettingsScreen(onExit: _exitApp),
+          transitionsBuilder: resonancePageTransition,
+          transitionDuration: resonanceDuration(context, const Duration(milliseconds: 280)),
         ),
-        transitionDuration: resonanceDuration(context, const Duration(milliseconds: 280)),
-      ),
-    );
-    if (mounted) {
-      setState(() => _artworkRevision++);
-      await _loadPlaylistFromDisk();
+      );
+      if (mounted) {
+        setState(() => _artworkRevision++);
+        await _loadPlaylistFromDisk();
+      }
+    } finally {
+      _settingsRouteOpen = false;
     }
   }
 
@@ -1643,13 +1795,7 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
           playlistNumber: activePlaylistNumber,
           playlistName: playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber',
         ),
-        transitionsBuilder: (_, animation, __, child) => FadeTransition(
-          opacity: animation,
-          child: SlideTransition(
-            position: Tween<Offset>(begin: const Offset(0, 0.025), end: Offset.zero).animate(animation),
-            child: child,
-          ),
-        ),
+        transitionsBuilder: resonancePageTransition,
         transitionDuration: resonanceDuration(context, const Duration(milliseconds: 280)),
       ),
     );
@@ -1824,22 +1970,51 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     },
   );
 
-  Widget _buildBody(BuildContext nestedContext) {
+  Widget _buildModernBody(BuildContext context) {
+    final body = _buildBody(context, modern: true);
+    if (!Platform.isWindows) return body;
+    return LayoutBuilder(
+      builder: (context, constraints) => Row(
+        children: [
+          Expanded(child: body),
+          if (_queueDrawerOpen)
+            SizedBox(
+              width: (constraints.maxWidth * 0.32).clamp(260.0, 340.0),
+              child: UpcomingQueuePanel(
+                mediaItemStream: widget.handler.mediaItem,
+                initialMediaItem: widget.handler.mediaItem.value,
+                revision: widget.handler.playbackModeRevision,
+                loadSnapshot: widget.handler.playbackQueueSnapshot,
+                resolveArtwork: widget.handler.queueArtworkUri,
+                onPlay: widget.handler.playPlaybackQueueEntry,
+                onClose: _toggleUpcomingQueue,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody(BuildContext nestedContext, {bool modern = false}) {
     if (nestedContext.watch<ThemeProvider>().listeningFocus == ListeningFocus.stream) {
       return Column(
         children: [
           Expanded(
             child: YoutubeSearchScreen(
-              key: ValueKey('discover-$activePlaylistNumber'),
+              key: ValueKey('discover-$activePlaylistNumber-${modern && _modernSearch}'),
               playlistNumber: activePlaylistNumber,
               playlistName: playlistNames[activePlaylistNumber] ?? 'Playlist $activePlaylistNumber',
               embedded: true,
-              startOnMusicHome: YoutubeAccessService.active?.isConfigured == true,
+              startOnMusicHome: !(modern && _modernSearch) && YoutubeAccessService.active?.isConfigured == true,
+              searchOnly: modern && _modernSearch,
+              compactResults: modern,
               onLibraryChanged: () => unawaited(_loadPlaylistFromDisk()),
               onOpenLibrary: () => nestedContext.read<ThemeProvider>().setListeningFocus(ListeningFocus.local),
             ),
           ),
-          if (Platform.isAndroid)
+          if (modern)
+            const SizedBox.shrink()
+          else if (Platform.isAndroid)
             _buildStreamControls()
           else ...[
             AlbumCover(
@@ -1883,9 +2058,22 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
             onSelectionToggle: _toggleTrackSelection,
             itemKeyForIndex: _trackItemKey,
             onTrackDeleted: (index, trackPath) async {
-              setState(() => playlist.removeAt(index));
-              await FileService().removeFromPlaylist(trackPath, playlistIndex: index);
-              widget.handler.removeTrackFromActivePlaybackOrder(trackPath);
+              final before = List<String>.of(playlist);
+              final updated = List<String>.of(before)..removeAt(index);
+              try {
+                final undo = await FileService().editPlaylistsWithUndo(
+                  {activePlaylistNumber: updated},
+                  expected: {activePlaylistNumber: before},
+                );
+                if (!mounted) return;
+                await _loadPlaylistFromDisk();
+                _showPlaylistUndo(undo, nestedContext.tr('Track removed from playlist.'));
+              } catch (_) {
+                if (mounted) {
+                  await _loadPlaylistFromDisk();
+                  _showPlaylistUndo(null, nestedContext.tr('Could not change playlist. Refresh and try again.'));
+                }
+              }
             },
             onTrackDeletedEverywhere: (trackPath) => unawaited(_deleteTrackEverywhere(trackPath)),
             onReorder: _handleReorder,
@@ -1907,7 +2095,7 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     final library = Column(
       children: [
         // ── Toolbar row ──
-        _buildToolbar(nestedContext),
+        modern ? _buildModernLibraryHeader(nestedContext) : _buildToolbar(nestedContext),
 
         // ── Track list ──
         Expanded(
@@ -1933,16 +2121,17 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
         ),
 
         // ── Player panel ──
-        AlbumCover(
-          onTap: _handleNowPlayingTap,
-          onArtworkTap: _handleNowPlayingArtworkTap,
-          onQueueRequested: _toggleUpcomingQueue,
-          artworkRevision: _artworkRevision,
-        ),
-        PlayerControls(),
+        if (!modern)
+          AlbumCover(
+            onTap: _handleNowPlayingTap,
+            onArtworkTap: _handleNowPlayingArtworkTap,
+            onQueueRequested: _toggleUpcomingQueue,
+            artworkRevision: _artworkRevision,
+          ),
+        if (!modern) PlayerControls(),
       ],
     );
-    if (!Platform.isWindows || !_queueDrawerOpen) return library;
+    if (modern || !Platform.isWindows || !_queueDrawerOpen) return library;
     return LayoutBuilder(
       builder: (context, constraints) {
         final drawerWidth = (constraints.maxWidth * 0.30).clamp(280.0, 360.0);
@@ -2031,6 +2220,114 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
             loadSnapshot: widget.handler.playbackQueueSnapshot,
             resolveArtwork: widget.handler.queueArtworkUri,
             onClose: () => Navigator.pop(sheetContext),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildModernLibraryHeader(BuildContext context) {
+    if (_selectedTrackIndices.isNotEmpty) return _buildSelectionToolbar(context);
+    final colors = Theme.of(context).colorScheme;
+    final favorite = FileService.isFavoritesPlaylist(activePlaylistNumber);
+    final name = favorite
+        ? context.tr('Favorites')
+        : playlistNames[activePlaylistNumber] ?? context.tr('Playlist {0}', [activePlaylistNumber]);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 600;
+        final compactPlay = constraints.maxWidth < 360 || MediaQuery.textScalerOf(context).scale(1) > 1.2;
+        return Padding(
+          padding: EdgeInsetsDirectional.fromSTEB(narrow ? 20 : 24, 10, narrow ? 12 : 24, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: narrow ? 72 : 96,
+                    height: narrow ? 72 : 96,
+                    child: PlaylistArtwork(tracks: playlist, favorite: favorite, revision: _artworkRevision),
+                  ),
+                  const SizedBox(width: 20),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(context.tr('Playlist'), style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant)),
+                        const SizedBox(height: 4),
+                        Text(
+                          name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: narrow ? 24 : 32,
+                            height: 1.12,
+                            letterSpacing: -.6,
+                            fontWeight: FontWeight.w700,
+                            color: favorite ? FavoritesRepository.gold : colors.onSurface,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          context.tr('{0} tracks', [playlist.length]),
+                          style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Tooltip(
+                    message: context.tr('Play'),
+                    child: FilledButton.icon(
+                      onPressed: playlist.isEmpty
+                          ? null
+                          : () async {
+                              final path = playlist.first;
+                              final metadata = await MetadataCacheService.get(path);
+                              if (!mounted) return;
+                              await widget.handler.loadTrack(
+                                path,
+                                metadata?.title ?? p.basenameWithoutExtension(path),
+                                metadata?.artist ?? 'Unknown Artist',
+                              );
+                            },
+                      icon: const Icon(Icons.play_arrow_rounded, size: 21),
+                      label: compactPlay ? const SizedBox.shrink() : Text(context.tr('Play')),
+                      style: FilledButton.styleFrom(
+                        padding: EdgeInsets.symmetric(horizontal: compactPlay ? 12 : 20, vertical: 12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: context.tr('Sort tracks'),
+                    onPressed: playlist.isEmpty ? null : () => _sortActivePlaylist(),
+                    icon: const Icon(Icons.sort_rounded, size: 22),
+                  ),
+                  if (Platform.isAndroid)
+                    IconButton(
+                      tooltip: context.tr('Search this playlist'),
+                      onPressed: () => setState(() => _playlistSearchRequest++),
+                      icon: const Icon(Icons.search_rounded, size: 22),
+                    ),
+                  const Spacer(),
+                  if (!Platform.isAndroid)
+                    IconButton(
+                      tooltip: context.tr('Shazam / Identify a song'),
+                      onPressed: () => _identifySong(context),
+                      icon: const Icon(Icons.graphic_eq_rounded, size: 21),
+                    ),
+                  _buildPlaylistMenu(),
+                  _buildCompactActionsMenu(context),
+                ],
+              ),
+            ],
           ),
         );
       },
@@ -2279,6 +2576,11 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     icon: const Icon(Icons.more_vert_rounded),
     onSelected: (action) => _handleToolbarAction(context, action),
     itemBuilder: (_) => [
+      if (Platform.isAndroid && context.read<ThemeProvider>().modernLayout)
+        PopupMenuItem(
+          value: _ToolbarAction.identify,
+          child: _ToolbarMenuLabel(icon: Icons.graphic_eq_rounded, label: context.tr('Shazam / Identify a song')),
+        ),
       PopupMenuItem(
         value: _ToolbarAction.refresh,
         child: _ToolbarMenuLabel(icon: Icons.refresh_rounded, label: context.tr("Refresh track covers")),
@@ -2315,6 +2617,8 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
 
   void _handleToolbarAction(BuildContext context, _ToolbarAction action) {
     switch (action) {
+      case _ToolbarAction.identify:
+        unawaited(_identifySong(context));
       case _ToolbarAction.refresh:
         setState(() => _artworkRevision++);
       case _ToolbarAction.transfer:
@@ -2585,7 +2889,14 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     final navigator = _navigatorKey.currentState;
     if (navigator == null) return;
     try {
-      if (await showPlaylistSortDialog(navigator, activePlaylistNumber) && mounted) await _loadPlaylistFromDisk();
+      if (await showPlaylistSortDialog(
+            navigator,
+            activePlaylistNumber,
+            onUndo: (undo) => _showPlaylistUndo(undo, navigator.context.tr('Track order changed.')),
+          ) &&
+          mounted) {
+        await _loadPlaylistFromDisk();
+      }
     } catch (error) {
       final promptContext = navigator.overlay?.context;
       if (mounted && promptContext != null && promptContext.mounted) {
@@ -2604,21 +2915,13 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
 
   Future<void> _setTracksFavorite(List<String> tracks, bool favorite) async {
     if (tracks.isEmpty) return;
-    final favorites = context.read<FavoritesRepository?>();
     final promptContext = _navigatorKey.currentState?.overlay?.context;
     try {
-      if (favorites != null) {
-        await favorites.setTracks(tracks, favorite);
-      } else {
-        await FileService().setTracksFavorite(tracks, favorite);
-      }
+      final undo = await FileService().setTracksFavoriteWithUndo(tracks, favorite);
       if (mounted && promptContext != null && promptContext.mounted) {
-        ScaffoldMessenger.of(promptContext).showSnackBar(
-          SnackBar(
-            content: Text(
-              favorite ? context.tr("Tracks added to Favorites.") : context.tr("Tracks removed from Favorites."),
-            ),
-          ),
+        _showPlaylistUndo(
+          undo,
+          promptContext.tr(favorite ? 'Tracks added to Favorites.' : 'Tracks removed from Favorites.'),
         );
       }
     } catch (error) {
@@ -2631,7 +2934,7 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
   }
 }
 
-enum _ToolbarAction { refresh, transfer, importTransfer, importExternal, importLocal, sync }
+enum _ToolbarAction { refresh, transfer, importTransfer, importExternal, importLocal, sync, identify }
 
 class _ToolbarMenuLabel extends StatelessWidget {
   final IconData icon;

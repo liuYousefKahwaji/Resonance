@@ -1,5 +1,6 @@
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
+import 'package:resonance/widgets/common/track_link_menu.dart';
 import 'package:resonance/models/download_queue_entry.dart';
 import 'package:resonance/services/download/download_queue_controller.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
@@ -69,7 +70,7 @@ class DownloadQueuePanel extends StatelessWidget {
                             if (entry.status == DownloadQueueStatus.downloading)
                               Padding(
                                 padding: const EdgeInsets.only(top: 6),
-                                child: LinearProgressIndicator(value: (entry.progress / 100).clamp(0, 1)),
+                                child: LinearProgressIndicator(value: entry.progress > 0 ? (entry.progress / 100).clamp(0, 1) : null),
                               ),
                           ],
                         ),
@@ -77,6 +78,7 @@ class DownloadQueuePanel extends StatelessWidget {
                             ? Wrap(
                                 spacing: 2,
                                 children: [
+                                  TrackLinkMenu(trackId: entry.track.url),
                                   if (accessFailure)
                                     IconButton(
                                       tooltip: context.tr("Fix access"),
@@ -95,7 +97,7 @@ class DownloadQueuePanel extends StatelessWidget {
                                   ),
                                 ],
                               )
-                            : null,
+                            : TrackLinkMenu(trackId: entry.track.url),
                       );
                     },
                   ),

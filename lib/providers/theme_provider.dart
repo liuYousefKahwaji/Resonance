@@ -13,6 +13,8 @@ class ThemeProvider extends ChangeNotifier {
   Color _customColor = const Color(0xFF00BFA5);
   bool _fullThemePalette = true;
   bool _rounderCorners = false;
+  bool _modernLayout = true;
+  bool _cinematicIntro = false;
   bool _artworkPlayerColors = false;
   bool _windowsNativeControls = Platform.isWindows;
   ListeningFocus _listeningFocus = ListeningFocus.local;
@@ -27,6 +29,8 @@ class ThemeProvider extends ChangeNotifier {
   Color get customColor => _customColor;
   bool get fullThemePalette => _fullThemePalette;
   bool get rounderCorners => _rounderCorners;
+  bool get modernLayout => _modernLayout;
+  bool get cinematicIntro => _cinematicIntro;
   bool get artworkPlayerColors => _artworkPlayerColors;
   bool get windowsNativeControls => _windowsNativeControls;
   ListeningFocus get listeningFocus => _listeningFocus;
@@ -46,6 +50,8 @@ class ThemeProvider extends ChangeNotifier {
     _customColor = Color(prefs.getInt('theme_custom_color') ?? 0xFF00BFA5);
     _fullThemePalette = prefs.getBool('theme_full_palette') ?? true;
     _rounderCorners = prefs.getBool('rounder_corners') ?? false;
+    _modernLayout = prefs.getBool('modern_layout') ?? true;
+    _cinematicIntro = prefs.getBool('cinematic_intro') ?? false;
     _windowsNativeControls = prefs.getBool('windows_native_controls') ?? Platform.isWindows;
     _listeningFocus = prefs.getString('listening_focus') == ListeningFocus.stream.name
         ? ListeningFocus.stream
@@ -100,6 +106,18 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('rounder_corners', enabled);
+  }
+
+  Future<void> setModernLayout(bool enabled) async {
+    _modernLayout = enabled;
+    notifyListeners();
+    await (await SharedPreferences.getInstance()).setBool('modern_layout', enabled);
+  }
+
+  Future<void> setCinematicIntro(bool enabled) async {
+    _cinematicIntro = enabled;
+    notifyListeners();
+    await (await SharedPreferences.getInstance()).setBool('cinematic_intro', enabled);
   }
 
   Future<void> setArtworkPlayerColors(bool enabled) async {

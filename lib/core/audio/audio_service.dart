@@ -1,6 +1,9 @@
+import 'package:resonance/core/audio/playback_failure.dart';
+import 'package:resonance/core/audio/playback_session.dart';
 // lib/core/audio/audio_service.dart
 
 import 'dart:async';
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'package:resonance/core/audio/media_source_readiness.dart';
 import 'package:resonance/core/audio/standalone_video_session.dart';
 import 'package:resonance/models/youtube_video_source.dart';
@@ -391,6 +394,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   final ValueNotifier<PlaybackVisualState> playbackVisualNotifier = ValueNotifier<PlaybackVisualState>(
     const PlaybackVisualState(),
   );
+  final playbackFailureNotifier = ValueNotifier<PlaybackFailure?>(null);
   final ValueNotifier<YoutubeFailure?> youtubeFailureNotifier = ValueNotifier<YoutubeFailure?>(null);
   final ValueNotifier<TrackTransitionState> trackTransitionNotifier = ValueNotifier<TrackTransitionState>(
     const TrackTransitionState(),
@@ -406,6 +410,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   );
   final ValueNotifier<String?> outputDeviceErrorNotifier = ValueNotifier<String?>(null);
   MediaItem? _pendingRestoredTrack;
+  PlaybackSession? _restoredSession;
+  Future<void> _sessionSaveTail = Future.value();
+  int? _sessionResumeGeneration;
+
   final Map<String, Uri?> _artUriCache = {};
   final AudioEnvelopeAnalyzer _envelopeAnalyzer = AudioEnvelopeAnalyzer();
   AudioEnvelope? _audioEnvelope;
@@ -475,10 +483,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   StandaloneVideoSession? _standaloneVideo;
   ResolvedYoutubeStream? _videoAudioOverride;
   int? _videoAudioGeneration;
+  bool _videoAudioPreparing = false;
   StandaloneVideoSession get standaloneVideo => _standaloneVideo ??= StandaloneVideoSession(
     frame: _standaloneVideoFrame,
     activateAudio: _activateVideoAudio,
     restoreAudio: _restoreSongAudio,
+    resumeAudio: _resumeVideoAudio,
   );
 
   StandaloneVideoFrame? _standaloneVideoFrame() {
@@ -490,7 +500,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       trackId: item.id,
       generation: _loadGeneration,
       position: currentSourcePosition,
-      playing: _isBackendPlaying,
+      playing: _videoAudioPreparing ? _playbackRequested : _isBackendPlaying,
       rate: speedNotifier.value,
       seekRevision: _voiceChatSeekRevision,
       loading: _activeTrackLoadGeneration != null || _pendingStreamSourceGeneration != null,
@@ -512,8 +522,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final position = currentSourcePosition;
     _videoAudioOverride = resolved;
     _videoAudioGeneration = owner.generation;
-    await _replaceVideoAudio(resolved, owner, position, current);
+    _videoAudioPreparing = true;
+    await _replaceVideoAudio(resolved, owner, position, current, resume: false);
     return current() ? currentSourcePosition : null;
+  }
+
+  Future<void> _resumeVideoAudio(StandaloneVideoFrame owner, bool Function() current) async {
+    if (!current() || owner.generation != _loadGeneration || mediaItem.value?.id != owner.trackId) return;
+    if (_playbackRequested) await _playCurrentBackend();
+    if (!current()) return;
+    _videoAudioPreparing = false;
+    _armPlaybackHealthCheck(owner.generation, grace: _streamStartupGrace);
   }
 
   Future<void> _restoreSongAudio(
@@ -526,6 +545,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final resolved = await _resolveStream(owner.trackId);
     if (!valid()) return;
     final position = currentSourcePosition;
+    _videoAudioPreparing = false;
     await _replaceVideoAudio(resolved, owner, position, valid);
     if (valid()) {
       _videoAudioOverride = null;
@@ -539,8 +559,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     ResolvedYoutubeStream resolved,
     StandaloneVideoFrame owner,
     Duration position,
-    bool Function() current,
-  ) async {
+    bool Function() current, {
+    bool resume = true,
+  }) async {
     bool valid() => current() && owner.generation == _loadGeneration && mediaItem.value?.id == owner.trackId;
     if (!valid()) return;
     _playbackHealthWatchdog.cancel();
@@ -567,7 +588,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           _windowsIsCompleted = false;
           _windowsIsBuffering = player.state.buffering;
           await _applyOutputVolume();
-          if (valid() && _playbackRequested) await player.play();
+          if (resume && valid() && _playbackRequested) await player.play();
         } else {
           // just_audio retains its playing flag across source replacement.
           // Keep the new stream paused until its position and focus are ready.
@@ -579,7 +600,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           await _player.seek(duration != null && position >= duration ? Duration.zero : position);
           if (!valid()) return;
           await _applyOutputVolume();
-          if (valid() && _playbackRequested) await _startJustAudioPlayer(_player, owner.generation);
+          if (resume && valid() && _playbackRequested) await _startJustAudioPlayer(_player, owner.generation);
         }
       }
 
@@ -595,7 +616,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         if (item != null) mediaItem.add(item.copyWith(duration: _currentDuration));
         _voiceChatSeekRevision++;
         _updatePlaybackState();
-        _armPlaybackHealthCheck(owner.generation, grace: _streamStartupGrace);
+        if (resume) _armPlaybackHealthCheck(owner.generation, grace: _streamStartupGrace);
       }
     }
   }
@@ -784,8 +805,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _periodicPositionSaveTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (_isBackendPlaying) unawaited(saveCurrentPlaybackPosition());
     });
-    unawaited(_initSavedState());
+    initialization = _initSavedState();
   }
+
+  late final Future<void> initialization;
 
   final YoutubeAccessService? _youtubeAccessService;
 
@@ -823,7 +846,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   int _youtubeAccessRevision = 0;
   final _forceAuthenticatedStreamIds = <String>{};
 
+  final _streamRequests = <String, YoutubeRequest>{};
+
   void _cancelSupersededAndroidStreams(String? selectedUrl) {
+    for (final entry in _streamRequests.entries.toList()) {
+      if (entry.key == selectedUrl) continue;
+      entry.value.cancel();
+      _streamResolutionInFlight.remove(entry.key);
+    }
     if (!Platform.isAndroid) return;
     for (final entry in _androidStreamRequests.entries.toList()) {
       if (entry.value == selectedUrl || !_cancelledAndroidStreamRequests.add(entry.key)) continue;
@@ -839,6 +869,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   void _handleYoutubeAccessChanged() {
     final revision = _youtubeAccessService?.revision ?? 0;
     if (revision == _youtubeAccessRevision) return;
+    _cancelSupersededAndroidStreams(null);
     _youtubeAccessRevision = revision;
     _streamUrlCache.clear();
     _streamResolutionInFlight.clear();
@@ -1216,11 +1247,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final pending = _streamResolutionInFlight[url];
     if (pending != null) return pending;
 
-    final resolution = _resolveStreamUncached(url, accessRevision);
+    final request = YoutubeRequest();
+    _streamRequests[url] = request;
+    final resolution = _resolveStreamUncached(url, accessRevision, request);
     _streamResolutionInFlight[url] = resolution;
     try {
       return await resolution;
     } finally {
+      if (identical(_streamRequests[url], request)) _streamRequests.remove(url);
       if (identical(_streamResolutionInFlight[url], resolution)) {
         _streamResolutionInFlight.remove(url);
       }
@@ -1233,15 +1267,19 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (ref != null && DriveMusicService.instance.drive.account?.id != ref.accountId) unawaited(stop());
   }
 
-  Future<ResolvedYoutubeStream> _resolveStreamUncached(String url, int accessRevision) async {
+  Future<ResolvedYoutubeStream> _resolveStreamUncached(String url, int accessRevision, YoutubeRequest request) async {
     final clock = Stopwatch()..start();
     debugPrint('[PlayerHandler] Resolving stream URL for $url');
     late ResolvedYoutubeStream resolved;
 
     if (_streamResolver case final resolver?) {
-      resolved = await resolver(url);
+      resolved = await request.follow(resolver(url)).timeout(const Duration(seconds: 20));
     } else if (Platform.isWindows) {
       final arguments = [
+        '--socket-timeout',
+        '8',
+        '--extractor-retries',
+        '1',
         '--dump-single-json',
         '--no-warnings',
         '--no-playlist',
@@ -1261,13 +1299,28 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           reportFailure: !authenticated || !useGuest,
           sourceUrl: url,
           requireOutput: true,
+          timeout: const Duration(seconds: 20),
+          request: request,
         );
-      } on YoutubeFailure {
-        if (!authenticated || !useGuest) rethrow;
+      } on YoutubeFailure catch (failure) {
+        if (!authenticated ||
+            !useGuest ||
+            failure.kind == YoutubeFailureKind.network ||
+            failure.kind == YoutubeFailureKind.rateLimited) {
+          rethrow;
+        }
         _forceAuthenticatedStreamIds.add(url);
-        result = await runner.run(arguments, sourceUrl: url, requireOutput: true);
+        result = await runner.run(
+          arguments,
+          sourceUrl: url,
+          requireOutput: true,
+          timeout: const Duration(seconds: 20),
+          request: request,
+        );
       }
       final info = jsonDecode(result.stdout) as Map<String, dynamic>;
+      request.check();
+      runner.rememberAudioInfo(url, result.stdout);
       final selected = _pickWindowsPlayableFormat(info);
       final streamUrl = selected?['url']?.toString();
       if (streamUrl == null || !streamUrl.startsWith('http')) {
@@ -1286,11 +1339,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       final requestId = ++_nextAndroidStreamRequestId;
       _androidStreamRequests[requestId] = url;
       try {
-        final result = await channel.invokeMethod<Object?>('getStreamData', {
-          'url': url,
-          'requestId': requestId,
-          'forceAuthenticated': _forceAuthenticatedStreamIds.contains(url),
-        });
+        final result = await request
+            .follow(
+              channel.invokeMethod<Object?>('getStreamData', {
+                'url': url,
+                'requestId': requestId,
+                'forceAuthenticated': _forceAuthenticatedStreamIds.contains(url),
+              }),
+            )
+            .timeout(const Duration(seconds: 20));
         if (_cancelledAndroidStreamRequests.contains(requestId)) throw StateError('Stream request superseded');
         if (result is! Map) throw StateError('Android bridge returned invalid stream data');
         final data = Map<String, Object?>.from(result);
@@ -1309,6 +1366,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           thumbnailUrl: data['thumbnail']?.toString(),
         );
       } catch (error) {
+        if (error is YoutubeRequestCancelled) rethrow;
+        if (error is TimeoutException) {
+          unawaited(channel.invokeMethod<void>('cancelStreamData', {'requestId': requestId}).catchError((Object _) {}));
+        }
         if (_cancelledAndroidStreamRequests.contains(requestId)) {
           throw StateError('Stream request superseded');
         }
@@ -1327,6 +1388,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       throw UnsupportedError('Streaming not supported on this platform');
     }
 
+    request.check();
     if ((_youtubeAccessService?.revision ?? 0) != accessRevision) {
       throw StateError('YouTube access changed during stream resolution');
     }
@@ -1341,10 +1403,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   /// Warms the first likely selections while the user browses. Foreground
   /// playback joins an in-flight resolution for the same URL.
   Future<void> warmStreamCandidates(Iterable<String> urls) async {
+    if (_activeTrackLoadGeneration != null) return;
     final candidates = urls
         .where((url) => url.startsWith('https://') || url.startsWith('http://'))
         .toSet()
-        .take(Platform.isAndroid ? 1 : 4);
+        .take(Platform.isAndroid ? 1 : 2);
     await Future.wait(
       candidates.map((url) async {
         try {
@@ -1422,13 +1485,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   bool get _isBackendPlaying => Platform.isWindows ? _isWindowsPlaying : _player.playing;
 
-  Duration get _currentPosition => _playbackUnavailable
+  Duration get _currentPosition => _pendingRestoredTrack != null && _restoredSession != null
+      ? _restoredSession!.position
+      : _playbackUnavailable
       ? Duration.zero
       : (Platform.isWindows
             ? _activePlaybackRange.relative(_windowsPosition, sourceDuration: _windowsDuration)
             : _player.position);
 
-  Duration? get _currentDuration => _playbackUnavailable
+  Duration? get _currentDuration => _pendingRestoredTrack != null && _restoredSession != null
+      ? _restoredSession!.duration
+      : _playbackUnavailable
       ? null
       : (Platform.isWindows ? _activePlaybackRange.durationOf(_windowsDuration) : _player.duration);
 
@@ -1720,6 +1787,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final current = mediaItem.value;
     if (current == null) return;
     _handledFailureGeneration = generation;
+    _lastTrackLoadFailure = reason;
     _playbackHealthWatchdog.cancel();
     debugPrint('[PlayerHandler] Playback failed for "${current.id}" (generation $generation): $reason');
 
@@ -1740,13 +1808,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         standalonePlaylistNumber: _standalonePlaylistNumber,
         standalonePlaylistIndex: _standalonePlaylistIndex,
         preserveFailureHistory: true,
+        initialPosition: recoveringStream ? _currentPosition : null,
       );
       return;
     }
 
     _failedTrackIds.add(_failureTrackKey(current.id));
     _retryLoadGeneration = null;
-    await _advanceAfterPlaybackFailure(current, generation);
+    if (recoveringStream) {
+      await _markPlaybackUnavailable(generation);
+    } else {
+      await _advanceAfterPlaybackFailure(current, generation);
+    }
   }
 
   Future<void> _advanceAfterPlaybackFailure(MediaItem failedItem, int generation) async {
@@ -1784,8 +1857,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     );
   }
 
-  Future<void> _markPlaybackUnavailable([int? generation]) async {
+  Future<void> _markPlaybackUnavailable([int? generation, Duration? positionOverride]) async {
     if (generation != null && _loadGeneration != generation) return;
+    final failedPosition = positionOverride ?? _currentPosition;
+    if (_currentTrackIsStream && mediaItem.value != null) {
+      playbackFailureNotifier.value = PlaybackFailure(
+        generation: _loadGeneration,
+        track: mediaItem.value!,
+        error: _lastTrackLoadFailure ?? StateError('Playback stopped. Try again.'),
+        position: failedPosition,
+      );
+    }
     _playbackRequested = false;
     _playbackUnavailable = true;
     try {
@@ -1800,6 +1882,86 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (generation != null && _loadGeneration != generation) return;
     playbackVisualNotifier.value = PlaybackVisualState(trackId: mediaItem.value?.id);
     _updatePlaybackState(force: true);
+    if (!isStandaloneMode && _lastTrackLoadFailure is YoutubeFailure) {
+      youtubeFailureNotifier.value = _lastTrackLoadFailure as YoutubeFailure;
+    }
+  }
+
+  bool isCurrentPlaybackFailure(PlaybackFailure failure) =>
+      identical(playbackFailureNotifier.value, failure) &&
+      failure.generation == _loadGeneration &&
+      mediaItem.value?.id == failure.track.id;
+
+  void dismissPlaybackFailure(PlaybackFailure failure) {
+    if (isCurrentPlaybackFailure(failure)) playbackFailureNotifier.value = null;
+  }
+
+  Future<void> retryFailedPlayback(PlaybackFailure failure) async {
+    if (!isCurrentPlaybackFailure(failure) || _syncControlLocked) return;
+    _streamUrlCache.remove(failure.track.id);
+    await loadTrack(
+      failure.track.id,
+      failure.track.title,
+      failure.track.artist ?? 'Unknown Artist',
+      standalone: isStandaloneMode,
+      artworkUri: failure.track.artUri,
+      standalonePlaylistNumber: _standalonePlaylistNumber,
+      standalonePlaylistIndex: _standalonePlaylistIndex,
+      initialPosition: failure.position,
+    );
+  }
+
+  /// Explicitly chosen replacement, confined to a temporary playback queue.
+  /// The user's playlist and saved source mapping are never silently rewritten.
+  Future<void> playFailureAlternative(PlaybackFailure failure, YoutubeTrack alternative) async {
+    if (!isCurrentPlaybackFailure(failure) || _syncControlLocked) return;
+    if (isStandaloneMode && _standalonePlaylistNumber == null && _standaloneStreamQueue.isNotEmpty) {
+      final items = _standaloneStreamQueue.toList();
+      final index = _standaloneStreamQueueIndex ?? items.indexWhere((e) => e.url == failure.track.id);
+      if (index < 0 || index >= items.length) return;
+      items[index] = StandaloneStreamQueueItem(
+        url: alternative.url,
+        title: alternative.title,
+        artist: alternative.artist,
+        thumbnailUrl: alternative.thumbnailUrl,
+      );
+      await playStandaloneStream(
+        url: alternative.url,
+        title: alternative.title,
+        artist: alternative.artist,
+        thumbnailUrl: alternative.thumbnailUrl,
+        queueItems: items,
+        queueIndex: index,
+        relatedQueue: false,
+      );
+    } else {
+      final snapshot = await playbackQueueSnapshot();
+      if (!isCurrentPlaybackFailure(failure)) return;
+      final items = <StandaloneStreamQueueItem>[
+        StandaloneStreamQueueItem(
+          url: alternative.url,
+          title: alternative.title,
+          artist: alternative.artist,
+          thumbnailUrl: alternative.thumbnailUrl,
+        ),
+        for (final entry in snapshot.upcoming)
+          StandaloneStreamQueueItem(
+            url: entry.id,
+            title: entry.title,
+            artist: entry.artist,
+            thumbnailUrl: entry.artworkUri?.toString(),
+          ),
+      ];
+      await playStandaloneStream(
+        url: alternative.url,
+        title: alternative.title,
+        artist: alternative.artist,
+        thumbnailUrl: alternative.thumbnailUrl,
+        queueItems: items,
+        queueIndex: 0,
+        relatedQueue: false,
+      );
+    }
   }
 
   void setUiVisible(bool visible) {
@@ -1914,11 +2076,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         },
         processingState: processingState,
         playing: playing,
-        updatePosition: streamSourcePending
-            ? Duration.zero
-            : Platform.isWindows
-            ? _currentPosition
-            : _player.position,
+        updatePosition: streamSourcePending ? Duration.zero : _currentPosition,
         bufferedPosition: streamSourcePending
             ? Duration.zero
             : Platform.isWindows
@@ -1942,6 +2100,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> _initSavedState({bool preload = true}) async {
+    final initialGeneration = _loadGeneration;
     try {
       final prefs = await SharedPreferences.getInstance();
       if (Platform.isWindows) {
@@ -1995,8 +2154,66 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       final trackArtist = prefs.getString('last_track_artist');
       final trackWasExternal = prefs.getBool('last_track_external_source');
 
-      if (preload && trackPath != null && trackTitle != null && trackArtist != null) {
-        await _preloadTrack(trackPath, trackTitle, trackArtist, externalSource: trackWasExternal);
+      if (preload && _loadGeneration == initialGeneration && mediaItem.value == null) {
+        final saved = PlaybackSession.decode(prefs.getString(PlaybackSession.preferenceKey));
+        if (saved != null) {
+          await _preloadTrack(
+            saved.current.id,
+            saved.current.title,
+            saved.current.artist,
+            externalSource: saved.standalone,
+          );
+          if (_loadGeneration == initialGeneration && _pendingRestoredTrack?.id == saved.current.id) {
+            _restoredSession = saved;
+            final numbers = await FileService().listPlaylistNumbers();
+            if (_loadGeneration != initialGeneration) return;
+            final number = saved.playlistNumber;
+            if (number != null && numbers.contains(number)) {
+              if (!saved.standalone) await FileService().setActivePlaylistNumber(number);
+              if (_loadGeneration != initialGeneration) return;
+              _standalonePlaylistNumber = saved.standalone ? number : null;
+              _standalonePlaylistIndex = saved.playlistIndex;
+              if (isShuffle && saved.shufflePaths.isNotEmpty) {
+                final order = PlaylistShuffleOrder()..restore(saved.shufflePaths, saved.shuffleIndex);
+                order.reconcile(await FileService().readPlaylistTracks(number), same: _sameTrackId);
+                if (_loadGeneration != initialGeneration) return;
+                _shuffleOrders[number] = order;
+              }
+            }
+            if (saved.standalone && saved.playlistNumber == null) {
+              StandaloneStreamQueueItem entry(SavedPlaybackEntry e) =>
+                  StandaloneStreamQueueItem(url: e.id, title: e.title, artist: e.artist, thumbnailUrl: e.artwork);
+              _standaloneStreamQueue = saved.queue.map(entry).toList();
+              _standaloneQueueOriginal = saved.originalQueue.map(entry).toList();
+              final index = saved.queueIndex;
+              _standaloneStreamQueueIndex =
+                  index != null &&
+                      index < _standaloneStreamQueue.length &&
+                      _standaloneStreamQueue[index].url == saved.current.id
+                  ? index
+                  : _standaloneStreamQueue.indexWhere((e) => e.url == saved.current.id);
+              _standaloneShuffleOrder.restore(
+                _standaloneStreamQueue.map((e) => e.url).toList(),
+                _standaloneStreamQueueIndex ?? -1,
+              );
+              _standaloneNeedsShuffleReset = false;
+              // Resume uses the saved queue without issuing a new related request.
+              _standaloneRelatedEnabled = false;
+            }
+            final current = _pendingRestoredTrack!;
+            _pendingRestoredTrack = current.copyWith(
+              duration: saved.duration,
+              artUri: saved.current.artwork == null ? current.artUri : Uri.tryParse(saved.current.artwork!),
+            );
+            mediaItem.add(_pendingRestoredTrack);
+            _positionController.add(saved.position);
+            _durationController.add(saved.duration);
+            playbackModeRevision.value++;
+            _updatePlaybackState(force: true);
+          }
+        } else if (trackPath != null && trackTitle != null && trackArtist != null) {
+          await _preloadTrack(trackPath, trackTitle, trackArtist, externalSource: trackWasExternal);
+        }
       }
       if (volumeNormalizationEnabledNotifier.value) {
         unawaited(_queueLibraryLoudnessAnalysis());
@@ -2007,6 +2224,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> _preloadTrack(String filePath, String title, String artist, {bool? externalSource}) async {
+    final generation = _loadGeneration;
     try {
       final isStream = filePath.startsWith('http://') || filePath.startsWith('https://');
       if (!isStream && !await File(filePath).exists()) {
@@ -2017,6 +2235,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         persistedValue: externalSource,
         trackIsInPlaylist: containingPlaylist != null,
       );
+      if (_loadGeneration != generation) return;
       standaloneModeNotifier.value = restoredFromOutsidePlaylist;
       _standalonePlaylistNumber = null;
       _standalonePlaylistIndex = null;
@@ -2027,8 +2246,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         artUri: await _albumArtUri(filePath),
         extras: standalonePresentationExtras(restoredFromOutsidePlaylist),
       );
+      if (_loadGeneration != generation) return;
       _pendingRestoredTrack = restored;
-      trackVolumePercentNotifier.value = (await _playbackPreferenceStore).adjustmentsFor(filePath).volumePercent;
+      final adjustments = (await _playbackPreferenceStore).adjustmentsFor(filePath);
+      if (_loadGeneration != generation) return;
+      trackVolumePercentNotifier.value = adjustments.volumePercent;
       mediaItem.add(restored);
       _updatePlaybackState();
     } catch (e) {
@@ -2039,8 +2261,47 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         await prefs.remove('last_track_title');
         await prefs.remove('last_track_artist');
         await prefs.remove('last_track_external_source');
+        await prefs.remove(PlaybackSession.preferenceKey);
       } catch (_) {}
     }
+  }
+
+  Future<void> savePlaybackSession() {
+    final current = mediaItem.value;
+    if (current == null || _activeTrackLoadGeneration != null || _syncPeerControlled) return Future.value();
+    SavedPlaybackEntry entry(StandaloneStreamQueueItem e) =>
+        SavedPlaybackEntry(id: e.url, title: e.title, artist: e.artist, artwork: e.thumbnailUrl);
+    final number = _standalonePlaylistNumber ?? (isStandaloneMode ? null : FileService.activePlaylistNumber);
+    final order = number == null ? null : _shuffleOrders[number];
+    final session = _pendingRestoredTrack != null && _restoredSession != null
+        ? _restoredSession!
+        : PlaybackSession(
+            current: SavedPlaybackEntry(
+              id: current.id,
+              title: current.title,
+              artist: current.artist ?? 'Unknown Artist',
+              artwork: current.artUri?.toString(),
+            ),
+            position: _currentPosition,
+            duration: _currentDuration,
+            standalone: isStandaloneMode,
+            playlistNumber: number,
+            playlistIndex: _standalonePlaylistIndex,
+            queue: _standaloneStreamQueue.map(entry).toList(),
+            originalQueue: _standaloneQueueOriginal.map(entry).toList(),
+            queueIndex: _standaloneStreamQueueIndex,
+            shufflePaths: order?.paths ?? const [],
+            shuffleIndex: order?.index ?? -1,
+          );
+    final encoded = session.encode();
+    final task = _sessionSaveTail.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(PlaybackSession.preferenceKey, encoded);
+    });
+    _sessionSaveTail = task.catchError((Object error) {
+      debugPrint('[PlayerHandler] Could not save playback session: $error');
+    });
+    return _sessionSaveTail;
   }
 
   Future<void> _saveTrack(String filePath, String title, String artist, {bool? externalSource}) async {
@@ -2109,6 +2370,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<void> saveCurrentPlaybackPosition() async {
+    unawaited(savePlaybackSession());
     if (!resumeLongTracksNotifier.value) return;
     final current = mediaItem.value;
     final duration = _currentDuration;
@@ -2867,6 +3129,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     // adopted crossfade overwrite a subsequent user selection.
     unawaited(_clearCrossfadedPosition(outgoingItem.id));
     final generation = ++_loadGeneration;
+    playbackFailureNotifier.value = null;
+    _pendingRestoredTrack = null;
+    _restoredSession = null;
+    _videoAudioPreparing = false;
     _crossfadeInProgress = false;
     _transitionVolumeMultiplier = 1.0;
     _currentTrackIsStream = target.path.startsWith('http://') || target.path.startsWith('https://');
@@ -2931,12 +3197,19 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_syncControlLocked) return;
     final restored = _pendingRestoredTrack;
     if (restored != null) {
+      final session = _restoredSession;
       _pendingRestoredTrack = null;
+      _restoredSession = null;
+      _sessionResumeGeneration = _loadGeneration + 1;
       await loadTrack(
         restored.id,
         restored.title,
         restored.artist ?? 'Unknown Artist',
         standalone: restored.extras?['resonanceStandalone'] == true,
+        artworkUri: restored.artUri,
+        standalonePlaylistNumber: _standalonePlaylistNumber,
+        standalonePlaylistIndex: _standalonePlaylistIndex,
+        initialPosition: session?.position,
       );
       return;
     }
@@ -2994,6 +3267,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> pause() async {
     await stopPlaybackRangePreview(resume: false);
     if (_syncControlLocked) return;
+    unawaited(savePlaybackSession());
     _playbackRequested = false;
     _playbackHealthWatchdog.cancel();
     if (Platform.isAndroid && _crossfadeInProgress) await _pauseForAudioInterruption();
@@ -3023,6 +3297,19 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   @override
   Future<void> seek(Duration position) async {
     await stopPlaybackRangePreview(resume: false);
+    if (_pendingRestoredTrack != null && _restoredSession != null && !_syncControlLocked) {
+      final duration = _restoredSession!.duration;
+      final target = position < Duration.zero
+          ? Duration.zero
+          : duration != null && position > duration
+          ? duration
+          : position;
+      _restoredSession = _restoredSession!.withPosition(target);
+      _positionController.add(target);
+      _updatePlaybackState(force: true);
+      unawaited(savePlaybackSession());
+      return;
+    }
     if (_syncControlLocked || _playbackUnavailable || _pendingStreamSourceGeneration == _loadGeneration) return;
     final generation = ++_seekGeneration;
     final sourceGeneration = _loadGeneration;
@@ -3042,6 +3329,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     try {
       await operation;
       applied = true;
+      if (_loadGeneration == sourceGeneration) unawaited(savePlaybackSession());
     } finally {
       if (_activeSeekGeneration == generation) {
         _activeSeekGeneration = null;
@@ -3144,6 +3432,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _retryLoadGeneration = null;
     _handledFailureGeneration = null;
     _loadGeneration++;
+    playbackFailureNotifier.value = null;
+    _restoredSession = null;
     _standaloneVideo?.sourceChanged();
     unawaited(_standaloneVideo?.showSong());
     _videoAudioOverride = null;
@@ -3245,6 +3535,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     bool preserveFailureHistory = false,
     bool playWhenReady = true,
     bool preservePosition = true,
+    Duration? initialPosition,
   }) async {
     if (_syncControlLocked) return;
     final stopPreview = stopPlaybackRangePreview(resume: false);
@@ -3257,6 +3548,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final outgoingPositionSave = preservePosition ? saveCurrentPlaybackPosition() : Future<void>.value();
     ListeningStatistics.instance.onSessionEnded();
     final generation = ++_loadGeneration;
+    playbackFailureNotifier.value = null;
+    _pendingRestoredTrack = null;
+    _restoredSession = null;
+    _videoAudioPreparing = false;
     _videoAudioOverride = null;
     _videoAudioGeneration = null;
     _standaloneVideo?.sourceChanged();
@@ -3315,6 +3610,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         standalonePlaylistIndex: standalonePlaylistIndex,
         transitionDirection: transitionDirection,
         restorePosition: preservePosition,
+        initialPosition: initialPosition,
       );
     } finally {
       if (_activeTrackLoadGeneration == generation) {
@@ -3341,6 +3637,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     required int? standalonePlaylistIndex,
     required TrackTransitionDirection transitionDirection,
     required bool restorePosition,
+    Duration? initialPosition,
   }) async {
     final myGen = generation;
     await _seekOperations.idle;
@@ -3410,7 +3707,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       ),
     );
     playbackVisualNotifier.value = PlaybackVisualState(trackId: filePath, loading: isStream);
-    if (isRandom || (isShuffle && _standaloneNeedsShuffleReset)) {
+    if (_sessionResumeGeneration != myGen && (isRandom || (isShuffle && _standaloneNeedsShuffleReset))) {
       await shuffleQueue(reset: true);
       if (_loadGeneration != myGen) return;
     }
@@ -3446,7 +3743,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           // it here, then let the queued replacement open the selected song.
           await _configureWindowsRange(player, range);
           if (_loadGeneration != myGen) return;
-          await player.open(media, play: _playbackRequested);
+          await player.open(media, play: _playbackRequested && initialPosition == null);
           if (_loadGeneration != myGen || !_playbackRequested) await player.pause();
           if (_loadGeneration == myGen) {
             _windowsDuration = player.state.duration;
@@ -3476,7 +3773,18 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _durationController.add(_currentDuration);
       await _applyPlaybackAdjustments(adjustments, persist: false);
       if (_loadGeneration != myGen) return;
-      if (restorePosition) await _restorePlaybackPosition(filePath, myGen);
+      if (initialPosition != null) {
+        final duration = _currentDuration;
+        final position = duration != null && duration > Duration.zero && initialPosition >= duration
+            ? Duration.zero
+            : initialPosition;
+        await seek(position);
+      } else if (restorePosition) {
+        await _restorePlaybackPosition(filePath, myGen);
+      }
+      if (Platform.isWindows && initialPosition != null && _playbackRequested && _loadGeneration == myGen) {
+        await _playCurrentBackend();
+      }
       if (_loadGeneration != myGen) return;
       if (!Platform.isWindows && _playbackRequested) {
         await _startJustAudioPlayer(_player, myGen);
@@ -3554,9 +3862,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (_loadGeneration == myGen) {
         _pendingStreamSourceGeneration = null;
         _lastTrackLoadFailure = e;
-        if (!standalone && e is YoutubeFailure) {
-          youtubeFailureNotifier.value = e;
-        }
         debugPrint('[PlayerHandler] Error loading track "$filePath": $e\n$st');
         _streamUrlCache.remove(filePath);
         if (e is NoAudioOutputDeviceException) {
@@ -3579,7 +3884,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         playbackState.add(playbackState.value.copyWith(processingState: AudioProcessingState.idle, playing: false));
         _updatePlaybackState();
         await _handlePlaybackFailure(myGen, e, allowStreamRecovery: isStream && e is! YoutubeFailure);
-        if (_loadGeneration == myGen) await _markPlaybackUnavailable(myGen);
+        if (_loadGeneration == myGen) await _markPlaybackUnavailable(myGen, initialPosition);
       }
     }
   }
@@ -3611,6 +3916,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     try {
       if (_loadGeneration == generation) {
         await _saveTrack(filePath, title, artist, externalSource: externalSource);
+        if (_loadGeneration == generation) await savePlaybackSession();
       }
     } catch (e) {
       debugPrint('[PlayerHandler] Non-playback track update failed for "$filePath": $e');
@@ -3658,8 +3964,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final artworkUri = thumbnailUrl == null || thumbnailUrl.isEmpty ? null : Uri.tryParse(thumbnailUrl);
     unawaited(MetadataCacheService.set(url, title, artist, artworkUrl: thumbnailUrl));
     final playback = loadTrack(url, title, artist, standalone: true, artworkUri: artworkUri);
+    final generation = _loadGeneration;
     if (relatedQueue) unawaited(_refreshStandaloneRelatedQueue(url, playback));
     await playback;
+    if (generation != _loadGeneration) return;
     if (!isStandaloneMode ||
         mediaItem.value?.id != url ||
         playbackState.value.processingState == AudioProcessingState.idle) {
@@ -3820,6 +4128,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         await prefs.remove('last_track_title');
         await prefs.remove('last_track_artist');
         await prefs.remove('last_track_external_source');
+        await prefs.remove(PlaybackSession.preferenceKey);
       }
     } catch (_) {}
   }
@@ -4262,6 +4571,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       }
       await _saveTrack(current.id, current.title, current.artist ?? 'Unknown Artist');
     }
+    await savePlaybackSession();
+    await _sessionSaveTail;
   }
 
   Future<void> shuffleQueue({bool reset = false}) async {
@@ -4433,6 +4744,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    _cancelSupersededAndroidStreams(null);
     if (_watchingDriveAccount) DriveMusicService.instance.drive.removeListener(_driveAccountChanged);
     await _standaloneVideo?.close();
     await voiceChat?.shutdown();
@@ -4452,6 +4764,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _loadGeneration++;
     _activeTrackLoadGeneration = null;
     await _backendSourceOperations.idle;
+    // A neighbor prefetch may still be reading (or initializing) a playlist.
+    // Drain that existing read before disposal releases its storage owner.
+    await _playlistOrderOperations.idle;
     _crossfadeGeneration++;
     _crossfadeInProgress = false;
     await _envelopeAnalyzer.close();
@@ -4485,6 +4800,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     playbackModeRevision.dispose();
     standaloneModeNotifier.dispose();
     playbackVisualNotifier.dispose();
+    playbackFailureNotifier.dispose();
     youtubeFailureNotifier.dispose();
     trackTransitionNotifier.dispose();
     uiVisibleNotifier.dispose();

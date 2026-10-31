@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
+import 'package:resonance/services/youtube/youtube_request.dart';
 
 import 'package:path/path.dart' as p;
 import 'package:resonance/core/youtube/windows_process_output.dart';
@@ -48,6 +50,52 @@ class WindowsYtdlpRunner {
   String get ffmpegPath => p.join(binDirectory, 'ffmpeg.exe');
   String get ytMusicHomePath => p.join(binDirectory, 'resonance-ytmusic-home.exe');
   bool get hasConfiguredAccess => _accessService?.isConfigured == true;
+  final _audioInfo = <String, ({DateTime at, String json, String scope, Uri media})>{};
+  String get _accessScope => '${identityHashCode(_accessService)}:${_accessService?.revision ?? 0}';
+
+  /// Exact extractor output stays in memory, including any URL-scoped headers.
+  /// It is never written to preferences, files, diagnostics or a backup.
+  void rememberAudioInfo(String sourceUrl, String raw) {
+    try {
+      final info = jsonDecode(raw) as Map<String, dynamic>;
+      final id = Uri.tryParse(sourceUrl)?.queryParameters['v'];
+      final media = Uri.tryParse(info['url']?.toString() ?? '');
+      if (id == null || info['id'] != id || media == null || !media.isScheme('https') || info['vcodec'] != 'none') {
+        return;
+      }
+      _audioInfo[sourceUrl] = (at: DateTime.now(), json: raw, scope: _accessScope, media: media);
+      if (_audioInfo.length > 12) _audioInfo.remove(_audioInfo.keys.first);
+    } catch (_) {
+      /* A cache miss uses ordinary extraction. */
+    }
+  }
+
+  String? audioInfoFor(String sourceUrl) {
+    final info = _audioInfo[sourceUrl];
+    if (info == null) return null;
+    final expiry = int.tryParse(info.media.queryParameters['expire'] ?? '');
+    if (info.scope != _accessScope ||
+        DateTime.now().difference(info.at) > const Duration(minutes: 5) ||
+        (expiry != null && expiry < DateTime.now().millisecondsSinceEpoch ~/ 1000 + 90)) {
+      _audioInfo.remove(sourceUrl);
+      return null;
+    }
+    return info.json;
+  }
+
+  void forgetAudioInfo(String sourceUrl) => _audioInfo.remove(sourceUrl);
+
+  Future<WindowsYtdlpProcess> startWithAudioInfo(List<String> arguments, String info, {bool guest = true}) async {
+    final started = await start([...arguments, '--load-info-json', '-'], guest: guest);
+    try {
+      started.process.stdin.add(utf8.encode(info));
+      await started.process.stdin.close();
+      return started;
+    } catch (_) {
+      started.process.kill();
+      rethrow;
+    }
+  }
 
   List<String> buildArguments(
     List<String> arguments, {
@@ -133,7 +181,9 @@ class WindowsYtdlpRunner {
     Duration? timeout,
     String? sourceUrl,
     bool requireOutput = false,
+    YoutubeRequest? request,
   }) async {
+    request?.check();
     final started = await start(
       arguments,
       overrideBrowserId: overrideBrowserId,
@@ -143,8 +193,11 @@ class WindowsYtdlpRunner {
     final stdoutFuture = collectWindowsProcessOutput(started.process.stdout);
     final stderrFuture = _collectTail(started.process.stderr);
     try {
+      request?.check();
       final completed = Future.wait<Object>([stdoutFuture, stderrFuture, started.process.exitCode]);
-      final values = timeout == null ? await completed : await completed.timeout(timeout);
+      final owned = request == null ? completed : request.follow(completed);
+      final values = timeout == null ? await owned : await owned.timeout(timeout);
+      request?.check();
       final result = WindowsYtdlpResult(
         exitCode: values[2] as int,
         stdout: values[0] as String,
@@ -157,6 +210,9 @@ class WindowsYtdlpRunner {
         throw failure;
       }
       return result;
+    } on YoutubeRequestCancelled {
+      started.process.kill();
+      rethrow;
     } on TimeoutException {
       started.process.kill();
       final failure = YoutubeFailure(

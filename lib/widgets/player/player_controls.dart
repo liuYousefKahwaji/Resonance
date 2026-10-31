@@ -5,6 +5,7 @@
 // Logic: UNCHANGED. Only visual presentation changed.
 
 import 'dart:io';
+import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/app/theme.dart';
@@ -18,8 +19,9 @@ import 'package:resonance/widgets/player/volume_bar.dart';
 class PlayerControls extends StatelessWidget {
   final bool standalone;
   final bool transportLocked;
+  final VoidCallback? onQueue;
 
-  const PlayerControls({super.key, this.standalone = false, this.transportLocked = false});
+  const PlayerControls({super.key, this.standalone = false, this.transportLocked = false, this.onQueue});
 
   @override
   Widget build(BuildContext context) {
@@ -50,6 +52,7 @@ class PlayerControls extends StatelessWidget {
                   isMobile: isMobile,
                   standalone: standalone,
                   transportLocked: transportLocked,
+                  onQueue: onQueue,
                 )
               : _DesktopControls(
                   handler: handler,
@@ -66,6 +69,7 @@ class PlayerControls extends StatelessWidget {
 }
 
 class _MobileControls extends StatelessWidget {
+  final VoidCallback? onQueue;
   final PlayerHandler handler;
   final bool isPlaying;
   final bool isMobile;
@@ -78,6 +82,7 @@ class _MobileControls extends StatelessWidget {
     required this.isMobile,
     required this.standalone,
     required this.transportLocked,
+    this.onQueue,
   });
 
   @override
@@ -90,7 +95,7 @@ class _MobileControls extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             // ── Row 1: Seek bar ──────────────────────────────────────
-            _LockedControl(locked: transportLocked, child: const SeekBar()),
+            _LockedControl(locked: transportLocked, child: const SeekBar(showSeekSteps: false)),
 
             const SizedBox(height: 6),
 
@@ -99,13 +104,13 @@ class _MobileControls extends StatelessWidget {
               locked: transportLocked,
               child: Row(
                 textDirection: TextDirection.ltr,
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
+                  const PlayerModes(showLoop: false),
                   _SkipButton(icon: Icons.skip_previous_rounded, onTap: handler.previous, size: standalone ? 40 : 26),
-                  SizedBox(width: standalone ? 28 : 16),
-                  _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: standalone ? 76 : 48),
-                  SizedBox(width: standalone ? 28 : 16),
+                  _PlayPauseButton(isPlaying: isPlaying, onTap: handler.playPause, size: standalone ? 68 : 48),
                   _SkipButton(icon: Icons.skip_next_rounded, onTap: handler.next, size: standalone ? 40 : 26),
+                  const PlayerModes(showShuffle: false),
                 ],
               ),
             ),
@@ -118,16 +123,19 @@ class _MobileControls extends StatelessWidget {
                 // Left cluster — loop, shuffle, speed/pitch
                 _LockedControl(
                   locked: transportLocked,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [const PlayerModes(), isMobile ? const PlaybackSettings() : const SpeedControl()],
-                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [const PlaybackSettings()]),
                 ),
 
                 const SizedBox(width: 8),
 
                 // Volume bar takes all remaining space
                 const Expanded(child: VolumeBar()),
+                if (onQueue != null)
+                  IconButton(
+                    tooltip: context.tr('Show queue'),
+                    onPressed: onQueue,
+                    icon: const Icon(Icons.queue_music_rounded),
+                  ),
               ],
             ),
           ],

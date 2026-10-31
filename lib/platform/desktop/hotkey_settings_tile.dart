@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 // lib/platform/desktop/hotkey_settings_tile.dart
 import 'package:flutter/material.dart';
@@ -44,7 +45,7 @@ String formatHotKey(HotKey hotKey) {
   return modifiers.isEmpty ? key : '${modifiers.join('+')}+$key';
 }
 
-Future<HotKey?> recordHotKey(BuildContext context, {bool requireModifier = true}) => showDialog<HotKey>(
+Future<HotKey?> recordHotKey(BuildContext context, {bool requireModifier = true}) => showResonanceDialog<HotKey>(
   context: context,
   barrierDismissible: false,
   builder: (dialogContext) => _HotkeyRecorderDialog(requireModifier: requireModifier),
@@ -175,7 +176,7 @@ class _HotkeyRecorderDialogState extends State<_HotkeyRecorderDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return ResonanceDialog(
       title: Text(context.tr("Record Shortcut")),
       content: SizedBox(
         width: 300,

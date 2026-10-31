@@ -1,8 +1,14 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/core/storage/file_service.dart';
 
-Future<bool> showPlaylistSortDialog(NavigatorState navigator, int number, {FileService? fileService}) async {
+Future<bool> showPlaylistSortDialog(
+  NavigatorState navigator,
+  int number, {
+  FileService? fileService,
+  ValueChanged<PlaylistUndo?>? onUndo,
+}) async {
   // MainApp owns MaterialApp, so its own context cannot open a dialog.
   // Resolve the context inside the navigator rather than accepting a root context.
   final service = fileService ?? FileService();
@@ -13,10 +19,10 @@ Future<bool> showPlaylistSortDialog(NavigatorState navigator, int number, {FileS
   var descending = saved.descending;
   var favoritesFirst = saved.favoritesFirst;
   var reroll = false;
-  final accepted = await showDialog<bool>(
+  final accepted = await showResonanceDialog<bool>(
     context: context,
     builder: (context) => StatefulBuilder(
-      builder: (context, setState) => AlertDialog(
+      builder: (context, setState) => ResonanceDialog(
         title: Text(context.tr("Sort tracks")),
         content: SizedBox(
           width: 320,
@@ -76,6 +82,20 @@ Future<bool> showPlaylistSortDialog(NavigatorState navigator, int number, {FileS
     ),
   );
   if (accepted != true) return false;
-  await service.sortPlaylist(number, mode, descending: descending, reroll: reroll, favoritesFirst: favoritesFirst);
+  if (onUndo == null) {
+    await service.sortPlaylist(number, mode, descending: descending, reroll: reroll, favoritesFirst: favoritesFirst);
+    return true;
+  }
+  final state = saved.copyWith(
+    mode: mode,
+    descending: descending,
+    favoritesFirst: favoritesFirst,
+    seed: reroll || saved.seed == 0 ? PlaylistSortState.newSeed() : saved.seed,
+  );
+  final undo = await service.editPlaylistsWithUndo(
+    {number: await service.readPlaylistTracks(number)},
+    sortStates: {number: state},
+  );
+  onUndo(undo);
   return true;
 }

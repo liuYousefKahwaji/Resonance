@@ -9,7 +9,8 @@ import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/audio/shuffle_order.dart';
 
 class PlayerModes extends StatefulWidget {
-  const PlayerModes({super.key});
+  const PlayerModes({super.key, this.showLoop = true, this.showShuffle = true});
+  final bool showLoop, showShuffle;
 
   @override
   State<PlayerModes> createState() => _PlayerModesState();
@@ -38,49 +39,51 @@ class _PlayerModesState extends State<PlayerModes> {
       mainAxisSize: MainAxisSize.min,
       children: [
         // Loop mode
-        IconButton(
-          icon: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 150),
-            child: loopMode == LoopMode.one
-                ? Icon(Icons.repeat_one_rounded, key: const ValueKey('one'), color: primary, size: 20)
-                : Icon(
-                    Icons.repeat_rounded,
-                    key: ValueKey(loopMode),
-                    color: loopMode == LoopMode.all ? primary : inactiveColor,
-                    size: 20,
-                  ),
+        if (widget.showLoop)
+          IconButton(
+            icon: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 150),
+              child: loopMode == LoopMode.one
+                  ? Icon(Icons.repeat_one_rounded, key: const ValueKey('one'), color: primary, size: 20)
+                  : Icon(
+                      Icons.repeat_rounded,
+                      key: ValueKey(loopMode),
+                      color: loopMode == LoopMode.all ? primary : inactiveColor,
+                      size: 20,
+                    ),
+            ),
+            onPressed: () async {
+              await handler.toggleLoopMode();
+              setState(() {});
+            },
+            tooltip: loopMode == LoopMode.off
+                ? context.tr("Loop off")
+                : loopMode == LoopMode.one
+                ? context.tr("Loop one")
+                : context.tr("Loop all"),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
-          onPressed: () async {
-            await handler.toggleLoopMode();
-            setState(() {});
-          },
-          tooltip: loopMode == LoopMode.off
-              ? context.tr("Loop off")
-              : loopMode == LoopMode.one
-              ? context.tr("Loop one")
-              : context.tr("Loop all"),
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-        ),
         // Shuffle
-        IconButton(
-          icon: Icon(
-            randomOn ? Icons.casino_rounded : Icons.shuffle_rounded,
-            size: 20,
-            color: shuffleOn ? primary : inactiveColor,
+        if (widget.showShuffle)
+          IconButton(
+            icon: Icon(
+              randomOn ? Icons.casino_rounded : Icons.shuffle_rounded,
+              size: 20,
+              color: shuffleOn ? primary : inactiveColor,
+            ),
+            onPressed: () async {
+              await handler.toggleShuffle();
+              setState(() {});
+            },
+            tooltip: randomOn
+                ? context.tr('Random on')
+                : shuffleOn
+                ? context.tr("Shuffle on")
+                : context.tr("Shuffle off"),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
-          onPressed: () async {
-            await handler.toggleShuffle();
-            setState(() {});
-          },
-          tooltip: randomOn
-              ? context.tr('Random on')
-              : shuffleOn
-              ? context.tr("Shuffle on")
-              : context.tr("Shuffle off"),
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-        ),
       ],
     );
   }

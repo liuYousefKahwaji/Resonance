@@ -30,6 +30,7 @@ class StandaloneVideoSession extends ChangeNotifier {
     required this.frame,
     required this.activateAudio,
     required this.restoreAudio,
+    this.resumeAudio,
     this.versionsLoader,
     this.streamLoader,
     mk.Player Function()? createPlayer,
@@ -46,6 +47,7 @@ class StandaloneVideoSession extends ChangeNotifier {
   activateAudio;
   final Future<void> Function(StandaloneVideoFrame frame, YoutubeMediaVersions? versions, bool Function() current)
   restoreAudio;
+  final Future<void> Function(StandaloneVideoFrame owner, bool Function() current)? resumeAudio;
   final Future<YoutubeMediaVersions> Function(String)? versionsLoader;
   final Future<ResolvedYoutubeVideo> Function(String)? streamLoader;
   final mk.Player Function() _createPlayer;
@@ -127,18 +129,36 @@ class StandaloneVideoSession extends ChangeNotifier {
       }
       _publish();
       if (!_current(epoch, owner)) return;
-      await player
-          .open(mk.Media(source.videoUri.toString(), httpHeaders: source.videoHeaders), play: false)
-          .timeout(const Duration(seconds: 12));
-      if (!_current(epoch, owner)) return;
-      if (!await waitForMediaSourceReady(player, () => _current(epoch, owner))) return;
-      final position = await activateAudio(source, versions, owner, () => _current(epoch, owner));
+      final audio = activateAudio(source, versions, owner, () => _current(epoch, owner));
+      final visual = () async {
+        await player
+            .open(
+              mk.Media(
+                source.videoUri.toString(),
+                httpHeaders: source.videoHeaders,
+                start: frame()?.position ?? owner.position,
+              ),
+              play: false,
+            )
+            .timeout(const Duration(seconds: 12));
+        return _current(epoch, owner) && await waitForMediaSourceReady(player, () => _current(epoch, owner));
+      }();
+      final prepared = await Future.wait<Object?>([audio, visual]);
+      if (!_current(epoch, owner) || prepared[1] != true) return;
+      final position = prepared[0] as Duration?;
       if (position == null || !_current(epoch, owner)) return;
       final fresh = frame()!;
       await player.seek(fresh.position);
       _lastVideoSeek = DateTime.now();
       if (!_current(epoch, owner)) return;
       await player.setRate(fresh.rate);
+      final firstFrame = controller?.waitUntilFirstFrameRendered;
+      if (firstFrame != null) await firstFrame.timeout(const Duration(seconds: 8));
+      if (!_current(epoch, owner)) return;
+      // Audible transport is held while both decoders prepare. Only the owner
+      // can release it, and the handler rechecks manual pause and audio focus.
+      await resumeAudio?.call(owner, () => _current(epoch, owner));
+      if (!_current(epoch, owner)) return;
       _seekRevision = fresh.seekRevision;
       _wasBuffering = false;
       enabled = true;

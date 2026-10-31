@@ -1,6 +1,8 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
+import 'package:resonance/widgets/common/track_link_menu.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -152,7 +154,8 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
     try {
       await playback;
     } catch (error) {
-      if (mounted && route.isCurrent) Navigator.pop(context);
+      if (!mounted || context.read<PlayerHandler>().mediaItem.value?.id != selected.url) return;
+      if (route.isCurrent) Navigator.pop(context);
       await page;
       if (mounted) {
         await showYoutubeFailure(
@@ -164,7 +167,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
       }
       return;
     }
-    await page;
+    unawaited(page);
   }
 
   Future<void> _stream(YoutubeTrack track) async {
@@ -225,9 +228,9 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
   }
 
   Future<void> _clearLocal() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showResonanceDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => ResonanceDialog(
         title: Text(context.tr("Clear Resonance history?")),
         content: Text(context.tr("This removes listening history only. Audio files and playlists are unaffected.")),
         actions: [
@@ -375,9 +378,10 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
           ),
           enabled: exists,
           onTap: () => _playLocal(entry),
-          trailing: PopupMenuButton<String>(
-            onSelected: (_) => ListeningHistoryRepository.instance.remove(entry.trackPath),
-            itemBuilder: (_) => [PopupMenuItem(value: 'remove', child: Text(context.tr("Remove from history")))],
+          trailing: TrackLinkMenu(
+            trackId: entry.trackPath,
+            onExtraSelected: (_) => ListeningHistoryRepository.instance.remove(entry.trackPath),
+            extraEntries: [PopupMenuItem(value: 'remove', child: Text(context.tr("Remove from history")))],
           ),
         );
       },
@@ -430,9 +434,16 @@ class _YoutubeHistoryTile extends StatelessWidget {
       ],
     ),
     onTap: onPlay,
-    trailing: PopupMenuButton<String>(
-      onSelected: (value) => value == 'stream' ? onStream() : onDownload(),
-      itemBuilder: (_) => [
+    trailing: TrackLinkMenu(
+      trackId: track.url,
+      onExtraSelected: (value) {
+        if (value == 'stream') {
+          onStream();
+        } else if (value == 'download') {
+          onDownload();
+        }
+      },
+      extraEntries: [
         PopupMenuItem(value: 'stream', child: Text(context.tr("Add stream to playlist"))),
         PopupMenuItem(value: 'download', child: Text(context.tr("Download"))),
       ],

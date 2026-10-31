@@ -19,6 +19,8 @@ import 'package:resonance/app/theme.dart';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/widgets/library/track_tile.dart';
 import 'package:resonance/services/scroll_effects_preferences.dart';
 
@@ -121,6 +123,7 @@ class _TrackListState extends State<TrackList> {
 
   Widget _searchBar(int count) {
     final expanded = !Platform.isAndroid || _searchOpen;
+    final modern = context.watch<ThemeProvider?>()?.modernLayout ?? false;
     return AnimatedSize(
       duration: resonanceDuration(context, const Duration(milliseconds: 220)),
       curve: Curves.easeOutCubic,
@@ -128,60 +131,82 @@ class _TrackListState extends State<TrackList> {
       child: !expanded
           ? const SizedBox.shrink()
           : Padding(
-              padding: EdgeInsetsDirectional.fromSTEB(12, Platform.isWindows ? 14 : 4, 12, 8),
-              child: SizedBox(
-                height: Platform.isWindows ? 48 : 44,
-                child: TextField(
-                  controller: _search,
-                  focusNode: _focus,
-                  onChanged: (_) {
-                    setState(() {});
-                    unawaited(_indexMetadata());
-                  },
-                  textInputAction: TextInputAction.search,
-                  onSubmitted: (_) => _focus.unfocus(),
-                  textAlignVertical: TextAlignVertical.center,
-                  style: const TextStyle(fontSize: 13),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    hintText: context.tr("Search this playlist"),
-                    prefixIcon: const Icon(Icons.search_rounded, size: 18),
-                    prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 36),
-                    suffixIconConstraints: const BoxConstraints(minHeight: 36),
-                    filled: true,
-                    fillColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-                    border: OutlineInputBorder(
-                      borderRadius: resonanceBorderRadius(context, useWindowsNativeControls(context) ? 4 : 12),
-                      borderSide: BorderSide.none,
-                    ),
-                    suffixIcon: Padding(
-                      padding: const EdgeInsetsDirectional.only(end: 4),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (_search.text.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 6),
-                              child: Text(_indexing ? '…' : '$count', style: Theme.of(context).textTheme.labelSmall),
-                            ),
-                          if (_search.text.isNotEmpty || Platform.isAndroid)
-                            IconButton(
-                              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-                              padding: EdgeInsets.zero,
-                              tooltip: Platform.isAndroid
-                                  ? context.tr("Close playlist search")
-                                  : context.tr("Clear search"),
-                              icon: const Icon(Icons.close_rounded, size: 18),
-                              onPressed: () => setState(() {
-                                _search.clear();
-                                if (Platform.isAndroid) {
-                                  _searchOpen = false;
-                                  _focus.unfocus();
-                                }
-                              }),
-                            ),
-                        ],
+              padding: EdgeInsetsDirectional.fromSTEB(
+                modern ? 24 : 12,
+                modern
+                    ? 4
+                    : Platform.isWindows
+                    ? 14
+                    : 4,
+                modern ? 24 : 12,
+                modern ? 12 : 8,
+              ),
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: modern ? 420 : double.infinity),
+                  child: SizedBox(
+                    height: modern
+                        ? 40
+                        : Platform.isWindows
+                        ? 48
+                        : 44,
+                    child: TextField(
+                      controller: _search,
+                      focusNode: _focus,
+                      onChanged: (_) {
+                        setState(() {});
+                        unawaited(_indexMetadata());
+                      },
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => _focus.unfocus(),
+                      textAlignVertical: TextAlignVertical.center,
+                      style: const TextStyle(fontSize: 13),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: context.tr("Search this playlist"),
+                        prefixIcon: const Icon(Icons.search_rounded, size: 18),
+                        prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 36),
+                        suffixIconConstraints: const BoxConstraints(minHeight: 36),
+                        filled: true,
+                        fillColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                        border: OutlineInputBorder(
+                          borderRadius: resonanceBorderRadius(context, useWindowsNativeControls(context) ? 4 : 12),
+                          borderSide: BorderSide.none,
+                        ),
+                        suffixIcon: Padding(
+                          padding: const EdgeInsetsDirectional.only(end: 4),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_search.text.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                                  child: Text(
+                                    _indexing ? '…' : '$count',
+                                    style: Theme.of(context).textTheme.labelSmall,
+                                  ),
+                                ),
+                              if (_search.text.isNotEmpty || Platform.isAndroid)
+                                IconButton(
+                                  constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+                                  padding: EdgeInsets.zero,
+                                  tooltip: Platform.isAndroid
+                                      ? context.tr("Close playlist search")
+                                      : context.tr("Clear search"),
+                                  icon: const Icon(Icons.close_rounded, size: 18),
+                                  onPressed: () => setState(() {
+                                    _search.clear();
+                                    if (Platform.isAndroid) {
+                                      _searchOpen = false;
+                                      _focus.unfocus();
+                                    }
+                                  }),
+                                ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),

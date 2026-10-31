@@ -64,6 +64,40 @@ class EventSink:
 
 
 class AndroidYtdlpBridgeTests(unittest.TestCase):
+    def test_optional_download_cache_failure_cannot_break_stream_playback(self):
+        info = {'id': 'abcdefghijk', 'url': 'https://audio.test/file', 'vcodec': 'none'}
+        with patch.object(FakeYoutubeDL, 'responder', lambda *_: info), \
+                patch.object(bridge, '_remember_audio_info', side_effect=TypeError('Noncopyable extractor field')):
+            result = json.loads(bridge.get_stream_data('https://www.youtube.com/watch?v=abcdefghijk'))
+        self.assertEqual(result['url'], 'https://audio.test/file')
+
+    def test_download_reuses_resolved_audio_without_extraction_or_artwork_request(self):
+        url = 'https://www.youtube.com/watch?v=abcdefghijk'
+        info = {'id': 'abcdefghijk', 'vcodec': 'none', 'url': 'https://audio.test/file', 'title': 'Song'}
+        bridge._remember_audio_info(url, None, info, {'headers': {'X-Audio': 'yes'}})
+        sink = EventSink()
+        def process(ydl, value, download=False):
+            self.assertTrue(download)
+            self.assertEqual(value['http_headers'], {'X-Audio': 'yes'})
+            ydl.options['progress_hooks'][0]({'status': 'finished', 'filename': '/tmp/song.webm',
+                'info_dict': {**value, 'thumbnail': 'https://art.test/cover'}})
+            return value
+        with patch.object(FakeYoutubeDL, 'process_ie_result', process, create=True), \
+                patch.object(FakeYoutubeDL, 'extract_info', side_effect=AssertionError('Must reuse extraction')), \
+                patch('urllib.request.urlopen', side_effect=AssertionError('Original format needs no cover fetch')):
+            bridge.download(url, '/tmp', sink, include_cover=False)
+        self.assertEqual(sink.events[-1], 'done')
+        self.assertTrue(any(event.startswith('track-json:') for event in sink.events))
+
+    def test_audio_cache_rejects_expired_or_different_identity(self):
+        url = 'https://www.youtube.com/watch?v=abcdefghijk'
+        bridge._remember_audio_info(url, None,
+            {'id': 'abcdefghijk', 'vcodec': 'none', 'url': 'https://audio.test/file?expire=1'}, {'headers': {}})
+        self.assertIsNone(bridge._take_audio_info(url, None))
+        bridge._remember_audio_info(url, None,
+            {'id': 'wrongvideo1', 'vcodec': 'none', 'url': 'https://audio.test/file'}, {'headers': {}})
+        self.assertIsNone(bridge._take_audio_info(url, None))
+
     def test_video_pair_is_exact_and_keeps_url_specific_headers(self):
         class Music:
             def get_watch_playlist(self, **kwargs):

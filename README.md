@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-The current source version is **3.7.0** (build **21**), matching `version: 3.7.0+21` in [`pubspec.yaml`](pubspec.yaml). This update adds fresh shuffle cycles, Random playback, and **Song/Video switching in beta**. See the [3.7.0 patch notes](release/v3.7.0/patchnotes.md) for details and [GitHub Releases](https://github.com/liuYousefKahwaji/Resonance/releases/latest) for packaged builds.
+The current source version is **4.0.0** (build **24**), matching `version: 4.0.0+24` in [`pubspec.yaml`](pubspec.yaml). This overhaul introduces a new default listening layout, fuller Android player controls, desktop-style Windows prompts, faster original-format downloads, improved stream switching and recovery, Undo for playlist edits, paused session restoration, track link actions, and an optional cinematic intro with the original startup sound. See the [4.0.0 patch notes](release/v4.0.0/patchnotes.md) for details and [GitHub Releases](https://github.com/liuYousefKahwaji/Resonance/releases/latest) for packaged builds.
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 
@@ -37,11 +37,13 @@ The working tree may contain features intended for the next release. See the rel
 - Add an entire folder on Windows, including its subfolders, without importing duplicate files.
 - Edit title, artist, and embedded artwork without leaving the library.
 - Remove an entry from one playlist or delete its file and references everywhere.
+- Undo playlist removals, deletion, sorting, reordering and bulk edits from the brief **Undo** action. Audio-file deletion remains permanent.
 - Keep metadata and artwork cached for fast scrolling without moving source files.
 
 ### Playback
 
 - Play, pause, seek, repeat, and navigate the real upcoming queue.
+- Reopen with the last queue, shuffle order and position restored, paused until you press Play.
 - Cycle the shuffle button through **Off → Shuffle → Random → Off**. Shuffle keeps an order for one cycle, then reshuffles at the end. Random reshuffles whenever you select a track or move between songs, including automatic advances.
 - Use a full-screen player with lyrics, artwork-derived colors, an audio visualizer, gestures, and Pocket Vinyl.
 - Adjust speed and pitch from 0.5× to 2×, volume up to 200%, and a five-band equalizer with presets.
@@ -60,6 +62,7 @@ The working tree may contain features intended for the next release. See the rel
 - Search **YouTube Music** for songs or **YouTube** for videos, with quick previews and engagement counts. The selected source is remembered.
 - Search results and artist pages show available release/upload dates, using recent labels such as **Yesterday** and full dates for older tracks. Missing dates load independently of results and playback.
 - Play a result in a temporary queue, add it as a stream, or download it into a playlist.
+- Downloads keep the original audio format by default; choose MP3 in Settings for compatibility with other players. Track menus offer Copy link and opening the source in YouTube or YouTube Music, including local downloads with a saved YouTube source.
 - Use **Song/Video (beta)** in the expanded player to switch between audio and available music videos. Video playback is still being refined; some songs have no linked video.
 - Collapsing the player or putting the app in the background returns to audio-only Song mode.
 - Convert an existing streamed playlist entry into a local download from its three-dot menu while preserving its position.
@@ -103,6 +106,7 @@ The working tree may contain features intended for the next release. See the rel
 - Pick a Custom theme color from ready-made choices or a visual color picker, adjust its shade, and optionally use rounder corners throughout the app.
 - Use artwork-derived player colors, reduced motion, optional tracklist motion blur, and Windows native controls.
 - Move between Discover and the library with gentle page transitions.
+- Enable **New listening layout** for visible Discover, Search and Library navigation and a compact player. Turn it off to return to the classic layout. **Cinematic intro** is a separate optional animation using the unchanged startup sound.
 - Responsive layouts adapt the library, player, queue, YouTube shelves, and settings to desktop and mobile widths.
 
 ## Favorites
@@ -241,6 +245,8 @@ Release notes live under [`release/`](release/); the automated build and publish
 
 | Release | Highlights |
 | --- | --- |
+| [v4.0.0](release/v4.0.0/patchnotes.md) | Optional listening layout and cinematic intro, fuller Android controls, Windows prompts, original-format downloads, improved stream switching, track links and Song/Video startup improvements. |
+| [v3.8.0](release/v3.8.0/patchnotes.md) | Google Drive playlist sync and music browsing, streaming, downloads and uploads. |
 | [v3.7.0](release/v3.7.0/patchnotes.md) | Fresh shuffle cycles, Random playback, and Song/Video switching **in beta** with audio-only playback when collapsed. |
 | [v3.6.2](release/v3.6.2/patchnotes.md) | Windows voice-chat sharing and launch on startup, YouTube/Music search selection, and track dates. |
 | [v3.6.1](release/v3.6.1/patchnotes.md) | Saved local playback trims, waveform editing and preview, and a seekbar that shows the full song with excluded sections dimmed. |

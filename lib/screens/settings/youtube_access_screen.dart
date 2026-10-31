@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
@@ -366,9 +367,9 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
       );
     }
     if (!mounted) return;
-    final test = await showDialog<bool>(
+    final test = await showResonanceDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => ResonanceDialog(
         title: Text(context.tr("Finish in your browser")),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -406,9 +407,9 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
                 failure.kind == YoutubeFailureKind.browserCookiesLocked ||
                 failure.kind == YoutubeFailureKind.browserDecryptionFailed;
             if (!mounted || !WindowsChromiumConnector.supports(selectedBrowser) || !browserReadBlocked) rethrow;
-            final choice = await showDialog<_BrowserFallback>(
+            final choice = await showResonanceDialog<_BrowserFallback>(
               context: context,
-              builder: (dialogContext) => AlertDialog(
+              builder: (dialogContext) => ResonanceDialog(
                 title: Text(context.tr('Could not read this browser session')),
                 content: Text(
                   context.tr(
@@ -448,9 +449,9 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
     try {
       await _detector.launchBrowser(browser, 'https://music.youtube.com/');
       if (!mounted) return;
-      final accepted = await showDialog<bool>(
+      final accepted = await showResonanceDialog<bool>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => ResonanceDialog(
           title: Text(context.tr('Connect {0}', [YoutubeAccessService.browserDisplayName(browser)])),
           content: SizedBox(
             width: 460,
@@ -550,9 +551,9 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
     await _run(() => service.connectWindowsCookieFile(path, sourceUrl: widget.sourceUrl));
   }
 
-  Future<String?> _pickBrowser() => showDialog<String>(
+  Future<String?> _pickBrowser() => showResonanceDialog<String>(
     context: context,
-    builder: (dialogContext) => SimpleDialog(
+    builder: (dialogContext) => ResonanceChoiceDialog(
       title: Text(context.tr("Choose the browser where you are signed in to YouTube")),
       children: [
         for (final browser in WindowsBrowserDetector.supported)
@@ -588,9 +589,9 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
 
   Future<bool> _ensureWarning(YoutubeAccessService service) async {
     if (service.warningAcknowledged) return true;
-    final accepted = await showDialog<bool>(
+    final accepted = await showResonanceDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => ResonanceDialog(
         title: Text(context.tr("Account safety")),
         content: Text(
           context.tr(
@@ -608,9 +609,9 @@ class _YoutubeAccessScreenState extends State<YoutubeAccessScreen> {
   }
 
   Future<void> _confirmClear(YoutubeAccessService service) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showResonanceDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => ResonanceDialog(
         title: Text(_isWindows ? context.tr("Disconnect browser session?") : context.tr("Clear imported cookies?")),
         content: Text(context.tr("YouTube requests will return to anonymous access.")),
         actions: [

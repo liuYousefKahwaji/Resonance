@@ -21,6 +21,26 @@ class PlaylistMutation {
   const PlaylistMutation(this.playlistNumber, this.revision, this.kind, {this.promotedFrom});
 }
 
+/// A short-lived, single-use undo. It refuses to overwrite later edits/sync.
+class PlaylistUndo {
+  PlaylistUndo(this._restore);
+  final Future<bool> Function() _restore;
+  bool _used = false;
+  Future<bool> undo() async {
+    if (_used) return false;
+    _used = true;
+    return _restore();
+  }
+}
+
+class _PlaylistSnapshot {
+  const _PlaylistSnapshot(this.tracks, this.sort, this.name);
+  final List<String> tracks;
+  final PlaylistSortState sort;
+  final String name;
+  String get fingerprint => jsonEncode([tracks, sort.toJson(), name]);
+}
+
 class FileService {
   static const String _activePlaylistKey = 'active_resonance_playlist';
   static const String _playlistNamesKey = 'resonance_playlist_names';
@@ -197,7 +217,9 @@ class FileService {
   /// Returns the playlist which should become active.
   Future<int> deletePlaylist(int number) async {
     late int next;
-    await _serialize(number, () async {
+    // Primary-slot promotion also moves another playlist's file. Respect its
+    // writer lock so deletion cannot race an edit/download on that list.
+    await _lockPlaylists(await listPlaylistNumbers(), () async {
       next = await _deletePlaylist(number);
     });
     return next;
@@ -323,6 +345,17 @@ class FileService {
 
   Future<void> favoriteTracks(Iterable<String> tracks) => setTracksFavorite(tracks, true);
 
+  Future<PlaylistUndo?> setTracksFavoriteWithUndo(Iterable<String> tracks, bool favorite) async {
+    final current = await readPlaylistTracks(favoritesPlaylistNumber);
+    final selected = tracks.toList();
+    final sources = await favoriteSourceIds();
+    final identities = selected.map((track) => favoriteIdentity(track, sourceIds: sources)).toSet();
+    final updated = favorite
+        ? [...current, ...selected]
+        : current.where((track) => !identities.contains(favoriteIdentity(track, sourceIds: sources))).toList();
+    return editPlaylistsWithUndo({favoritesPlaylistNumber: updated}, expected: {favoritesPlaylistNumber: current});
+  }
+
   Future<void> setTracksFavorite(Iterable<String> tracks, bool favorite) {
     final selected = tracks.toList(growable: false);
     if (selected.isEmpty) return Future<void>.value();
@@ -397,6 +430,108 @@ class FileService {
     await _writeTracks(playlistNumber, file, normalized, manual: kind == PlaylistMutationKind.reordered);
     await _publish(playlistNumber, kind);
   });
+
+  Future<_PlaylistSnapshot> _snapshot(int number) async => _PlaylistSnapshot(
+    await readPlaylistTracks(number),
+    await playlistSortState(number),
+    (await getPlaylistNames())[number] ?? 'Playlist $number',
+  );
+
+  Future<void> _lockPlaylists(List<int> numbers, Future<void> Function() operation, [int index = 0]) =>
+      index == numbers.length
+      ? operation()
+      : _serialize(numbers[index], () => _lockPlaylists(numbers, operation, index + 1));
+
+  /// Capture and edit under the same locks as sync/download mutations. Multiple
+  /// playlist edits (e.g. Move) are validated together before any write.
+  Future<PlaylistUndo?> editPlaylistsWithUndo(
+    Map<int, List<String>> replacements, {
+    Map<int, List<String>> expected = const {},
+    Map<int, PlaylistSortState> sortStates = const {},
+    bool manual = false,
+  }) async {
+    final numbers = replacements.keys.toList()..sort();
+    final before = <int, _PlaylistSnapshot>{}, after = <int, _PlaylistSnapshot>{};
+    final attempted = <int>[];
+    await _lockPlaylists(numbers, () async {
+      for (final number in numbers) {
+        if (!await (await _playlistFile(number)).exists()) throw StateError('Playlist no longer exists.');
+        final snapshot = await _snapshot(number);
+        if (expected.containsKey(number) && jsonEncode(snapshot.tracks) != jsonEncode(expected[number])) {
+          throw StateError('Playlist changed. Try again.');
+        }
+        before[number] = snapshot;
+      }
+      try {
+        for (final number in numbers) {
+          await _writeTracks(
+            number,
+            await _playlistFile(number),
+            replacements[number]!,
+            state: sortStates[number],
+            manual: manual,
+          );
+          after[number] = await _snapshot(number);
+        }
+      } catch (_) {
+        for (final number in attempted) {
+          final old = before[number]!;
+          await _writeTracks(number, await _playlistFile(number), old.tracks, state: old.sort, preserveOrder: true);
+        }
+        rethrow;
+      }
+    });
+    final changed = numbers.where((n) => before[n]!.fingerprint != after[n]!.fingerprint).toList();
+    if (changed.isEmpty) return null;
+    for (final number in changed) {
+      await _publish(number, PlaylistMutationKind.replaced);
+    }
+    return PlaylistUndo(() async {
+      var restored = false;
+      await _lockPlaylists(changed, () async {
+        for (final number in changed) {
+          if (!await (await _playlistFile(number)).exists() ||
+              (await _snapshot(number)).fingerprint != after[number]!.fingerprint) {
+            return;
+          }
+        }
+        for (final number in changed) {
+          final old = before[number]!;
+          await _writeTracks(number, await _playlistFile(number), old.tracks, state: old.sort, preserveOrder: true);
+        }
+        restored = true;
+      });
+      if (restored) {
+        for (final number in changed) {
+          await _publish(number, PlaylistMutationKind.replaced);
+        }
+      }
+      return restored;
+    });
+  }
+
+  /// Deletion can promote playlist 2 into slot 1. Restore the removed list as a
+  /// new local playlist instead of rolling back edits or cloud links on others.
+  Future<PlaylistUndo?> deletePlaylistWithUndo(int number) async {
+    _PlaylistSnapshot? removed;
+    await _lockPlaylists(await listPlaylistNumbers(), () async {
+      final numbers = await listPlaylistNumbers();
+      if (isFavoritesPlaylist(number) ||
+          !numbers.contains(number) ||
+          numbers.where((n) => !isFavoritesPlaylist(n)).length <= 1) {
+        return;
+      }
+      removed = await _snapshot(number);
+      await _deletePlaylist(number);
+    });
+    final snapshot = removed;
+    if (snapshot == null) return null;
+    return PlaylistUndo(() async {
+      final restored = await createImportedPlaylist(snapshot.name, snapshot.tracks);
+      await restorePlaylistSortState(restored.number, snapshot.sort, tracks: snapshot.tracks);
+      return true;
+    });
+  }
 
   /// A slow cloud read must never overwrite edits made while it was in flight.
   /// Uses the ordinary writer/sorting/mutation path; never touches audio files.

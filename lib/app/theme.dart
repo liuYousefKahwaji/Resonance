@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:resonance/app/route_transitions.dart';
 import 'package:resonance/app/resonance_motion.dart';
 
 @immutable
@@ -605,7 +606,7 @@ ThemeData buildResonanceTheme(
     pageTransitionsTheme: const PageTransitionsTheme(
       builders: {
         TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
-        TargetPlatform.windows: FadeForwardsPageTransitionsBuilder(),
+        TargetPlatform.windows: ResonanceWindowsPageTransitionsBuilder(),
       },
     ),
   );

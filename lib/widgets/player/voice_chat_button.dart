@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:resonance/core/audio/voice_chat_controller.dart';
@@ -19,7 +20,7 @@ class VoiceChatButton extends StatelessWidget {
         size: 19,
         color: controller.enabled ? Theme.of(context).colorScheme.primary : null,
       ),
-      onPressed: () => showDialog<void>(
+      onPressed: () => showResonanceDialog<void>(
         context: context,
         builder: (_) => VoiceChatPanel(controller: controller),
       ),
@@ -51,7 +52,7 @@ class _VoiceChatPanelState extends State<VoiceChatPanel> {
     final c = widget.controller;
     return ListenableBuilder(
       listenable: c,
-      builder: (context, _) => AlertDialog(
+      builder: (context, _) => ResonanceDialog(
         title: Row(
           children: [
             const Icon(Icons.mic_rounded),

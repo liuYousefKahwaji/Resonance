@@ -1,6 +1,8 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:resonance/core/audio/standalone_video_session.dart';
+import 'package:resonance/widgets/common/track_link_menu.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/widgets/player/playback_range_dialog.dart';
 import 'package:resonance/widgets/player/playback_range_indicator.dart';
@@ -631,20 +633,22 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                         ),
                         onPressed: () => showPlaybackRangeDialog(context, handler, item.id, item.title),
                       ),
-                    if (!widget.playlistTrack &&
-                        !widget.syncPeer &&
-                        item != null &&
-                        handler.isStandaloneStreamSession &&
-                        YoutubeTrack(title: '', artist: '', url: item.id).videoId != null)
-                      PopupMenuButton<bool>(
+                    if (!widget.syncPeer && item != null)
+                      TrackLinkMenu(
+                        trackId: item.id,
                         key: const Key('standalone-stream-actions'),
                         tooltip: context.tr("Stream actions"),
                         enabled: !_savingStream,
                         icon: const Icon(Icons.more_horiz_rounded),
-                        onSelected: (download) => unawaited(_saveStandaloneStream(item, download: download)),
-                        itemBuilder: (_) => [
-                          PopupMenuItem(value: false, child: Text(context.tr("Add stream to playlist"))),
-                          PopupMenuItem(value: true, child: Text(context.tr("Download song"))),
+                        onExtraSelected: (action) =>
+                            unawaited(_saveStandaloneStream(item, download: action == 'download')),
+                        extraEntries: [
+                          if (!widget.playlistTrack &&
+                              handler.isStandaloneStreamSession &&
+                              YoutubeTrack(title: '', artist: '', url: item.id).videoId != null) ...[
+                            PopupMenuItem(value: 'stream', child: Text(context.tr("Add stream to playlist"))),
+                            PopupMenuItem(value: 'download', child: Text(context.tr("Download song"))),
+                          ],
                         ],
                       ),
                     if (Platform.isWindows)
@@ -724,7 +728,11 @@ class _StandalonePlayerScreenState extends State<StandalonePlayerScreen> {
                           ),
                         ),
                         StandaloneMetadata(item: item),
-                        PlayerControls(standalone: true, transportLocked: widget.syncPeer),
+                        PlayerControls(
+                          standalone: true,
+                          transportLocked: widget.syncPeer,
+                          onQueue: () => _toggleUpcomingQueue(context, handler),
+                        ),
                       ],
                     ),
                   ),
@@ -960,7 +968,8 @@ class _TrackContent extends StatelessWidget {
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 760;
       final size = standaloneArtworkSize(constraints);
-      return Center(
+      return Align(
+        alignment: compact ? const Alignment(0, -.35) : Alignment.center,
         child: Padding(
           padding: EdgeInsets.all(compact ? 16 : 24),
           child: _ArtworkBox(item: item, isPlaying: isPlaying, size: size),
@@ -1108,11 +1117,11 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
       targetDuration: widget.handler.currentSourceDuration ?? item.duration,
     );
     final candidate = Platform.isWindows
-        ? await showDialog<LrclibCandidate>(
+        ? await showResonanceDialog<LrclibCandidate>(
             context: context,
-            builder: (context) => Dialog(
-              clipBehavior: Clip.antiAlias,
-              child: SizedBox(
+            builder: (context) => ResonanceDialog(
+              contentPadding: EdgeInsets.zero,
+              content: SizedBox(
                 width: 640,
                 height: math.min(MediaQuery.sizeOf(context).height * 0.78, 720),
                 child: picker,
@@ -1932,7 +1941,12 @@ class StandaloneMetadata extends StatelessWidget {
     final artist = item?.artist ?? '';
     final theme = Theme.of(context);
     return Padding(
-      padding: EdgeInsetsDirectional.fromSTEB(Platform.isWindows ? 32 : 24, 8, Platform.isWindows ? 32 : 24, 6),
+      padding: EdgeInsetsDirectional.fromSTEB(
+        Platform.isWindows ? 32 : 24,
+        Platform.isWindows ? 8 : 2,
+        Platform.isWindows ? 32 : 24,
+        6,
+      ),
       child: Align(
         alignment: Platform.isWindows ? AlignmentDirectional.centerStart : Alignment.center,
         child: ConstrainedBox(

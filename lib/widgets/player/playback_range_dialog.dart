@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:resonance/core/audio/audio_service.dart';
@@ -39,7 +40,7 @@ Future<void> showPlaybackRangeDialog(
   String title, {
   Future<AudioEnvelope?> Function(String)? waveformLoader,
 }) async {
-  await showDialog<void>(
+  await showResonanceDialog<void>(
     barrierDismissible: false,
     context: context,
     builder: (_) => PlaybackRangeDialog(handler: handler, path: path, title: title, waveformLoader: waveformLoader),
@@ -296,7 +297,7 @@ class _PlaybackRangeDialogState extends State<PlaybackRangeDialog> {
   @override
   Widget build(BuildContext context) => PopScope(
     canPop: !_busy,
-    child: AlertDialog(
+    child: ResonanceDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       title: Text(context.tr('Trim playback')),
       content: SizedBox(

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:resonance/models/youtube_video_source.dart';
@@ -52,18 +53,33 @@ class YoutubeVideoService {
       final runner = WindowsYtdlpRunner.instance;
       final args = ['--dump-single-json', '--no-download', '--no-playlist', '--format', format, url];
       late final WindowsYtdlpResult result;
+      final request = YoutubeRequest();
+      final timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+        if (isCurrent?.call() == false) request.cancel();
+      });
       try {
-        result = await runner.run(
-          args,
-          guest: true,
-          timeout: const Duration(seconds: 15),
-          reportFailure: !runner.hasConfiguredAccess,
-          sourceUrl: url,
-          requireOutput: true,
-        );
-      } catch (_) {
-        if (!runner.hasConfiguredAccess) rethrow;
-        result = await runner.run(args, sourceUrl: url, requireOutput: true, timeout: const Duration(seconds: 15));
+        try {
+          result = await runner.run(
+            args,
+            guest: true,
+            timeout: const Duration(seconds: 15),
+            reportFailure: !runner.hasConfiguredAccess,
+            sourceUrl: url,
+            requireOutput: true,
+            request: request,
+          );
+        } catch (error) {
+          if (error is YoutubeRequestCancelled || !runner.hasConfiguredAccess) rethrow;
+          result = await runner.run(
+            args,
+            sourceUrl: url,
+            requireOutput: true,
+            timeout: const Duration(seconds: 15),
+            request: request,
+          );
+        }
+      } finally {
+        timer.cancel();
       }
       value = ResolvedYoutubeVideo.fromExtraction(jsonDecode(result.stdout) as Map<String, dynamic>);
     } else {

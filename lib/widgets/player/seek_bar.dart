@@ -25,7 +25,8 @@ import 'package:resonance/core/audio/audio_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SeekBar extends StatefulWidget {
-  const SeekBar({super.key});
+  const SeekBar({super.key, this.showSeekSteps = true, this.showTimestamps = true, this.slim = false});
+  final bool showSeekSteps, showTimestamps, slim;
 
   @override
   State<SeekBar> createState() => _SeekBarState();
@@ -259,7 +260,7 @@ class _SeekBarState extends State<SeekBar> {
       fontSize: 11,
       fontWeight: FontWeight.w600,
       letterSpacing: 0.3,
-      color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
     );
 
     // Only a new source loading dims the bar. Buffering is transient and
@@ -273,7 +274,7 @@ class _SeekBarState extends State<SeekBar> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        if (!_range.isFull)
+        if (!_range.isFull && !widget.slim)
           Tooltip(
             message: playbackRangeLabel(context, _range),
             child: SizedBox(
@@ -294,14 +295,17 @@ class _SeekBarState extends State<SeekBar> {
               ),
             ),
           ),
-        Text(_formatDuration(_range.source(_displayPosition), showHours: showHours), style: timestampStyle),
-        const SizedBox(width: 8),
-        _SeekStepButton(
-          label: '-$_seekStepSeconds',
-          icon: Icons.replay_rounded,
-          onPressed: sliderDisabled ? null : () => handler.seekBySeconds(-_seekStepSeconds),
-        ),
-        const SizedBox(width: 6),
+        if (widget.showTimestamps) ...[
+          Text(_formatDuration(_range.source(_displayPosition), showHours: showHours), style: timestampStyle),
+          const SizedBox(width: 8),
+        ],
+        if (widget.showSeekSteps)
+          _SeekStepButton(
+            label: '-$_seekStepSeconds',
+            icon: Icons.replay_rounded,
+            onPressed: sliderDisabled ? null : () => handler.seekBySeconds(-_seekStepSeconds),
+          ),
+        if (widget.showSeekSteps) const SizedBox(width: 6),
 
         // Spinner: only shown while a genuinely new track is loading.
         if (_isLoadingNewTrack)
@@ -333,6 +337,7 @@ class _SeekBarState extends State<SeekBar> {
                   children: [
                     SliderTheme(
                       data: SliderTheme.of(context).copyWith(
+                        padding: widget.slim ? EdgeInsets.zero : null,
                         showValueIndicator: ShowValueIndicator.never,
                         activeTrackColor: activeTrackColor,
                         trackShape: _range.isFull || _sourceDuration.inMilliseconds <= 0
@@ -353,31 +358,34 @@ class _SeekBarState extends State<SeekBar> {
                         overlayShape: const RoundSliderOverlayShape(overlayRadius: 12.0),
                         overlayColor: primary.withValues(alpha: 0.15),
                       ),
-                      child: Slider(
-                        value: _isScrubbing ? _sliderValue.clamp(0.0, 1.0) : _displaySliderValue,
-                        min: 0,
-                        max: 1,
-                        divisions: null,
-                        onChanged: sliderDisabled
-                            ? null
-                            : (value) {
-                                setState(() {
-                                  _isScrubbing = true;
-                                  _sliderValue = _clampFraction(value);
-                                });
-                                _updateHoverPosition(value * maxWidth, maxWidth);
-                              },
-                        onChangeEnd: sliderDisabled
-                            ? null
-                            : (value) {
-                                final sourcePosition = _sourceDuration * _clampFraction(value);
-                                final newPosition = _range.relative(sourcePosition, sourceDuration: _sourceDuration);
-                                setState(() {
-                                  _pendingSeekPosition = newPosition;
-                                  _isScrubbing = false;
-                                });
-                                unawaited(_seekTo(handler, newPosition));
-                              },
+                      child: SizedBox(
+                        height: widget.slim ? 16 : null,
+                        child: Slider(
+                          value: _isScrubbing ? _sliderValue.clamp(0.0, 1.0) : _displaySliderValue,
+                          min: 0,
+                          max: 1,
+                          divisions: null,
+                          onChanged: sliderDisabled
+                              ? null
+                              : (value) {
+                                  setState(() {
+                                    _isScrubbing = true;
+                                    _sliderValue = _clampFraction(value);
+                                  });
+                                  _updateHoverPosition(value * maxWidth, maxWidth);
+                                },
+                          onChangeEnd: sliderDisabled
+                              ? null
+                              : (value) {
+                                  final sourcePosition = _sourceDuration * _clampFraction(value);
+                                  final newPosition = _range.relative(sourcePosition, sourceDuration: _sourceDuration);
+                                  setState(() {
+                                    _pendingSeekPosition = newPosition;
+                                    _isScrubbing = false;
+                                  });
+                                  unawaited(_seekTo(handler, newPosition));
+                                },
+                        ),
                       ),
                     ),
 
@@ -426,14 +434,17 @@ class _SeekBarState extends State<SeekBar> {
             },
           ),
         ),
-        const SizedBox(width: 8),
-        _SeekStepButton(
-          label: '+$_seekStepSeconds',
-          icon: Icons.redo_rounded,
-          onPressed: sliderDisabled ? null : () => handler.seekBySeconds(_seekStepSeconds),
-        ),
-        const SizedBox(width: 6),
-        Text(_formatDuration(_sourceDuration, showHours: showHours), style: timestampStyle),
+        if (widget.showSeekSteps) const SizedBox(width: 8),
+        if (widget.showSeekSteps)
+          _SeekStepButton(
+            label: '+$_seekStepSeconds',
+            icon: Icons.redo_rounded,
+            onPressed: sliderDisabled ? null : () => handler.seekBySeconds(_seekStepSeconds),
+          ),
+        if (widget.showTimestamps) ...[
+          const SizedBox(width: 6),
+          Text(_formatDuration(_sourceDuration, showHours: showHours), style: timestampStyle),
+        ],
       ],
     );
   }

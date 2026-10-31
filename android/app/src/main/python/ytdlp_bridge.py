@@ -18,6 +18,10 @@ import json
 import os
 import http.cookiejar
 import re
+import time
+import copy
+import hashlib
+import threading
 import yt_dlp
 
 
@@ -33,6 +37,50 @@ _BASE_OPTS = {
 
 _MAX_DIAGNOSTIC_CHARS = 4096
 _QUICKJS_PATH = None
+_AUDIO_INFO = {}
+_AUDIO_INFO_LOCK = threading.Lock()
+
+
+def _audio_scope(url, cookie_file):
+    # Kotlin gives each call a different temporary cookie path. Scope by its
+    # contents instead; no credentials or digest leave this process.
+    try:
+        with open(cookie_file, 'rb') as cookie:
+            identity = hashlib.sha256(cookie.read()).digest()
+    except (OSError, TypeError):
+        identity = None
+    return url, identity
+
+
+def _remember_audio_info(url, cookie_file, info, payload):
+    from urllib.parse import urlparse, parse_qs
+    expected = parse_qs(urlparse(url).query).get('v', [None])[0]
+    if not expected or info.get('id') != expected or info.get('vcodec') != 'none' or info.get('is_live'):
+        return
+    value = copy.deepcopy(info)
+    value['http_headers'] = dict(payload['headers'])
+    with _AUDIO_INFO_LOCK:
+        _AUDIO_INFO[_audio_scope(url, cookie_file)] = (time.monotonic(), value)
+        while len(_AUDIO_INFO) > 12:
+            _AUDIO_INFO.pop(next(iter(_AUDIO_INFO)))
+
+
+def _take_audio_info(url, cookie_file):
+    from urllib.parse import urlparse, parse_qs
+    key = _audio_scope(url, cookie_file)
+    with _AUDIO_INFO_LOCK:
+        cached = _AUDIO_INFO.pop(key, None)
+    if not cached or time.monotonic() - cached[0] > 300:
+        return None
+    info = cached[1]
+    expiry = parse_qs(urlparse(info.get('url', '')).query).get('expire', [None])[0]
+    if expiry is not None:
+        try:
+            if int(expiry) <= time.time() + 90:
+                return None
+        except ValueError:
+            return None
+    return copy.deepcopy(info)
 
 
 def configure_runtime(native_library_dir=None):
@@ -832,8 +880,18 @@ def get_stream_data(url: str, cookie_file=None, prefer_authenticated=False, canc
         "format": "bestaudio[has_drm!=true]/best[has_drm!=true]/bestaudio/best",
         "no_playlist": True,
     }
+    def prepare(info, ydl):
+        payload = _stream_payload(info, ydl)
+        try:
+            _remember_audio_info(url, cookie_file, info, payload)
+        except Exception:
+            # Reuse is optional; unsupported extractor internals must never
+            # prevent a perfectly playable stream from starting.
+            pass
+        return payload
+
     payload, _ = _extract_info(
-        url, opts, cookie_file=cookie_file, transform=_stream_payload,
+        url, opts, cookie_file=cookie_file, transform=prepare,
         prefer_guest=not prefer_authenticated, cancelled=cancelled,
     )
     return json.dumps(payload, ensure_ascii=False)
@@ -893,7 +951,7 @@ def test_access(url: str, cookie_file) -> str:
 
 # ── download ───────────────────────────────────────────────────────────────────
 
-def download(url: str, output_dir: str, event_sink, cookie_file=None) -> None:
+def download(url: str, output_dir: str, event_sink, cookie_file=None, include_cover=True) -> None:
     """
     Download audio to output_dir, reporting progress via event_sink.
 
@@ -971,7 +1029,7 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None) -> None:
                 video_id = info.get("id") or ""
                 cover_path = ""
                 thumbnail_url = info.get("thumbnail")
-                if thumbnail_url:
+                if thumbnail_url and include_cover:
                     try:
                         cover_path = filepath + ".cover"
                         request = Request(thumbnail_url, headers={"User-Agent": "Mozilla/5.0"})
@@ -1031,10 +1089,26 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None) -> None:
 
     try:
         event_sink.success("progress:0:Finding audio...")
+        cached = _take_audio_info(url, cookie_file)
         for attempt in range(2):
             try:
-                info, _ = _extract_info(url, opts, download=True, cookie_file=cookie_file,
-                                        prefer_guest=True)
+                if cached is not None:
+                    try:
+                        with _make_ydl(opts) as ydl:
+                            info = ydl.process_ie_result(cached, download=True)
+                    except Exception:
+                        if current_item[0] > 1:
+                            raise
+                        event_sink.success('progress:0:Refreshing audio link...')
+                        # A different extractor client can select another
+                        # encoding. Never append it to a stale cached .part.
+                        opts['continuedl'] = False
+                        info, _ = _extract_info(url, opts, download=True, cookie_file=cookie_file, prefer_guest=True)
+                    finally:
+                        cached = None
+                else:
+                    info, _ = _extract_info(url, opts, download=True, cookie_file=cookie_file,
+                                            prefer_guest=True)
                 break
             except Exception as error:
                 # A failed initial connection is not retried by yt-dlp's media

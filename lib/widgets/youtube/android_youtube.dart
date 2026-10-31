@@ -11,6 +11,8 @@ import 'package:resonance/app/theme.dart';
 //  5. Search-results trailing icons use a Column so they don't overflow.
 
 import 'dart:async';
+import 'package:resonance/widgets/common/track_link_menu.dart';
+import 'package:resonance/services/download/download_preferences.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:ffmpeg_kit_audio_flutter/ffmpeg_kit.dart';
@@ -117,8 +119,8 @@ class AndroidYoutubeDownloader {
     return YoutubeTrack.fromJson(data);
   }
 
-  Stream<String> download(String url, String outputDir) {
-    return AndroidDownloadSession.open(url, outputDir);
+  Stream<String> download(String url, String outputDir, {bool? includeCover}) {
+    return AndroidDownloadSession.open(url, outputDir, includeCover: includeCover);
   }
 
   Future<String> _resolveOutputDir() async {
@@ -150,8 +152,9 @@ class AndroidYoutubeDownloader {
     final pendingTracks =
         <String, ({String path, String? title, String? artist, String? coverPath, String? videoId})>{};
     final done = Completer<void>();
+    final convertToMp3 = await DownloadPreferences.format() == AudioDownloadFormat.mp3;
     late final StreamSubscription<String> subscription;
-    subscription = download(url, await outputDir).listen(
+    subscription = download(url, await outputDir, includeCover: convertToMp3).listen(
       (event) {
         if (event.startsWith('progress:')) {
           final parts = event.split(':');
@@ -202,13 +205,25 @@ class AndroidYoutubeDownloader {
       if (pendingTracks.isEmpty) throw Exception('The download completed without an audio file');
       final results = <YoutubeDownloadResult>[];
       for (final track in pendingTracks.values) {
-        onProgress(99, 'Converting audio...');
-        final converted = await convertAndroidYoutubeAudioToMp3(
+        if (convertToMp3) onProgress(99, 'Converting audio...');
+        final converted = convertToMp3 ? await convertAndroidYoutubeAudioToMp3(
           track.path,
           title: track.title,
           artist: track.artist,
           coverPath: track.coverPath,
-        );
+        ) : track.path;
+        final output = File(converted);
+        if (!await output.exists() || await output.length() == 0) {
+          throw StateError('The download produced no audio file');
+        }
+        await MetadataCacheService.set(converted, track.title ?? historyTitle ?? p.basenameWithoutExtension(converted),
+          track.artist ?? historyArtist ?? 'Unknown Artist',
+          artworkUrl: track.videoId == null ? null : TrackSourceRepository.thumbnailUrlFor(track.videoId!));
+        if (!convertToMp3) {
+          if (track.coverPath case final cover?) {
+            try { await File(cover).delete(); } catch (_) {}
+          }
+        }
         final result = YoutubeDownloadResult(
           localPath: converted,
           youtubeVideoId: track.videoId,
@@ -759,6 +774,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      TrackLinkMenu(trackId: result.url),
                       SizedBox(
                         width: 36,
                         height: 36,

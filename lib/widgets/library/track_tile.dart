@@ -1,4 +1,7 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
+import 'package:resonance/providers/theme_provider.dart';
+import 'package:resonance/widgets/common/track_link_menu.dart';
 import 'package:resonance/widgets/player/playback_range_dialog.dart';
 import 'package:resonance/widgets/player/playback_range_indicator.dart';
 // lib/widgets/library/track_tile.dart
@@ -237,7 +240,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
     }
 
     try {
-      await showDialog<void>(
+      await showResonanceDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) {
@@ -260,7 +263,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
 
               return PopScope(
                 canPop: !saving,
-                child: AlertDialog(
+                child: ResonanceDialog(
                   title: Row(
                     children: [
                       Icon(Icons.edit_rounded, size: 18, color: Theme.of(dialogContext).colorScheme.primary),
@@ -621,7 +624,12 @@ class _TrackTileContent extends StatelessWidget {
     final isFavorite = favorites?.isFavorite(trackPath) ?? false;
     final primary = Theme.of(context).colorScheme.primary;
     final windowsNative = useWindowsNativeControls(context);
-    final tileRadius = windowsNative ? 4.0 : 12.0;
+    final modern = context.watch<ThemeProvider?>()?.modernLayout ?? false;
+    final tileRadius = modern
+        ? 8.0
+        : windowsNative
+        ? 4.0
+        : 12.0;
     final fileName = p.basenameWithoutExtension(trackPath);
     final isStream = trackPath.startsWith('http://') || trackPath.startsWith('https://');
 
@@ -648,7 +656,14 @@ class _TrackTileContent extends StatelessWidget {
         final isPlaying = isCurrentTrack && playback.playing && !isLoading;
 
         return Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: windowsNative ? 2 : 3),
+          padding: EdgeInsets.symmetric(
+            horizontal: modern ? 20 : 12,
+            vertical: modern
+                ? 1
+                : windowsNative
+                ? 2
+                : 3,
+          ),
           child: AnimatedContainer(
             duration: resonanceDuration(context, resonanceMotion(context).stateChange),
             curve: resonanceMotion(context).standardCurve,
@@ -657,15 +672,19 @@ class _TrackTileContent extends StatelessWidget {
                   ? primary.withValues(alpha: isDark ? 0.22 : 0.12)
                   : isCurrentTrack
                   ? (isDark ? primary.withValues(alpha: 0.12) : primary.withValues(alpha: 0.06))
+                  : modern
+                  ? Colors.transparent
                   : Theme.of(context).colorScheme.surface,
               borderRadius: resonanceBorderRadius(context, tileRadius, rounderRadius: windowsNative ? 11 : 23),
-              border: Border.all(
-                color: selected || isCurrentTrack
-                    ? primary.withValues(alpha: selected ? 0.75 : 0.45)
-                    : Theme.of(context).colorScheme.outline,
-                width: selected || isCurrentTrack ? 1.5 : 1,
-              ),
-              boxShadow: isCurrentTrack && !windowsNative
+              border: modern
+                  ? null
+                  : Border.all(
+                      color: selected || isCurrentTrack
+                          ? primary.withValues(alpha: selected ? 0.75 : 0.45)
+                          : Theme.of(context).colorScheme.outline,
+                      width: selected || isCurrentTrack ? 1.5 : 1,
+                    ),
+              boxShadow: isCurrentTrack && !windowsNative && !modern
                   ? [
                       BoxShadow(
                         color: primary.withValues(alpha: isDark ? 0.12 : 0.08),
@@ -685,7 +704,18 @@ class _TrackTileContent extends StatelessWidget {
                 onLongPress: onSelectionToggle,
                 borderRadius: resonanceBorderRadius(context, tileRadius, rounderRadius: windowsNative ? 11 : 23),
                 child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: windowsNative ? 10 : 12, vertical: windowsNative ? 8 : 10),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: modern
+                        ? 8
+                        : windowsNative
+                        ? 10
+                        : 12,
+                    vertical: modern
+                        ? 8
+                        : windowsNative
+                        ? 8
+                        : 10,
+                  ),
                   child: Row(
                     children: [
                       AnimatedContainer(
@@ -762,6 +792,7 @@ class _TrackTileContent extends StatelessWidget {
                         isLoading: isLoading,
                         coverArt: coverArt,
                         artworkUrl: artworkUrl,
+                        size: modern ? 42 : 34,
                       ),
                       const SizedBox(width: 12),
 
@@ -780,7 +811,7 @@ class _TrackTileContent extends StatelessWidget {
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       fontWeight: isCurrentTrack ? FontWeight.w700 : FontWeight.w500,
-                                      fontSize: 13,
+                                      fontSize: modern ? 14 : 13,
                                       color: isCurrentTrack
                                           ? primary
                                           : (isDark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A)),
@@ -797,9 +828,11 @@ class _TrackTileContent extends StatelessWidget {
                               resolvedArtist,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF64748B),
+                              style: TextStyle(
+                                fontSize: modern ? 12 : 11,
+                                color: modern
+                                    ? Theme.of(context).colorScheme.onSurfaceVariant
+                                    : const Color(0xFF64748B),
                                 fontWeight: FontWeight.w400,
                               ),
                             ),
@@ -824,6 +857,13 @@ class _TrackTileContent extends StatelessWidget {
                             padding: WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: windowsNative ? 3 : 6)),
                           ),
                           menuChildren: [
+                            if (modern)
+                              MenuItemButton(
+                                leadingIcon: const Icon(Icons.playlist_remove_rounded, size: 19),
+                                onPressed: onDelete,
+                                child: Text(context.tr('Remove from playlist')),
+                              ),
+                            TrackLinkMenuSection(trackId: trackPath),
                             if (favorites != null)
                               MenuItemButton(
                                 leadingIcon: Icon(
@@ -934,14 +974,15 @@ class _TrackTileContent extends StatelessWidget {
                             ),
                           ),
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.close_rounded, size: 16),
-                          tooltip: context.tr("Remove from playlist"),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                          color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
-                          onPressed: onDelete,
-                        ),
+                        if (!modern)
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded, size: 16),
+                            tooltip: context.tr("Remove from playlist"),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            color: isDark ? const Color(0xFF475569) : const Color(0xFF94A3B8),
+                            onPressed: onDelete,
+                          ),
                       ],
                     ],
                   ),
@@ -1016,6 +1057,7 @@ class _SkeletonTile extends StatelessWidget {
 /// Track icon — shows a loading spinner for streams that are buffering,
 /// a waveform for playing, or a music/sensor icon otherwise.
 class _TrackIcon extends StatelessWidget {
+  final double size;
   final bool isPlaying;
   final bool isStream;
   final bool isLoading;
@@ -1023,6 +1065,7 @@ class _TrackIcon extends StatelessWidget {
   final String? artworkUrl;
 
   const _TrackIcon({
+    this.size = 34,
     required this.isPlaying,
     this.isStream = false,
     this.isLoading = false,
@@ -1038,8 +1081,8 @@ class _TrackIcon extends StatelessWidget {
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 250),
-      width: 34,
-      height: 34,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         color: isActive
             ? primary.withValues(alpha: isDark ? 0.2 : 0.12)
@@ -1055,7 +1098,12 @@ class _TrackIcon extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 2, color: primary),
               )
             : coverArt != null
-            ? ArtworkThumbnail(key: ValueKey('cover-${coverArt!.length}'), bytes: coverArt!, size: 34, borderRadius: 8)
+            ? ArtworkThumbnail(
+                key: ValueKey('cover-${coverArt!.length}'),
+                bytes: coverArt!,
+                size: size,
+                borderRadius: 6,
+              )
             : isStream && artworkUrl != null
             ? _StreamArtworkThumbnail(url: artworkUrl!)
             : Icon(

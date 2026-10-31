@@ -9,7 +9,7 @@ class AndroidDownloadSession {
   static const _events = EventChannel('resonance/android_youtube/events');
   static int _nextId = 0;
 
-  static Stream<String> open(String url, String outputDir) {
+  static Stream<String> open(String url, String outputDir, {bool? includeCover}) {
     final id = ++_nextId;
     StreamSubscription<dynamic>? subscription;
     var started = false;
@@ -27,7 +27,12 @@ class AndroidDownloadSession {
                   started = true;
                   unawaited(
                     _method
-                        .invokeMethod<void>('download', {'url': url, 'outputDir': outputDir, 'requestId': id})
+                        .invokeMethod<void>('download', {
+                          'url': url,
+                          'outputDir': outputDir,
+                          'requestId': id,
+                          if (includeCover != null) 'includeCover': includeCover,
+                        })
                         .catchError((Object error, StackTrace stack) {
                           if (!cancelled) controller.addError(error, stack);
                         }),

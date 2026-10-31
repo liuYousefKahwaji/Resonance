@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 // lib/platform/android/storage_permission_service.dart
 //
 // Handles runtime audio/storage permissions on Android using permission_handler.
@@ -72,9 +73,9 @@ class StoragePermissionService {
     if (permStatus.isPermanentlyDenied) {
       // Can't request again — send user to settings
       if (context.mounted) {
-        await showDialog(
+        await showResonanceDialog(
           context: context,
-          builder: (_) => AlertDialog(
+          builder: (_) => ResonanceDialog(
             title: const Text('Permission Required'),
             content: const Text(
               'Resonance needs access to your audio files to import songs. '
@@ -103,9 +104,9 @@ class StoragePermissionService {
     if (context.mounted) {
       bool proceed = true;
       if (permStatus.isDenied) {
-        await showDialog(
+        await showResonanceDialog(
           context: context,
-          builder: (_) => AlertDialog(
+          builder: (_) => ResonanceDialog(
             title: const Text('Permission Required'),
             content: const Text(
               'Resonance needs access to your audio files to import songs.',

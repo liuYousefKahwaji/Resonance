@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:audio_service/audio_service.dart';
@@ -13,19 +14,17 @@ class PlaybackSettings extends StatelessWidget {
   Widget build(BuildContext context) {
     final handler = Provider.of<PlayerHandler>(context);
     return IconButton(
-      icon: const Icon(Icons.settings_overscan), // or Icons.speed
+      icon: const Icon(Icons.tune_rounded),
       tooltip: context.tr("Playback Settings"),
-      onPressed: () {
-        showDialog(
-          context: context,
-          builder: (context) {
-            return _PlaybackSettingsDialog(handler: handler);
-          },
-        );
-      },
+      onPressed: () => showPlaybackSettings(context, handler: handler),
     );
   }
 }
+
+Future<void> showPlaybackSettings(BuildContext context, {PlayerHandler? handler}) => showResonanceDialog<void>(
+  context: context,
+  builder: (_) => _PlaybackSettingsDialog(handler: handler ?? context.read<PlayerHandler>()),
+);
 
 class _PlaybackSettingsDialog extends StatefulWidget {
   final PlayerHandler handler;
@@ -64,7 +63,7 @@ class _PlaybackSettingsDialogState extends State<_PlaybackSettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return ResonanceDialog(
       title: Text(context.tr("Playback Settings")),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 380),

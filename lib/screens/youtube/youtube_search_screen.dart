@@ -1,7 +1,9 @@
+import 'package:resonance/app/route_transitions.dart';
 import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
+import 'package:resonance/widgets/common/track_link_menu.dart';
 import 'dart:io';
 
 import 'package:flutter/gestures.dart';
@@ -63,6 +65,9 @@ class YoutubeSearchScreen extends StatefulWidget {
   final Duration previewDelay;
   final bool embedded;
   final bool startOnMusicHome;
+  final bool searchOnly;
+  final bool compactResults;
+  final Future<void> Function(YoutubeTrack, List<YoutubeTrack>)? onPlay;
   final VoidCallback? onLibraryChanged;
   final VoidCallback? onOpenLibrary;
 
@@ -81,6 +86,9 @@ class YoutubeSearchScreen extends StatefulWidget {
     this.previewDelay = const Duration(milliseconds: 120),
     this.embedded = false,
     this.startOnMusicHome = false,
+    this.searchOnly = false,
+    this.compactResults = false,
+    this.onPlay,
     this.onLibraryChanged,
     this.onOpenLibrary,
   });
@@ -117,6 +125,8 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   bool _hasMoreSearchResults = false;
   bool _loadingMoreResults = false;
   String? _busyUrl;
+  String? _playingUrl;
+  int _playGeneration = 0;
   PlaylistProfile? _suggestionProfile;
   List<YoutubeTrack> _suggestionTracks = const [];
   bool _suggestionLoading = false;
@@ -150,7 +160,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _submit();
       });
-    } else {
+    } else if (!widget.searchOnly) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (_suggestionMode == _SuggestionMode.youtubeMusic) {
@@ -235,6 +245,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         _error = null;
       });
     }
+    if (widget.searchOnly) return;
     if (_suggestionMode == _SuggestionMode.resonance && _suggestionProfile == null && !_suggestionLoading) {
       unawaited(_loadSuggestions());
     } else if (_suggestionMode == _SuggestionMode.youtubeMusic && _youtubeMusicHomeData == null) {
@@ -444,7 +455,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     if (shelf != null && shelf.items.isNotEmpty) {
       return _YoutubeMusicShelf(
         shelf: shelf,
-        busyUrl: _busyUrl,
+        busyUrl: _playingUrl ?? _busyUrl,
         onPlay: _play,
         onStream: _stream,
         onDownload: _download,
@@ -833,8 +844,9 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   }
 
   Future<void> _play(YoutubeTrack track) async {
-    if (_busyUrl != null) return;
-    setState(() => _busyUrl = track.url);
+    if (_playingUrl == track.url) return;
+    final generation = ++_playGeneration;
+    setState(() => _playingUrl = track.url);
     try {
       unawaited(
         _rememberSource(track, TrackSourceMethod.manuallySelected).catchError((Object error) {
@@ -844,7 +856,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       if (!mounted) return;
       await _playStandaloneQueue(track, _standaloneSourceForCurrentView());
     } catch (error) {
-      if (mounted) {
+      if (mounted && generation == _playGeneration) {
         await showYoutubeFailure(
           context,
           error,
@@ -853,7 +865,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         );
       }
     } finally {
-      if (mounted) setState(() => _busyUrl = null);
+      if (mounted && generation == _playGeneration) setState(() => _playingUrl = null);
     }
   }
 
@@ -862,6 +874,10 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     List<YoutubeTrack> source, {
     bool relatedQueue = true,
   }) async {
+    if (widget.onPlay case final play?) {
+      await play(selected, source);
+      return;
+    }
     final queue = <StandaloneStreamQueueItem>[];
     final seen = <String>{};
     for (final item in source) {
@@ -903,17 +919,18 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       pageBuilder: (_, __, ___) => StandalonePlayerScreen(onLibraryChanged: widget.onLibraryChanged),
       transitionDuration: const Duration(milliseconds: 420),
       reverseTransitionDuration: const Duration(milliseconds: 420),
-      transitionsBuilder: (_, animation, __, child) => FadeTransition(opacity: animation, child: child),
+      transitionsBuilder: resonanceFadeTransition,
     );
     final page = Navigator.push<String?>(context, route);
     try {
       await playback;
     } catch (_) {
-      if (mounted && route.isCurrent) Navigator.pop(context);
-      await page;
+      if (mounted && route.isCurrent && context.read<PlayerHandler>().mediaItem.value?.id == selected.url) {
+        Navigator.pop(context);
+      }
       rethrow;
     }
-    await page;
+    unawaited(page);
   }
 
   Future<void> _playCollection(YoutubeMusicHomeItem item) async {
@@ -1071,52 +1088,72 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
             final showQueue = queue.queueMode;
             final search = Column(
               children: [
-                Padding(
-                  padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 10),
-                  child: TextField(
-                    key: const Key('youtube-search-field'),
-                    controller: _controller,
-                    focusNode: _searchFocus,
-                    autofocus: !widget.embedded,
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (_) => _submit(),
-                    onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
-                    decoration: InputDecoration(
-                      hintText: context.tr(
-                        _searchSource == YoutubeSearchSource.music
-                            ? 'Search YouTube Music or paste a link'
-                            : "Search YouTube or paste a link",
-                      ),
-                      prefixIcon: const Icon(Icons.search_rounded),
-                      suffixIcon: IconButton(
-                        key: const Key('youtube-search-action'),
-                        onPressed: _controller.text.isNotEmpty
-                            ? () {
-                                _controller.clear();
-                                _searchFocus.requestFocus();
-                              }
-                            : _loading
-                            ? null
-                            : _submit,
-                        tooltip: context.tr(_controller.text.isNotEmpty ? 'Clear search' : 'Search'),
-                        icon: AnimatedSwitcher(
-                          duration: MediaQuery.disableAnimationsOf(context)
-                              ? Duration.zero
-                              : const Duration(milliseconds: 160),
-                          transitionBuilder: (child, animation) => FadeTransition(
-                            opacity: animation,
-                            child: ScaleTransition(scale: animation, child: child),
-                          ),
-                          child: Icon(
-                            _controller.text.isNotEmpty ? Icons.close_rounded : Icons.arrow_forward_rounded,
-                            key: ValueKey(_controller.text.isNotEmpty),
+                if (!widget.compactResults ||
+                    widget.searchOnly ||
+                    _controller.text.trim().isNotEmpty ||
+                    widget.recognitionLabel != null)
+                  Padding(
+                    padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 10),
+                    child: TextField(
+                      key: const Key('youtube-search-field'),
+                      controller: _controller,
+                      focusNode: _searchFocus,
+                      autofocus: !widget.embedded,
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => _submit(),
+                      onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
+                      decoration: InputDecoration(
+                        hintText: context.tr(
+                          _searchSource == YoutubeSearchSource.music
+                              ? 'Search YouTube Music or paste a link'
+                              : "Search YouTube or paste a link",
+                        ),
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon: IconButton(
+                          key: const Key('youtube-search-action'),
+                          onPressed: _controller.text.isNotEmpty
+                              ? () {
+                                  _controller.clear();
+                                  _searchFocus.requestFocus();
+                                }
+                              : _loading
+                              ? null
+                              : _submit,
+                          tooltip: context.tr(_controller.text.isNotEmpty ? 'Clear search' : 'Search'),
+                          icon: AnimatedSwitcher(
+                            duration: MediaQuery.disableAnimationsOf(context)
+                                ? Duration.zero
+                                : const Duration(milliseconds: 160),
+                            transitionBuilder: (child, animation) => FadeTransition(
+                              opacity: animation,
+                              child: ScaleTransition(scale: animation, child: child),
+                            ),
+                            child: Icon(
+                              _controller.text.isNotEmpty ? Icons.close_rounded : Icons.arrow_forward_rounded,
+                              key: ValueKey(_controller.text.isNotEmpty),
+                            ),
                           ),
                         ),
+                        filled: widget.compactResults ? true : null,
+                        fillColor: widget.compactResults ? Theme.of(context).colorScheme.surfaceContainer : null,
+                        isDense: widget.compactResults ? true : null,
+                        contentPadding: widget.compactResults
+                            ? const EdgeInsets.symmetric(vertical: 14, horizontal: 16)
+                            : null,
+                        enabledBorder: widget.compactResults
+                            ? OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)
+                            : null,
+                        focusedBorder: widget.compactResults
+                            ? OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: BorderSide(color: Theme.of(context).colorScheme.primary),
+                              )
+                            : null,
                       ),
                     ),
                   ),
-                ),
-                _buildSearchSourceTabs(),
+                if (!widget.compactResults || widget.searchOnly || _controller.text.trim().isNotEmpty)
+                  _buildSearchSourceTabs(),
                 Expanded(child: _buildBody()),
                 if (Platform.isAndroid && showQueue)
                   InkWell(
@@ -1153,7 +1190,9 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
   }
 
   Widget _buildBody() {
-    if (_controller.text.trim().isEmpty && widget.recognitionLabel == null) return _buildSuggestions();
+    if (_controller.text.trim().isEmpty && widget.recognitionLabel == null && !widget.searchOnly) {
+      return _buildSuggestions();
+    }
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) {
       return _MessageState(icon: Icons.error_outline_rounded, title: context.tr("Search failed"), message: _error!);
@@ -1189,10 +1228,18 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         key: const Key('suggestions-mode-switcher'),
         children: [
           Expanded(
-            child: _buildSuggestionTab(_SuggestionMode.resonance, 'Resonance Suggestions', Icons.auto_awesome_rounded),
+            child: _buildSuggestionTab(
+              _SuggestionMode.resonance,
+              widget.compactResults ? 'For you' : 'Resonance Suggestions',
+              Icons.auto_awesome_rounded,
+            ),
           ),
           Expanded(
-            child: _buildSuggestionTab(_SuggestionMode.youtubeMusic, 'YouTube Music Home', Icons.music_note_rounded),
+            child: _buildSuggestionTab(
+              _SuggestionMode.youtubeMusic,
+              widget.compactResults ? 'YouTube Music' : 'YouTube Music Home',
+              Icons.music_note_rounded,
+            ),
           ),
           if (Platform.isWindows && _suggestionMode == _SuggestionMode.youtubeMusic)
             IconButton(
@@ -1223,14 +1270,17 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 18, color: selected ? colors.primary : colors.onSurfaceVariant),
-              const SizedBox(width: 7),
+              if (!widget.compactResults || MediaQuery.textScalerOf(context).scale(1) <= 1.2) ...[
+                Icon(icon, size: 18, color: selected ? colors.primary : colors.onSurfaceVariant),
+                const SizedBox(width: 7),
+              ],
               Flexible(
                 child: Text(
                   context.tr(label),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontSize: widget.compactResults ? 13 : null,
                     color: selected ? colors.onSurface : colors.onSurfaceVariant,
                     fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
                   ),
@@ -1299,15 +1349,51 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
                   ],
                 ),
               ),
-              TextButton.icon(
-                onPressed: () => _loadSuggestions(refresh: true),
-                icon: const Icon(Icons.refresh_rounded),
-                label: Text(context.tr("Refresh suggestions")),
-              ),
+              if (widget.compactResults)
+                IconButton(
+                  tooltip: context.tr('Refresh suggestions'),
+                  onPressed: () => _loadSuggestions(refresh: true),
+                  icon: const Icon(Icons.refresh_rounded, size: 21),
+                )
+              else
+                TextButton.icon(
+                  onPressed: () => _loadSuggestions(refresh: true),
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: Text(context.tr("Refresh suggestions")),
+                ),
             ],
           ),
         ),
-        Expanded(child: _buildResults(_suggestionTracks)),
+        Expanded(
+          child: widget.compactResults
+              ? LayoutBuilder(
+                  builder: (context, constraints) {
+                    final count = (constraints.maxWidth / 190).floor().clamp(constraints.maxWidth < 300 ? 1 : 2, 6);
+                    final tileWidth = (constraints.maxWidth - 40 - (count - 1) * 18) / count;
+                    return GridView.builder(
+                      padding: const EdgeInsetsDirectional.fromSTEB(20, 8, 20, 24),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: count,
+                        mainAxisSpacing: 20,
+                        crossAxisSpacing: 18,
+                        mainAxisExtent: tileWidth + 20 + 54 * MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 2.0),
+                      ),
+                      itemCount: _suggestionTracks.length,
+                      itemBuilder: (context, index) {
+                        final track = _suggestionTracks[index];
+                        return _SuggestedTrackCard(
+                          track: track,
+                          busy: _playingUrl == track.url,
+                          onPlay: () => _play(track),
+                          onStream: () => _stream(track),
+                          onDownload: () => _download(track),
+                        );
+                      },
+                    );
+                  },
+                )
+              : _buildResults(_suggestionTracks),
+        ),
       ],
     );
   }
@@ -1366,7 +1452,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
                 ? _buildPlaylistLibrary()
                 : _YoutubeMusicShelf(
                     shelf: shelf!,
-                    busyUrl: _busyUrl,
+                    busyUrl: _playingUrl ?? _busyUrl,
                     onPlay: _play,
                     onStream: _stream,
                     onDownload: _download,
@@ -1412,17 +1498,27 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         }
         final track = tracks[index];
         final pending = DownloadQueueController.instance.pendingEntryFor(track.url, widget.playlistNumber);
-        final card = _ResultCard(
-          track: track,
-          fetchDates: !_injectedSearch,
-          busy: _busyUrl == track.url,
-          queued: pending != null,
-          downloading: pending?.status == DownloadQueueStatus.downloading,
-          progress: pending?.progress ?? 0,
-          onPlay: () => _play(track),
-          onStream: () => _stream(track),
-          onDownload: () => _download(track),
-        );
+        final card = widget.compactResults
+            ? _CompactResultRow(
+                track: track,
+                busy: _playingUrl == track.url,
+                queued: pending != null,
+                onPlay: () => _play(track),
+                onStream: () => _stream(track),
+                onDownload: () => _download(track),
+                fetchDates: !_injectedSearch,
+              )
+            : _ResultCard(
+                track: track,
+                fetchDates: !_injectedSearch,
+                busy: _busyUrl == track.url || _playingUrl == track.url,
+                queued: pending != null,
+                downloading: pending?.status == DownloadQueueStatus.downloading,
+                progress: pending?.progress ?? 0,
+                onPlay: () => _play(track),
+                onStream: () => _stream(track),
+                onDownload: () => _download(track),
+              );
         return TweenAnimationBuilder<double>(
           key: ValueKey('result-${track.url}'),
           duration: resonanceDuration(
@@ -1896,13 +1992,19 @@ class _MobileSpeedDialShelf extends StatelessWidget {
                       PositionedDirectional(
                         end: 0,
                         bottom: 0,
-                        child: PopupMenuButton<String>(
+                        child: TrackLinkMenu(
+                          trackId: track.url,
                           tooltip: context.tr("More actions"),
-                          color: Theme.of(context).colorScheme.surfaceContainerHigh,
                           enabled: !busy,
                           iconColor: Colors.white,
-                          onSelected: (value) => value == 'stream' ? onStream(track) : onDownload(track),
-                          itemBuilder: (_) => [
+                          onExtraSelected: (value) {
+                            if (value == 'stream') {
+                              onStream(track);
+                            } else if (value == 'download') {
+                              onDownload(track);
+                            }
+                          },
+                          extraEntries: [
                             PopupMenuItem(value: 'stream', child: Text(context.tr("Add stream"))),
                             PopupMenuItem(value: 'download', child: Text(context.tr("Download"))),
                           ],
@@ -2003,11 +2105,18 @@ class _QuickPickShelf extends StatelessWidget {
                         end: 0,
                         top: 0,
                         bottom: 0,
-                        child: PopupMenuButton<String>(
+                        child: TrackLinkMenu(
+                          trackId: track.url,
                           tooltip: context.tr("More actions"),
                           enabled: !busy,
-                          onSelected: (value) => value == 'stream' ? onStream(track) : onDownload(track),
-                          itemBuilder: (_) => [
+                          onExtraSelected: (value) {
+                            if (value == 'stream') {
+                              onStream(track);
+                            } else if (value == 'download') {
+                              onDownload(track);
+                            }
+                          },
+                          extraEntries: [
                             PopupMenuItem(value: 'stream', child: Text(context.tr("Add stream"))),
                             PopupMenuItem(value: 'download', child: Text(context.tr("Download"))),
                           ],
@@ -2021,6 +2130,209 @@ class _QuickPickShelf extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SuggestedTrackCard extends StatelessWidget {
+  const _SuggestedTrackCard({
+    required this.track,
+    required this.busy,
+    required this.onPlay,
+    required this.onStream,
+    required this.onDownload,
+  });
+  final YoutubeTrack track;
+  final bool busy;
+  final VoidCallback onPlay, onStream, onDownload;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Colors.transparent,
+    child: InkWell(
+      onTap: onPlay,
+      borderRadius: BorderRadius.circular(8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 1,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: _Thumbnail(url: track.thumbnailUrl),
+                ),
+                PositionedDirectional(
+                  end: 8,
+                  bottom: 8,
+                  child: Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: .7), shape: BoxShape.circle),
+                    child: busy
+                        ? const Padding(
+                            padding: EdgeInsets.all(9),
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 22),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      track.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13, height: 1.3, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    YoutubeArtistLink(
+                      track: track,
+                      child: Text(
+                        track.artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                width: 28,
+                height: 32,
+                child: TrackLinkMenu(
+                  trackId: track.url,
+                  onExtraSelected: (action) {
+                    if (action == 'stream') onStream();
+                    if (action == 'download') onDownload();
+                  },
+                  extraEntries: [
+                    PopupMenuItem(value: 'stream', child: Text(context.tr('Add stream'))),
+                    PopupMenuItem(value: 'download', child: Text(context.tr('Download'))),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _CompactResultRow extends StatelessWidget {
+  const _CompactResultRow({
+    required this.track,
+    required this.busy,
+    required this.queued,
+    required this.onPlay,
+    required this.onStream,
+    required this.onDownload,
+    required this.fetchDates,
+  });
+  final YoutubeTrack track;
+  final bool busy, queued, fetchDates;
+  final VoidCallback onPlay, onStream, onDownload;
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onPlay,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          child: Row(
+            children: [
+              SizedBox.square(
+                dimension: 56,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(5),
+                  child: busy
+                      ? const Center(
+                          child: SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                        )
+                      : _Thumbnail(url: track.thumbnailUrl),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      track.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyMedium?.copyWith(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 3),
+                    YoutubeArtistLink(
+                      track: track,
+                      child: Text(
+                        track.artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        if (track.formattedDuration.isNotEmpty)
+                          Text(track.formattedDuration, style: Theme.of(context).textTheme.bodySmall),
+                        if (track.viewCount != null)
+                          Text(
+                            context.tr('{0} views', [track.formattedViewCount]),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        if (track.likeCount != null)
+                          Text(
+                            context.tr('{0} likes', [track.formattedLikeCount]),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        YoutubeTrackDateLabel(track: track, fetch: fetchDates),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (queued)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6),
+                  child: Icon(Icons.downloading_rounded, size: 19),
+                ),
+              TrackLinkMenu(
+                trackId: track.url,
+                onExtraSelected: (action) {
+                  if (action == 'stream') onStream();
+                  if (action == 'download') onDownload();
+                },
+                extraEntries: [
+                  PopupMenuItem(value: 'stream', child: Text(context.tr('Add stream'))),
+                  PopupMenuItem(value: 'download', enabled: !queued, child: Text(context.tr('Download'))),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -2102,6 +2414,7 @@ class _ResultCard extends StatelessWidget {
                       icon: const Icon(Icons.play_arrow_rounded),
                       label: Text(context.tr("Play")),
                     ),
+                    TrackLinkMenu(trackId: track.url),
                     TextButton.icon(
                       onPressed: busy ? null : onStream,
                       icon: const Icon(Icons.sensors_rounded),

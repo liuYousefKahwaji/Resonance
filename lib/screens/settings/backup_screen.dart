@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -41,9 +42,9 @@ class _BackupScreenState extends State<BackupScreen> {
       await MetadataCacheService.flush();
       final preview = await service.previewExport(mode, includeAudio: audio && mode == BackupMode.everything);
       if (!mounted) return;
-      final approved = await showDialog<bool>(
+      final approved = await showResonanceDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => ResonanceDialog(
           title: Text(context.tr('Export backup')),
           content: _preview(preview),
           actions: [
@@ -135,10 +136,10 @@ class _BackupScreenState extends State<BackupScreen> {
       var replace = false;
       String? relink;
       if (!mounted) return;
-      final approved = await showDialog<bool>(
+      final approved = await showResonanceDialog<bool>(
         context: context,
         builder: (context) => StatefulBuilder(
-          builder: (context, update) => AlertDialog(
+          builder: (context, update) => ResonanceDialog(
             title: Text(context.tr('Restore backup')),
             content: SizedBox(
               width: 440,

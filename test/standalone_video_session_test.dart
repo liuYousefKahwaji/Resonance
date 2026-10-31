@@ -23,6 +23,52 @@ StandaloneVideoFrame frame({int generation = 1, int seconds = 12, bool playing =
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  for (final cancel in [false, true]) {
+    test(
+      'audio stays held through a slow visual seek${cancel ? ' and a new selection cancels release' : ''}',
+      () async {
+        var current = frame();
+        final seekReady = Completer<void>(), finishSeek = Completer<void>();
+        final player = _VideoPlayer()
+          ..beforeSeek = (_) async {
+            seekReady.complete();
+            await finishSeek.future;
+          };
+        var audible = true, resumes = 0;
+        final session = StandaloneVideoSession(
+          frame: () => current,
+          versionsLoader: (_) async => versions,
+          streamLoader: (_) async => source,
+          createPlayer: () => player,
+          createController: (_) => null,
+          activateAudio: (_, _, owner, valid) async {
+            audible = false;
+            return owner.position;
+          },
+          resumeAudio: (_, valid) async {
+            if (valid()) {
+              audible = true;
+              resumes++;
+            }
+          },
+          restoreAudio: (_, _, _) async {},
+        );
+        addTearDown(session.close);
+        final loading = session.showVideo();
+        await seekReady.future;
+        expect(audible, isFalse);
+        expect(resumes, 0);
+        if (cancel) {
+          current = frame(generation: 2);
+          session.sourceChanged();
+        }
+        finishSeek.complete();
+        await loading;
+        expect(resumes, cancel ? 0 : 1);
+        expect(session.enabled, !cancel);
+      },
+    );
+  }
   test('remote media readiness waits for metadata and promptly abandons a superseded source', () async {
     final player = _VideoPlayer();
     var current = true;
@@ -186,6 +232,7 @@ class _VideoStream extends Fake implements mk.PlayerStream {
 }
 
 class _VideoPlayer extends Fake implements mk.Player {
+  Future<void> Function(Duration)? beforeSeek;
   final native = _Native();
   bool disposed = false;
   final seeks = <Duration>[];
@@ -212,6 +259,7 @@ class _VideoPlayer extends Fake implements mk.Player {
 
   @override
   Future<void> seek(Duration value) async {
+    await beforeSeek?.call(value);
     seeks.add(value);
     state = state.copyWith(position: value);
   }

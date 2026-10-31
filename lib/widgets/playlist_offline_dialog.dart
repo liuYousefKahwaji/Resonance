@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -5,7 +6,7 @@ import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/services/playlist_offline_service.dart';
 
 Future<void> showPlaylistOfflineDialog(BuildContext context, int number, {PlaylistOfflineService? service}) =>
-    showDialog<void>(
+    showResonanceDialog<void>(
       context: context,
       builder: (_) => _PlaylistOfflineDialog(number: number, service: service),
     );
@@ -73,9 +74,9 @@ class _PlaylistOfflineDialogState extends State<_PlaylistOfflineDialog> {
   }
 
   Future<void> _remove() async {
-    final approved = await showDialog<bool>(
+    final approved = await showResonanceDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => ResonanceDialog(
         title: Text(context.tr('Remove offline downloads?')),
         content: Text(
           context.tr(
@@ -110,7 +111,7 @@ class _PlaylistOfflineDialogState extends State<_PlaylistOfflineDialog> {
       final completed = running ? state!.completed : local;
       final count = running ? state!.total : total;
       final fullyOffline = !running && ready && total > 0 && local == total;
-      return AlertDialog(
+      return ResonanceDialog(
         title: Text(
           widget.number == 0
               ? context.tr('Favorites')

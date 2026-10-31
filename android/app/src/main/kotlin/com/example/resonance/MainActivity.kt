@@ -233,6 +233,7 @@ class MainActivity : AudioServiceFragmentActivity() {
 
                     // ── download ──────────────────────────────────────────────
                     "download" -> {
+                        val includeCover = call.argument<Boolean>("includeCover") ?: true
                         val requestId = call.argument<Number>("requestId")?.toLong()
                         if (requestId == null || requestId != listeningDownloadId || activeSink == null) {
                             result.error("DOWNLOAD_LISTENER_MISSING", "Download listener is not ready", null)
@@ -261,6 +262,7 @@ class MainActivity : AudioServiceFragmentActivity() {
                                         outputDir,
                                         events,
                                         cookiePath,
+                                        includeCover,
                                     )
                                 }
                             } catch (e: Exception) {

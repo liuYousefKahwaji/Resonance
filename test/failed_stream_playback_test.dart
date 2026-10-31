@@ -1,3 +1,5 @@
+import 'package:resonance/core/audio/playback_session.dart';
+import 'package:resonance/models/youtube_track.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -34,6 +36,40 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(paths, null);
     await storage.delete(recursive: true);
   });
+
+  test('a second stream takes ownership while the first network response is still pending', () async {
+    SharedPreferences.setMockInitialValues({});
+    final pending = Completer<ResolvedYoutubeStream>(), started = Completer<void>();
+    final player = _RetainingPlayer();
+    final handler = PlayerHandler(
+      windowsPlayer: player,
+      streamResolver: (url) {
+        if (url == unavailableUrl) {
+          started.complete();
+          return pending.future;
+        }
+        return Future.value(ResolvedYoutubeStream(uri: Uri.parse('https://audio.test/second'), accessRevision: 0));
+      },
+    );
+    addTearDown(handler.dispose);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    final first = handler.playStandaloneStream(
+      url: unavailableUrl,
+      title: 'First',
+      artist: 'Artist',
+      relatedQueue: false,
+    );
+    await started.future;
+    await handler.playStandaloneStream(url: previousUrl, title: 'Second', artist: 'Artist', relatedQueue: false);
+    await first.timeout(const Duration(milliseconds: 250));
+    expect(handler.mediaItem.value?.id, previousUrl);
+    expect(handler.mediaItem.value?.title, 'Second');
+    expect(player.opened, ['https://audio.test/second']);
+    pending.completeError(StateError('late connection failure'));
+    await Future<void>.delayed(Duration.zero);
+    expect(handler.playbackVisualNotifier.value.loading, isFalse);
+    expect(player.state.playing, isTrue);
+  }, skip: !Platform.isWindows);
 
   test('Shuffle wraps into a complete new cycle; Random refreshes only on track actions', () async {
     SharedPreferences.setMockInitialValues({});
@@ -255,6 +291,166 @@ void main() {
     expect(handler.playbackVisualNotifier.value.playing, isTrue);
     expect(handler.youtubeFailureNotifier.value, isNull);
   }, skip: !Platform.isWindows);
+  test('failed stream retry is explicit and obsolete recovery cannot replace a newer selection', () async {
+    SharedPreferences.setMockInitialValues({});
+    var attempts = 0;
+    final player = _RetainingPlayer();
+    final handler = PlayerHandler(
+      windowsPlayer: player,
+      streamResolver: (url) async {
+        if (url == unavailableUrl && ++attempts == 1) throw unavailable;
+        return ResolvedYoutubeStream(
+          uri: Uri.parse('https://audio.test/${Uri.parse(url).queryParameters['v']}'),
+          accessRevision: 0,
+        );
+      },
+    );
+    addTearDown(handler.dispose);
+    await handler.initialization;
+    await handler.loadTrack(unavailableUrl, 'Failed', 'Artist', standalone: true);
+    final failed = handler.playbackFailureNotifier.value!;
+    expect(failed.track.id, unavailableUrl);
+    expect(handler.playbackVisualNotifier.value.loading, isFalse);
+    await handler.retryFailedPlayback(failed);
+    expect(attempts, 2);
+    expect(handler.playbackFailureNotifier.value, isNull);
+    expect(player.state.playing, isTrue);
+    await handler.loadTrack(previousUrl, 'New selection', 'Artist', standalone: true);
+    await handler.retryFailedPlayback(failed);
+    await handler.playFailureAlternative(
+      failed,
+      const YoutubeTrack(title: 'Obsolete', artist: 'Artist', url: unavailableUrl),
+    );
+    expect(handler.mediaItem.value?.id, previousUrl);
+    expect(attempts, 2);
+  }, skip: !Platform.isWindows);
+
+  test('approved alternative preserves the library and next songs in a temporary queue', () async {
+    SharedPreferences.setMockInitialValues({});
+    final files = FileService();
+    await files.replacePlaylistTracks(1, [unavailableUrl, previousUrl]);
+    await files.setActivePlaylistNumber(1);
+    final handler = PlayerHandler(
+      windowsPlayer: _RetainingPlayer(),
+      streamResolver: (url) async {
+        if (url == unavailableUrl) throw unavailable;
+        return ResolvedYoutubeStream(uri: Uri.parse('https://audio.test/valid'), accessRevision: 0);
+      },
+    );
+    addTearDown(handler.dispose);
+    await handler.initialization;
+    await handler.loadTrack(unavailableUrl, 'Failed', 'Artist');
+    final failure = handler.playbackFailureNotifier.value!;
+    const alternative = YoutubeTrack(
+      title: 'Chosen version',
+      artist: 'Artist',
+      url: 'https://www.youtube.com/watch?v=12345678901',
+    );
+    await handler.playFailureAlternative(failure, alternative);
+    expect(handler.mediaItem.value?.id, alternative.url);
+    expect(await files.readPlaylistTracks(1), [unavailableUrl, previousUrl]);
+    expect((await handler.playbackQueueSnapshot()).upcoming.map((e) => e.id), [previousUrl]);
+    expect(handler.playbackFailureNotifier.value, isNull);
+  }, skip: !Platform.isWindows);
+
+  test('restart restores a stream queue and position paused without resolving any audio', () async {
+    SharedPreferences.setMockInitialValues({});
+    var resolutions = 0;
+    Future<ResolvedYoutubeStream> resolve(String url) async {
+      resolutions++;
+      return ResolvedYoutubeStream(
+        uri: Uri.parse('https://audio.test/cdn?private=never-persist'),
+        headers: const {'Authorization': 'never-persist'},
+        accessRevision: 0,
+      );
+    }
+
+    final first = PlayerHandler(windowsPlayer: _RetainingPlayer(), streamResolver: resolve);
+    await first.initialization;
+    await first.playStandaloneStream(
+      url: previousUrl,
+      title: 'Current',
+      artist: 'Artist',
+      relatedQueue: false,
+      queueItems: const [
+        StandaloneStreamQueueItem(url: previousUrl, title: 'Current', artist: 'Artist'),
+        StandaloneStreamQueueItem(url: unavailableUrl, title: 'Next', artist: 'Artist'),
+      ],
+      queueIndex: 0,
+    );
+    await first.seek(const Duration(seconds: 42));
+    await first.saveState();
+    await first.dispose();
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(PlaybackSession.preferenceKey), isNot(contains('never-persist')));
+    final count = resolutions;
+    final player = _RetainingPlayer();
+    final second = PlayerHandler(windowsPlayer: player, streamResolver: resolve);
+    addTearDown(second.dispose);
+    await second.initialization;
+    expect(second.mediaItem.value?.id, previousUrl);
+    expect(second.currentPosition, const Duration(seconds: 42));
+    expect(second.currentDuration, const Duration(minutes: 3));
+    expect(second.playbackState.value.playing, isFalse);
+    expect(player.opened, isEmpty);
+    expect(resolutions, count);
+    expect((await second.playbackQueueSnapshot()).upcoming.map((e) => e.id), [unavailableUrl]);
+    await second.seek(const Duration(seconds: 55));
+    expect(second.currentPosition, const Duration(seconds: 55));
+    expect(player.opened, isEmpty);
+    await second.play();
+    expect(resolutions, greaterThan(count));
+    expect(player.opened, hasLength(1));
+    expect(second.currentPosition, const Duration(seconds: 55));
+    expect(player.state.playing, isTrue);
+    expect((await second.playbackQueueSnapshot()).upcoming.map((e) => e.id), [unavailableUrl]);
+  }, skip: !Platform.isWindows);
+  test('library shuffle order and short-track position survive restart', () async {
+    SharedPreferences.setMockInitialValues({});
+    final files = FileService();
+    final paths = List.generate(8, (i) => 'https://www.youtube.com/watch?v=track00000$i');
+    await files.replacePlaylistTracks(1, paths);
+    await files.setActivePlaylistNumber(1);
+    Future<ResolvedYoutubeStream> resolve(String url) async =>
+        ResolvedYoutubeStream(uri: Uri.parse('https://audio.test/good'), accessRevision: 0);
+    final first = PlayerHandler(windowsPlayer: _RetainingPlayer(), streamResolver: resolve);
+    await first.initialization;
+    await first.loadTrack(paths.first, 'Current', 'Artist');
+    await first.toggleShuffle();
+    await first.seek(const Duration(seconds: 23));
+    final expected = (await first.playbackQueueSnapshot()).upcoming.map((e) => e.id).toList();
+    await first.saveState();
+    await first.dispose();
+    final player = _RetainingPlayer();
+    final second = PlayerHandler(windowsPlayer: player, streamResolver: resolve);
+    addTearDown(second.dispose);
+    await second.initialization;
+    expect(second.isShuffle, isTrue);
+    expect(second.currentPosition, const Duration(seconds: 23));
+    expect((await second.playbackQueueSnapshot()).upcoming.map((e) => e.id), expected);
+    expect(player.opened, isEmpty);
+    await second.play();
+    expect(second.currentPosition, const Duration(seconds: 23));
+    expect((await second.playbackQueueSnapshot()).upcoming.map((e) => e.id), expected);
+  }, skip: !Platform.isWindows);
+
+  test('missing restored local file clears unusable session without opening a decoder', () async {
+    final missing = '${storage.path}/removed.mp3';
+    final saved = PlaybackSession(
+      current: SavedPlaybackEntry(id: missing, title: 'Gone', artist: 'Artist'),
+      position: const Duration(seconds: 8),
+      standalone: false,
+      playlistNumber: 1,
+    );
+    SharedPreferences.setMockInitialValues({PlaybackSession.preferenceKey: saved.encode()});
+    final player = _RetainingPlayer();
+    final handler = PlayerHandler(windowsPlayer: player);
+    addTearDown(handler.dispose);
+    await handler.initialization;
+    expect(handler.mediaItem.value, isNull);
+    expect(player.opened, isEmpty);
+    expect((await SharedPreferences.getInstance()).getString(PlaybackSession.preferenceKey), isNull);
+  }, skip: !Platform.isWindows);
 }
 
 // Mimics native stop retaining its last source, the condition that previously
@@ -314,6 +510,9 @@ class _RetainingPlayer implements mk.Player {
 
   @override
   Future<void> stop() async => state = state.copyWith(playing: false);
+
+  @override
+  Future<void> seek(Duration position) async => state = state.copyWith(position: position);
 
   @override
   Future<void> dispose() async {}

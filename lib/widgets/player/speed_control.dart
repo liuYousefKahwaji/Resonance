@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 // widgets/player/speed_control.dart
 import 'package:flutter/material.dart';
@@ -18,11 +19,11 @@ class SpeedControl extends StatelessWidget {
           icon: const Icon(Icons.speed),
           tooltip: context.tr("Playback Speed"),
           onPressed: () {
-            showDialog(
+            showResonanceDialog(
               context: context,
               builder: (context) {
                 double speed = currentSpeed;
-                return AlertDialog(
+                return ResonanceDialog(
                   title: Text(context.tr("Playback Speed")),
                   content: StatefulBuilder(
                     builder: (context, setState) {

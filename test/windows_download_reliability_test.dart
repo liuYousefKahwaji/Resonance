@@ -45,6 +45,26 @@ class _Runner extends WindowsYtdlpRunner {
   }
 }
 
+class _CachedRunner extends _Runner {
+  _CachedRunner(super.responses);
+  bool cleared = false;
+  int reused = 0;
+  bool rejectInput = false;
+  @override
+  String? audioInfoFor(String url) => cleared ? null : '{}';
+  @override
+  void forgetAudioInfo(String url) {
+    cleared = true;
+  }
+
+  @override
+  Future<WindowsYtdlpProcess> startWithAudioInfo(List<String> args, String info, {bool guest = true}) {
+    reused++;
+    if (rejectInput) throw const FileSystemException('Cached input pipe closed');
+    return start(args, guest: guest);
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory directory;
@@ -72,6 +92,51 @@ void main() {
     expect(paths, [audio.path]);
     expect(runner.guests, [true]);
     expect(runner.arguments.single, contains(endsWith('%(title)s [%(id)s].%(ext)s')));
+    expect(runner.arguments.single, isNot(contains('--audio-format')), reason: 'Original audio does not transcode');
+  });
+
+  test('MP3 remains selectable for all download entry points', () async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString('audio_download_format', 'mp3');
+    final runner = _Runner([_Process('${audio.path}|aaaaaaaaaaa\n', '', 0)]);
+    await MediaDownloader(runner: runner).downloadAudio(
+      url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
+      onProgress: (_, __) {},
+      onTrackDownloaded: (_, __) {},
+    );
+    expect(runner.arguments.single, containsAllInOrder(['-x', '--audio-format', 'mp3']));
+  });
+
+  test('a rejected cached media link falls back once to fresh extraction without an account detour', () async {
+    final runner = _CachedRunner([
+      _Process('', 'ERROR: HTTP Error 403: expired media link', 1),
+      _Process('${audio.path}|aaaaaaaaaaa\n', '', 0),
+    ]);
+    final paths = <String>[];
+    await MediaDownloader(runner: runner).downloadAudio(
+      url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
+      onProgress: (_, __) {},
+      onTrackDownloaded: (path, _) => paths.add(path),
+    );
+    expect(paths, [audio.path]);
+    expect(runner.reused, 1);
+    expect(runner.cleared, isTrue);
+    expect(runner.guests, [true, true]);
+    expect(runner.arguments.last, contains('https://www.youtube.com/watch?v=aaaaaaaaaaa'));
+    expect(runner.arguments.last, contains('--no-continue'));
+  });
+
+  test('cached input startup failure also falls back to ordinary extraction', () async {
+    final runner = _CachedRunner([_Process('${audio.path}|aaaaaaaaaaa\n', '', 0)])..rejectInput = true;
+    final paths = <String>[];
+    await MediaDownloader(runner: runner).downloadAudio(
+      url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
+      onProgress: (_, __) {},
+      onTrackDownloaded: (path, _) => paths.add(path),
+    );
+    expect(paths, [audio.path]);
+    expect(runner.reused, 1);
+    expect(runner.cleared, isTrue);
   });
 
   test('public extraction uses no browser and restricted audio falls back immediately to account', () async {
