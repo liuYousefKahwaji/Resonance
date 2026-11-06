@@ -136,4 +136,34 @@ void main() {
     );
     expect(searches, 1);
   });
+  test('restore original remembers no cover even after the native writer embeds the first choice', () async {
+    Uint8List? embedded;
+    final resolver = TrackArtworkService(
+      directory: Directory('${root.path}/covers'),
+      readEmbedded: (_) async => embedded,
+    );
+    await resolver.rememberOriginal(track.path);
+    embedded = Uint8List.fromList([1, 2, 3]);
+    await resolver.saveCover(track.path, embedded);
+    expect(await resolver.resolve(track.path), isNotNull);
+    expect(await resolver.resolveOriginal(track.path), isNull);
+    await resolver.restoreOriginal(track.path);
+    expect(await resolver.resolve(track.path), isNull);
+    expect(await resolver.hasOverride(track.path), isFalse);
+    final restarted = TrackArtworkService(readEmbedded: (_) async => embedded);
+    expect(await restarted.resolve(track.path), isNull);
+  });
+  test('restore original keeps an immutable image before native metadata replaces it', () async {
+    var embedded = Uint8List.fromList([7, 8, 9]);
+    final resolver = TrackArtworkService(
+      directory: Directory('${root.path}/covers'),
+      readEmbedded: (_) async => embedded,
+    );
+    await resolver.rememberOriginal(track.path);
+    embedded = Uint8List.fromList([4, 5, 6]);
+    await resolver.saveCover(track.path, embedded);
+    await resolver.rememberOriginal(track.path); // Later edits must not replace the baseline.
+    await resolver.restoreOriginal(track.path);
+    expect(await File.fromUri((await resolver.resolve(track.path))!).readAsBytes(), [7, 8, 9]);
+  });
 }

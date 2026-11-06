@@ -1,3 +1,4 @@
+import 'package:resonance/models/download_transfer_progress.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/services/youtube/youtube_request.dart';
@@ -204,6 +205,7 @@ class DownloadQueueController extends ChangeNotifier {
               status: DownloadQueueStatus.downloading,
               attempts: entry.attempts + 1,
               progress: 0,
+              clearTransfer: true,
               statusText: entry.attempts == 0 ? 'Starting…' : 'Retrying (${entry.attempts}/$maxAutomaticRetries)...',
             );
             _entries[live] = entry;
@@ -214,7 +216,11 @@ class DownloadQueueController extends ChangeNotifier {
               void progress(double value, String status) {
                 final current = _entries.indexWhere((e) => e.id == entry.id);
                 if (request.isCancelled || current < 0 || _disposed) return;
-                _entries[current] = _entries[current].copyWith(progress: value.clamp(0, 100), statusText: status);
+                _entries[current] = _entries[current].copyWith(
+                  progress: value.clamp(0, 100),
+                  statusText: status,
+                  clearTransfer: !status.contains('Downloading'),
+                );
                 _notify();
               }
 
@@ -241,8 +247,10 @@ class DownloadQueueController extends ChangeNotifier {
                       authenticated: YoutubeAccessService.active?.isConfigured ?? false,
                       sourceUrl: entry.track.url,
                     );
+              final message = _downloadFailureMessage(error, failure);
               final retryable =
-                  failure.kind == YoutubeFailureKind.network || failure.kind == YoutubeFailureKind.unknown;
+                  message == failure.userMessage &&
+                  (failure.kind == YoutubeFailureKind.network || failure.kind == YoutubeFailureKind.unknown);
               if (retryable && entry.attempts <= maxAutomaticRetries) continue;
               _block(entry);
               YoutubeAccessService.active?.observeFailure(failure);
@@ -251,7 +259,7 @@ class DownloadQueueController extends ChangeNotifier {
                 _entries[current] = entry.copyWith(
                   status: DownloadQueueStatus.failed,
                   statusText: 'Failed',
-                  error: failure.userMessage,
+                  error: message,
                   failureKind: failure.kind,
                 );
               }
@@ -370,12 +378,33 @@ class DownloadQueueController extends ChangeNotifier {
     super.dispose();
   }
 
+  String _downloadFailureMessage(Object error, YoutubeFailure failure) {
+    final text = error.toString().toLowerCase();
+    if (text.contains('no space left') || text.contains('disk full') || text.contains('not enough space')) {
+      return 'Not enough storage space. Free some space, then retry.';
+    }
+    if (text.contains('permission denied') || text.contains('access is denied') || text.contains('read-only file')) {
+      return 'Cannot save to the download folder. Choose another folder in Settings.';
+    }
+    if (text.contains('conversion failed') || text.contains('no audio file') || text.contains('no output file')) {
+      return 'Audio processing failed. Retry the download or choose Original format in Settings.';
+    }
+    return failure.userMessage;
+  }
+
   Future<String?> _run(
     DownloadQueueEntry entry,
     void Function(double progress, String status) onProgress,
     YoutubeRequest request,
   ) async {
     String? firstPath;
+    void transfer(DownloadTransferProgress value) {
+      final index = _entries.indexWhere((e) => e.id == entry.id);
+      if (index < 0 || request.isCancelled || _disposed) return;
+      _entries[index] = _entries[index].copyWith(transfer: value);
+      _notify();
+    }
+
     if (Platform.isWindows) {
       await _windows.initBinaries();
       request.check();
@@ -385,6 +414,7 @@ class DownloadQueueController extends ChangeNotifier {
         historyTitle: entry.track.title,
         historyArtist: entry.track.artist,
         onProgress: onProgress,
+        onTransferProgress: transfer,
         onTrackDownloaded: (path, videoId) async {
           await _finishTrack(entry, path, videoId, request);
           firstPath ??= path;
@@ -397,6 +427,7 @@ class DownloadQueueController extends ChangeNotifier {
         historyTitle: entry.track.title,
         historyArtist: entry.track.artist,
         onProgress: onProgress,
+        onTransferProgress: transfer,
       );
       for (final download in downloads) {
         await _finishTrack(entry, download.localPath, download.youtubeVideoId, request);

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
@@ -214,6 +215,20 @@ void main() {
     expect(runs, 1);
     expect(controller.entries.single.status, DownloadQueueStatus.failed);
     await controller.flush();
+    controller.dispose();
+  });
+  test('storage failures stop promptly and explain what to change without leaking paths', () async {
+    var attempts = 0;
+    final controller = DownloadQueueController.forTesting(
+      runner: (_, __) async {
+        attempts++;
+        throw FileSystemException('No space left on device', 'C:/private/user/music');
+      },
+    );
+    await expectLater(controller.enqueue(track, 1), throwsA(isA<FileSystemException>()));
+    expect(attempts, 1);
+    expect(controller.entries.single.error, 'Not enough storage space. Free some space, then retry.');
+    expect(controller.entries.single.error, isNot(contains('private')));
     controller.dispose();
   });
 }

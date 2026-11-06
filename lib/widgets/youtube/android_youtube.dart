@@ -1,3 +1,4 @@
+import 'package:resonance/models/download_transfer_progress.dart';
 import 'package:resonance/services/youtube/youtube_request.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
@@ -138,12 +139,14 @@ class AndroidYoutubeDownloader {
     String url, {
     required void Function(double percentage, String status) onProgress,
     YoutubeRequest? request,
+    void Function(DownloadTransferProgress)? onTransferProgress,
     String? historyTitle,
     String? historyArtist,
   }) => YoutubeDownloadGate.instance.run(
     () => _downloadAudioUnlocked(
       url,
       request: request,
+      onTransferProgress: onTransferProgress,
       onProgress: onProgress,
       historyTitle: historyTitle,
       historyArtist: historyArtist,
@@ -155,6 +158,7 @@ class AndroidYoutubeDownloader {
     String url, {
     required void Function(double percentage, String status) onProgress,
     YoutubeRequest? request,
+    void Function(DownloadTransferProgress)? onTransferProgress,
     String? historyTitle,
     String? historyArtist,
   }) async {
@@ -166,7 +170,10 @@ class AndroidYoutubeDownloader {
     late final StreamSubscription<String> subscription;
     subscription = download(url, await outputDir, includeCover: convertToMp3, request: request).listen(
       (event) {
-        if (event == 'cancelled') {
+        if (event.startsWith(DownloadTransferProgress.marker)) {
+          final transfer = DownloadTransferProgress.parse(event);
+          if (transfer != null) onTransferProgress?.call(transfer);
+        } else if (event == 'cancelled') {
           if (!done.isCompleted) done.completeError(const YoutubeRequestCancelled());
         } else if (event.startsWith('progress:')) {
           final parts = event.split(':');

@@ -962,6 +962,7 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None, include_co
       "error:<message>"
     """
     import os
+    import math
     from urllib.request import Request, urlopen
 
     def unicode_text(value) -> str:
@@ -997,10 +998,26 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None, include_co
     current_item = [1]
     total_items = [1]
 
+    last_progress = [0.0]
+
     def progress_hook(d):
         _check_cancelled(cancelled)
         status = d.get("status")
         if status == "downloading":
+            import time
+            now = time.monotonic()
+            if now - last_progress[0] < 0.2:
+                return
+            last_progress[0] = now
+            # Only transfer numbers cross the channel; never extractor metadata.
+            def numeric(key):
+                value = d.get(key)
+                return value if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0 else None
+            event_sink.success("resonance_transfer:" + json.dumps({
+                "downloadedBytes": numeric("downloaded_bytes"), "totalBytes": numeric("total_bytes"),
+                "estimatedTotalBytes": numeric("total_bytes_estimate"), "bytesPerSecond": numeric("speed"),
+                "etaSeconds": numeric("eta"),
+            }, separators=(",", ":")))
             pct_str = d.get("_percent_str", "0%").strip().replace("%", "")
             try:
                 pct = float(pct_str)

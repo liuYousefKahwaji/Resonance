@@ -1,3 +1,4 @@
+import 'package:resonance/models/download_transfer_progress.dart';
 import 'package:resonance/services/youtube/youtube_request.dart';
 import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
@@ -257,6 +258,7 @@ class MediaDownloader {
 
     required Function(String filePath, String? youtubeVideoId) onTrackDownloaded,
     YoutubeRequest? request,
+    void Function(DownloadTransferProgress)? onTransferProgress,
     String? historyTitle,
     String? historyArtist,
     FutureOr<void> Function(YoutubeDownloadResult track)? onTrackPrepared,
@@ -264,6 +266,7 @@ class MediaDownloader {
     () => _downloadAudioUnlocked(
       url: url,
       request: request,
+      onTransferProgress: onTransferProgress,
       onProgress: onProgress,
       onTrackDownloaded: onTrackDownloaded,
       historyTitle: historyTitle,
@@ -280,6 +283,7 @@ class MediaDownloader {
 
     required Function(String filePath, String? youtubeVideoId) onTrackDownloaded,
     YoutubeRequest? request,
+    void Function(DownloadTransferProgress)? onTransferProgress,
     String? historyTitle,
     String? historyArtist,
     FutureOr<void> Function(YoutubeDownloadResult track)? onTrackPrepared,
@@ -379,7 +383,7 @@ class MediaDownloader {
           '0.2',
 
           '--progress-template',
-          'download:resonance_progress:%(progress._percent_str)s',
+          windowsDownloadProgressTemplate,
 
           '--yes-playlist',
 
@@ -428,10 +432,21 @@ class MediaDownloader {
         void handleLine(String line) {
           final trimmed = line.trim();
           if (trimmed.isEmpty) return;
+          final transfer = DownloadTransferProgress.parse(trimmed);
+          if (transfer != null) onTransferProgress?.call(transfer);
           outputLines.add(trimmed.length > 512 ? trimmed.substring(trimmed.length - 512) : trimmed);
           if (outputLines.length > 128) outputLines.removeRange(0, outputLines.length - 128);
 
           final parsedProgress = parseWindowsYtDlpProgress(trimmed);
+          if (transfer != null && parsedProgress == null) {
+            final total = transfer.totalBytes;
+            final downloaded = transfer.downloadedBytes;
+            onProgress(
+              total != null && total > 0 && downloaded != null ? (downloaded / total * 100).clamp(0, 100) : 0,
+              'Downloading...',
+            );
+            return;
+          }
           if (trimmed.contains('resonance_progress:') && parsedProgress != null) {
             final percent = parsedProgress;
             final prefix = totalItems > 1 ? '($currentItem/$totalItems) ' : '';

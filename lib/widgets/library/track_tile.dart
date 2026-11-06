@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/library/cover_crop_dialog.dart';
 import 'package:resonance/app/route_transitions.dart';
 import 'package:resonance/services/track_artwork_service.dart';
 import 'package:resonance/widgets/library/current_track_surface.dart';
@@ -221,20 +222,20 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
     String? coverMimeType;
     var coverRemoved = false;
     var coverEdited = false;
+    var restoreOriginal = false;
+    Uri? remoteCover;
+    final canRestore = await const TrackArtworkService().hasOverride(trackPath);
 
     try {
       existingMetadata = await MetadataGod.readMetadata(file: trackPath);
-      final picture = existingMetadata.picture;
-      if (picture != null && picture.data.isNotEmpty) {
-        coverBytes = Uint8List.fromList(picture.data);
-        coverMimeType = picture.mimeType;
-      }
     } catch (_) {}
     try {
-      final uri = await const TrackArtworkService().resolve(trackPath, allowRemote: false);
+      final uri = await const TrackArtworkService().resolve(trackPath);
       if (uri?.scheme == 'file') {
         coverBytes = await File.fromUri(uri!).readAsBytes();
         coverMimeType = _mimeTypeForImage('', coverBytes);
+      } else {
+        remoteCover = uri;
       }
     } catch (_) {}
 
@@ -244,12 +245,15 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
       return;
     }
 
+    ModalRoute<dynamic>? editorRoute;
     try {
       await showResonanceDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) {
+          editorRoute = ModalRoute.of(dialogContext);
           var saving = false;
+          var coverBusy = false;
           String? saveError;
           return StatefulBuilder(
             builder: (dialogContext, setDialogState) {
@@ -263,12 +267,54 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                   coverBytes = Uint8List.fromList(bytes);
                   coverMimeType = _mimeTypeForImage(file.path ?? file.name, bytes);
                   coverRemoved = false;
+                  restoreOriginal = false;
+                  remoteCover = null;
                   coverEdited = true;
                 });
               }
 
+              Future<void> crop() async {
+                final current = coverBytes;
+                if (current == null) return;
+                final cropped = await showCoverCropDialog(dialogContext, current);
+                if (cropped == null || !dialogContext.mounted) return;
+                setDialogState(() {
+                  coverBytes = cropped;
+                  coverMimeType = 'image/png';
+                  coverEdited = true;
+                  coverRemoved = false;
+                  restoreOriginal = false;
+                  remoteCover = null;
+                });
+              }
+
+              Future<void> original() async {
+                setDialogState(() => coverBusy = true);
+                try {
+                  final uri = await const TrackArtworkService().resolveOriginal(trackPath);
+                  final bytes = uri?.scheme == 'file' ? await File.fromUri(uri!).readAsBytes() : null;
+                  if (!dialogContext.mounted) return;
+                  setDialogState(() {
+                    coverBytes = bytes;
+                    coverMimeType = bytes == null ? null : _mimeTypeForImage('', bytes);
+                    remoteCover = bytes == null ? uri : null;
+                    restoreOriginal = true;
+                    coverRemoved = false;
+                    coverEdited = true;
+                    coverBusy = false;
+                  });
+                } catch (_) {
+                  if (dialogContext.mounted) {
+                    setDialogState(() {
+                      coverBusy = false;
+                      saveError = 'Could not restore the original cover.';
+                    });
+                  }
+                }
+              }
+
               return PopScope(
-                canPop: !saving,
+                canPop: !saving && !coverBusy,
                 child: ResonanceDialog(
                   title: Row(
                     children: [
@@ -297,47 +343,66 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                           ),
                         ),
                         const SizedBox(height: 16),
-                        Row(
+                        Center(
+                          child: ClipRRect(
+                            borderRadius: resonanceBorderRadius(context, 10),
+                            child: Container(
+                              key: const Key('metadata-cover-preview'),
+                              width: 176,
+                              height: 176,
+                              color: Theme.of(dialogContext).colorScheme.surfaceContainerHighest,
+                              child: coverBytes != null
+                                  ? Image.memory(coverBytes!, fit: BoxFit.contain)
+                                  : remoteCover != null
+                                  ? Image.network(
+                                      remoteCover.toString(),
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (_, __, ___) => const Icon(Icons.image_outlined, size: 40),
+                                    )
+                                  : const Icon(Icons.image_outlined, size: 40),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 8,
+                          runSpacing: 4,
                           children: [
-                            ClipRRect(
-                              borderRadius: resonanceBorderRadius(context, 10),
-                              child: Container(
-                                width: 58,
-                                height: 58,
-                                color: Theme.of(dialogContext).colorScheme.surfaceContainerHighest,
-                                child: coverBytes == null
-                                    ? const Icon(Icons.image_rounded)
-                                    : Image.memory(coverBytes!, fit: BoxFit.cover),
+                            OutlinedButton.icon(
+                              onPressed: saving || coverBusy ? null : pickCover,
+                              icon: const Icon(Icons.image_search_rounded, size: 18),
+                              label: Text(
+                                context.tr(coverBytes == null && remoteCover == null ? 'Choose cover' : 'Change cover'),
                               ),
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  OutlinedButton.icon(
-                                    onPressed: saving ? null : pickCover,
-                                    icon: const Icon(Icons.image_search_rounded, size: 18),
-                                    label: Text(
-                                      coverBytes == null ? context.tr("Choose cover") : context.tr("Change cover"),
-                                    ),
-                                  ),
-                                  if (coverBytes != null)
-                                    TextButton.icon(
-                                      onPressed: saving
-                                          ? null
-                                          : () => setDialogState(() {
-                                              coverBytes = null;
-                                              coverMimeType = null;
-                                              coverRemoved = true;
-                                              coverEdited = true;
-                                            }),
-                                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                                      label: Text(context.tr("Remove cover")),
-                                    ),
-                                ],
+                            if (coverBytes != null)
+                              OutlinedButton.icon(
+                                onPressed: saving || coverBusy ? null : crop,
+                                icon: const Icon(Icons.crop_rounded, size: 18),
+                                label: Text(context.tr('Crop / zoom')),
                               ),
-                            ),
+                            if (coverBytes != null || remoteCover != null)
+                              TextButton.icon(
+                                onPressed: saving || coverBusy
+                                    ? null
+                                    : () => setDialogState(() {
+                                        coverBytes = null;
+                                        coverMimeType = null;
+                                        remoteCover = null;
+                                        coverRemoved = true;
+                                        coverEdited = true;
+                                        restoreOriginal = false;
+                                      }),
+                                icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                                label: Text(context.tr('Remove cover')),
+                              ),
+                            if (canRestore || coverEdited)
+                              TextButton.icon(
+                                onPressed: saving || coverBusy ? null : original,
+                                icon: const Icon(Icons.restore_rounded, size: 18),
+                                label: Text(context.tr('Restore original')),
+                              ),
                           ],
                         ),
                         if (saveError != null) ...[
@@ -353,17 +418,19 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                   ),
                   actions: [
                     TextButton(
-                      onPressed: saving ? null : () => Navigator.pop(dialogContext),
+                      onPressed: saving || coverBusy ? null : () => Navigator.pop(dialogContext),
                       child: Text(context.tr("Cancel")),
                     ),
                     ElevatedButton(
-                      onPressed: saving
+                      onPressed: saving || coverBusy
                           ? null
                           : () async {
                               final title = titleController.text.trim();
                               final artist = artistController.text.trim();
-                              final picture = !coverEdited
-                                  ? existingMetadata?.picture
+                              // Null leaves pictures untouched in metadata_god; re-sending the
+                              // old picture on text-only edits appends another embedded copy.
+                              final picture = !coverEdited || restoreOriginal
+                                  ? null
                                   : coverRemoved
                                   ? null
                                   : coverBytes == null
@@ -380,7 +447,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                                   artist: artist,
                                   picture: picture,
                                 );
-                                var embedded = true;
+                                if (coverEdited) await const TrackArtworkService().rememberOriginal(trackPath);
                                 try {
                                   await handler.withTrackFileReleased(
                                     trackPath,
@@ -392,15 +459,19 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                                   // Original containers may not support tag writing. A cover-only
                                   // change still works in Resonance; never pretend text tags saved.
                                   if (!coverEdited || title != currentTitle || artist != currentArtist) rethrow;
-                                  embedded = false;
                                 }
                                 await MetadataCacheService.set(trackPath, title, artist);
                                 final updatedCover = coverRemoved ? null : coverBytes;
                                 if (coverEdited) {
-                                  if (!embedded && !coverRemoved) {
-                                    await const TrackArtworkService().saveCover(trackPath, coverBytes!);
+                                  if (restoreOriginal) {
+                                    await const TrackArtworkService().restoreOriginal(trackPath);
+                                  } else if (coverRemoved) {
+                                    await const TrackArtworkService().embeddedChanged(trackPath, removed: true);
                                   } else {
-                                    await const TrackArtworkService().embeddedChanged(trackPath, removed: coverRemoved);
+                                    // A successful tag write does not prove replacement: the native
+                                    // writer appends pictures while its reader returns the first one.
+                                    // The user's exact choice must remain authoritative in Resonance.
+                                    await const TrackArtworkService().saveCover(trackPath, coverBytes!);
                                   }
                                 } else {
                                   TrackArtworkService.notifyChanged(trackPath);
@@ -442,6 +513,9 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
         },
       );
     } finally {
+      // Popping completes the dialog Future before its exit animation unmounts
+      // the TextFields. Keep their controllers alive until the route is gone.
+      await editorRoute?.completed;
       titleController.dispose();
       artistController.dispose();
     }

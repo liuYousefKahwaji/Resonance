@@ -771,6 +771,22 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         self.assertNotIn("done", sink.events)
         self.assertEqual(len(FakeYoutubeDL.calls), 1)
 
+    def test_download_transfer_progress_only_exposes_numeric_transfer_fields(self):
+        sink = EventSink()
+        def respond(ydl, _target, download):
+            ydl.options["progress_hooks"][0]({"status": "downloading", "_percent_str": "25.0%",
+                "downloaded_bytes": 1024, "total_bytes": 4096, "speed": 512, "eta": 6,
+                "info_dict": {"url": "https://private.invalid/token", "http_headers": {"Cookie": "private"}}})
+            return {"id": "aaaaaaaaaaa"}
+        FakeYoutubeDL.responder = respond
+        bridge.download("https://youtu.be/aaaaaaaaaaa", "/unused", sink)
+        event = next(e for e in sink.events if e.startswith("resonance_transfer:"))
+        progress = json.loads(event.split(":", 1)[1])
+        self.assertEqual(progress, {"downloadedBytes": 1024, "totalBytes": 4096, "estimatedTotalBytes": None,
+            "bytesPerSecond": 512, "etaSeconds": 6})
+        self.assertNotIn("private", event)
+        self.assertTrue(any(e.startswith("progress:25.0:") for e in sink.events))
+
     def test_download_retries_initial_network_failure_once(self):
         sink = EventSink()
         calls = []

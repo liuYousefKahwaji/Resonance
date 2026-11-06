@@ -1,3 +1,4 @@
+import 'package:resonance/models/download_transfer_progress.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,12 +14,14 @@ void main() {
     final runner = _OwnedProcessRunner();
     final request = YoutubeRequest();
     var imports = 0;
+    DownloadTransferProgress? transfer;
     try {
       await expectLater(
         MediaDownloader(runner: runner)
             .downloadAudio(
               url: 'https://www.youtube.com/watch?v=abcdefghijk',
               request: request,
+              onTransferProgress: (value) => transfer = value,
               onProgress: (percent, _) {
                 if (percent > 0) request.cancel();
               },
@@ -32,6 +35,9 @@ void main() {
       expect(runner.starts, 1);
       expect(await runner.owned!.exitCode.timeout(const Duration(seconds: 1)), isNot(0));
       expect(imports, 0);
+      expect(transfer?.downloadedBytes, 1024);
+      expect(transfer?.totalBytes, 4096);
+      expect(transfer?.bytesPerSecond, 512);
     } finally {
       runner.owned?.kill();
       await folder.delete(recursive: true);
@@ -53,7 +59,7 @@ class _OwnedProcessRunner extends WindowsYtdlpRunner {
     owned = await Process.start('python', [
       '-u',
       '-c',
-      "import time; print('resonance_progress:1.0%', flush=True); time.sleep(30)",
+      "import time; print('resonance_progress:25.0%|resonance_transfer:{\"downloadedBytes\":1024,\"totalBytes\":4096,\"bytesPerSecond\":512,\"etaSeconds\":6}', flush=True); time.sleep(30)",
     ]);
     return WindowsYtdlpProcess(process: owned!, authenticated: false);
   }

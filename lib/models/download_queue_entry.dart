@@ -1,3 +1,4 @@
+import 'download_transfer_progress.dart';
 import 'package:resonance/models/youtube_track.dart';
 import 'package:resonance/core/youtube/youtube_access_models.dart';
 
@@ -15,6 +16,7 @@ class DownloadQueueEntry {
   final String statusText;
   final String? localPath;
   final String? error;
+  final DownloadTransferProgress? transfer;
   final YoutubeFailureKind? failureKind;
 
   const DownloadQueueEntry({
@@ -30,6 +32,7 @@ class DownloadQueueEntry {
     this.localPath,
     this.error,
     this.failureKind,
+    this.transfer,
   });
 
   DownloadQueueEntry copyWith({
@@ -40,6 +43,8 @@ class DownloadQueueEntry {
     String? localPath,
     String? error,
     YoutubeFailureKind? failureKind,
+    DownloadTransferProgress? transfer,
+    bool clearTransfer = false,
   }) => DownloadQueueEntry(
     id: id,
     track: track,
@@ -53,5 +58,6 @@ class DownloadQueueEntry {
     localPath: localPath ?? this.localPath,
     error: error ?? this.error,
     failureKind: failureKind ?? this.failureKind,
+    transfer: clearTransfer ? null : transfer ?? this.transfer,
   );
 }

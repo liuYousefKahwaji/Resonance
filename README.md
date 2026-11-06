@@ -18,7 +18,7 @@ Resonance keeps your music library on your device. Import local audio, build pla
 
 ## Current release
 
-The current source version is **4.0.2** (build **26**), matching `version: 4.0.2+26` in [`pubspec.yaml`](pubspec.yaml). This update refines the Android player and navigation, adds download cancellation, and stops failed Drive downloads from retrying indefinitely. See the [4.0.2 patch notes](release/v4.0.2/patchnotes.md), the [4.0 overhaul](release/v4.0.0/patchnotes.md), and [GitHub Releases](https://github.com/liuYousefKahwaji/Resonance/releases/latest) for packaged builds.
+The current source version is **4.0.3** (build **27**), matching `version: 4.0.3+27` in [`pubspec.yaml`](pubspec.yaml). This update improves cover editing, adds Android mini-player swipe controls, and shows clearer download progress. See the [4.0.3 patch notes](release/v4.0.3/patchnotes.md), the [4.0 overhaul](release/v4.0.0/patchnotes.md), and [GitHub Releases](https://github.com/liuYousefKahwaji/Resonance/releases/latest) for packaged builds.
 
 The working tree may contain features intended for the next release. See the release page for the exact behavior of a published build.
 

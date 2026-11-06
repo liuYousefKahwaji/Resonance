@@ -1,3 +1,4 @@
+import 'package:resonance/models/download_transfer_progress.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/widgets/common/track_link_menu.dart';
@@ -86,10 +87,36 @@ class DownloadQueuePanel extends StatelessWidget {
                           children: [
                             Text(
                               failed
-                                  ? (entry.error ?? context.tr("Download failed"))
+                                  ? (entry.error == null
+                                        ? context.tr("Download failed")
+                                        : context.trRendered(entry.error!))
                                   : context.trRendered(entry.statusText),
-                              maxLines: 2,
+                              maxLines: failed ? null : 2,
                             ),
+                            if (entry.status == DownloadQueueStatus.downloading && entry.transfer != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  [
+                                    entry.transfer!.sizeLabel,
+                                    if (entry.transfer!.bytesPerSecond != null)
+                                      '${DownloadTransferProgress.formatBytes(entry.transfer!.bytesPerSecond!)}/s',
+                                    if (entry.transfer!.etaSeconds != null)
+                                      context.tr('{0} remaining', [_eta(entry.transfer!.etaSeconds!)]),
+                                  ].where((part) => part.isNotEmpty).join(' · '),
+                                  key: const Key('download-transfer-details'),
+                                  textDirection: TextDirection.ltr,
+                                  textAlign: Directionality.of(context) == TextDirection.rtl
+                                      ? TextAlign.right
+                                      : TextAlign.left,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ),
+                            if (failed && entry.attempts > 1)
+                              Text(
+                                context.tr('Stopped after {0} attempts. Retry when you are ready.', [entry.attempts]),
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
                             if (entry.status == DownloadQueueStatus.downloading)
                               Padding(
                                 padding: const EdgeInsets.only(top: 6),
@@ -137,6 +164,12 @@ class DownloadQueuePanel extends StatelessWidget {
       );
     },
   );
+
+  String _eta(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    if (seconds < 3600) return '${seconds ~/ 60}m ${seconds % 60}s';
+    return '${seconds ~/ 3600}h ${(seconds % 3600) ~/ 60}m';
+  }
 
   Widget _statusIcon(DownloadQueueStatus status) => switch (status) {
     DownloadQueueStatus.queued => const Icon(Icons.schedule_rounded),

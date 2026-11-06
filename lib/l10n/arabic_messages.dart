@@ -1,5 +1,20 @@
 /// Arabic UI translations. Placeholders match the English message templates.
 const arabicMessages = <String, String>{
+  'Crop / zoom': 'قصّ / تكبير',
+  'Crop cover': 'قصّ الغلاف',
+  'Drag to position. Pinch or use the slider to zoom.': 'اسحب لتحديد الموضع. كبّر بإصبعين أو استخدم شريط التكبير.',
+  'Use cover': 'استخدام الغلاف',
+  'Restore original': 'استعادة الغلاف الأصلي',
+  'Could not crop this image. Try another image.': 'تعذّر قصّ هذه الصورة. جرّب صورة أخرى.',
+  'Could not read this image. Try another image.': 'تعذّرت قراءة هذه الصورة. جرّب صورة أخرى.',
+  'Could not restore the original cover.': 'تعذّرت استعادة الغلاف الأصلي.',
+  'Stopped after {0} attempts. Retry when you are ready.': 'توقف بعد {0} محاولات. أعد المحاولة عندما تكون جاهزًا.',
+  'Not enough storage space. Free some space, then retry.': 'مساحة التخزين غير كافية. وفّر مساحة ثم أعد المحاولة.',
+  'Cannot save to the download folder. Choose another folder in Settings.':
+      'تعذّر الحفظ في مجلد التنزيلات. اختر مجلدًا آخر من الإعدادات.',
+  'Audio processing failed. Retry the download or choose Original format in Settings.':
+      'فشلت معالجة الصوت. أعد التنزيل أو اختر التنسيق الأصلي من الإعدادات.',
+
   'Compact player controls': 'عناصر تشغيل مختصرة',
   'A simpler player above navigation; open it for all controls':
       'مشغّل مبسّط فوق شريط التنقل؛ افتحه للوصول إلى جميع عناصر التحكم',

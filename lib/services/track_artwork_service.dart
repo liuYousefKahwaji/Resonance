@@ -31,6 +31,7 @@ class TrackArtworkService {
   }
 
   String _preference(String path) => 'track_artwork_override_${_key(path)}';
+  String _originalPreference(String path) => 'track_artwork_original_${_key(path)}';
 
   static void notifyChanged(String path) {
     _embedded.remove(path);
@@ -46,7 +47,41 @@ class TrackArtworkService {
     }
   }
 
-  Future<Uri?> _resolve(String path, {required bool allowRemote}) async {
+  Future<bool> hasOverride(String path) async {
+    final value = (await SharedPreferences.getInstance()).getString(_preference(path));
+    return value != null && value != 'original';
+  }
+
+  /// Capture once, before native tag writes can add/replace an embedded picture.
+  Future<void> rememberOriginal(String path) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.containsKey(_originalPreference(path))) return;
+    final original = await resolveOriginal(path);
+    await prefs.setString(_originalPreference(path), original?.toString() ?? 'none');
+  }
+
+  /// Preview the original without changing the saved choice until Save is pressed.
+  Future<Uri?> resolveOriginal(String path, {bool allowRemote = true}) async {
+    try {
+      final stored = (await SharedPreferences.getInstance()).getString(_originalPreference(path));
+      if (stored == 'none') return null;
+      if (stored != null) {
+        final uri = Uri.tryParse(stored);
+        if (uri?.scheme == 'file') return await File.fromUri(uri!).exists() ? uri : null;
+        return allowRemote && (uri?.scheme == 'http' || uri?.scheme == 'https') ? uri : null;
+      }
+      return await _resolve(path, allowRemote: allowRemote, ignoreOverride: true);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> restoreOriginal(String path) async {
+    await (await SharedPreferences.getInstance()).setString(_preference(path), 'original');
+    notifyChanged(path);
+  }
+
+  Future<Uri?> _resolve(String path, {required bool allowRemote, bool ignoreOverride = false}) async {
     final revision = _revisions[path] ?? 0;
     if (path.startsWith('https://') || path.startsWith('http://')) {
       final url = (await MetadataCacheService.get(path))?.artworkUrl;
@@ -55,8 +90,9 @@ class TrackArtworkService {
     final source = File(path);
     if (!await source.exists()) return null;
     final prefs = await SharedPreferences.getInstance();
-    final override = prefs.getString(_preference(path));
+    final override = ignoreOverride ? null : prefs.getString(_preference(path));
     if (override == 'none') return null;
+    if (override == 'original') return resolveOriginal(path, allowRemote: allowRemote);
     if (override != null) {
       final uri = Uri.tryParse(override);
       if (uri?.scheme == 'file' && await File.fromUri(uri!).exists()) return uri;
@@ -72,7 +108,11 @@ class TrackArtworkService {
       } catch (_) {
         /* Some original containers have no supported tag reader. */
       }
-      if (revision != (_revisions[path] ?? 0)) return resolve(path, allowRemote: allowRemote);
+      if (revision != (_revisions[path] ?? 0)) {
+        return ignoreOverride
+            ? resolveOriginal(path, allowRemote: allowRemote)
+            : resolve(path, allowRemote: allowRemote);
+      }
       if (_embedded.length >= 80) _embedded.remove(_embedded.keys.first);
       _embedded[path] = (stamp: stamp, uri: embedded);
     }

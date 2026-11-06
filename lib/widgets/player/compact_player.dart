@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/player/mini_player_swipe_surface.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/widgets/player/player_surface.dart';
 import 'package:resonance/widgets/common/overflowing_text.dart';
@@ -75,11 +76,11 @@ class CompactPlayer extends StatelessWidget {
     );
   }
 
-  Widget _phoneMini(BuildContext context, MediaItem item) => GestureDetector(
+  Widget _phoneMini(BuildContext context, MediaItem item) => MiniPlayerSwipeSurface(
     key: const Key('compact-phone-player'),
-    onVerticalDragEnd: (details) {
-      if ((details.primaryVelocity ?? 0) < -180) onExpand(item.id);
-    },
+    onExpand: () => onExpand(item.id),
+    onNext: () => handler.next(),
+    onPrevious: () => handler.previous(restartCurrent: false),
     child: Material(
       color: playerSurfaceColor(context),
       child: InkWell(
