@@ -1,5 +1,24 @@
 /// Arabic UI translations. Placeholders match the English message templates.
 const arabicMessages = <String, String>{
+  'Compact player controls': 'عناصر تشغيل مختصرة',
+  'A simpler player above navigation; open it for all controls':
+      'مشغّل مبسّط فوق شريط التنقل؛ افتحه للوصول إلى جميع عناصر التحكم',
+  'Cancel downloads': 'إلغاء التنزيلات',
+  'Stopping…': 'جارٍ الإيقاف…',
+  'Cancel download': 'إلغاء التنزيل',
+  'Cancel and clear queue': 'إلغاء التنزيلات ومسح القائمة',
+  'Queue options': 'خيارات قائمة التنزيل',
+  'Retrying ({0}/{1})...': 'إعادة المحاولة ({0}/{1})...',
+  'Cancelled': 'أُلغي',
+  'Queue downloads': 'إضافة التنزيلات إلى القائمة',
+  'Add downloads without waiting on the current page': 'أضف التنزيلات دون الانتظار في الصفحة الحالية',
+  'Download stopped. Retry when you are ready.': 'توقف التنزيل. أعد المحاولة عندما تكون جاهزًا.',
+
+  'This fills missing covers using saved YouTube links first, then a title and artist search. Covers are saved in Resonance without changing your audio files.':
+      'يملأ الأغلفة المفقودة باستخدام روابط يوتيوب المحفوظة أولًا، ثم البحث بالعنوان والفنان. تُحفظ الأغلفة في ريزونانس دون تغيير ملفات الصوت.',
+  'Restore missing covers from saved links or YouTube search':
+      'استعادة الأغلفة المفقودة من الروابط المحفوظة أو البحث في يوتيوب',
+
   "Collapse sidebar": "تصغير الشريط الجانبي",
   "Expand sidebar": "توسيع الشريط الجانبي",
   "LRCLIB is busy. Try again in a moment.": "خدمة LRCLIB مشغولة. حاول مجددًا بعد قليل.",

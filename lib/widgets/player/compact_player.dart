@@ -1,3 +1,6 @@
+import 'package:resonance/providers/theme_provider.dart';
+import 'package:resonance/widgets/player/player_surface.dart';
+import 'package:resonance/widgets/common/overflowing_text.dart';
 import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:provider/provider.dart';
@@ -17,7 +20,7 @@ class CompactPlayer extends StatelessWidget {
   final ValueChanged<String> onExpand;
   final VoidCallback onQueue;
 
-  Widget _identity(BuildContext context, MediaItem item, bool wide) {
+  Widget _identity(BuildContext context, MediaItem item, bool wide, {bool marquee = false}) {
     final colors = Theme.of(context).colorScheme;
     return InkWell(
       onTap: () => onExpand(item.id),
@@ -25,8 +28,8 @@ class CompactPlayer extends StatelessWidget {
       child: Row(
         children: [
           Container(
-            width: wide ? 52 : 44,
-            height: wide ? 52 : 44,
+            width: wide ? 52 : 48,
+            height: wide ? 52 : 48,
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(color: colors.surfaceContainerHighest, borderRadius: BorderRadius.circular(6)),
             child: item.artUri == null
@@ -45,12 +48,18 @@ class CompactPlayer extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  item.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: wide ? 13 : 12, fontWeight: FontWeight.w600),
-                ),
+                if (marquee)
+                  OverflowingText(
+                    text: item.title,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  )
+                else
+                  Text(
+                    item.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: wide ? 13 : 14, fontWeight: FontWeight.w600),
+                  ),
                 const SizedBox(height: 3),
                 Text(
                   item.artist ?? '',
@@ -65,6 +74,68 @@ class CompactPlayer extends StatelessWidget {
       ),
     );
   }
+
+  Widget _phoneMini(BuildContext context, MediaItem item) => GestureDetector(
+    key: const Key('compact-phone-player'),
+    onVerticalDragEnd: (details) {
+      if ((details.primaryVelocity ?? 0) < -180) onExpand(item.id);
+    },
+    child: Material(
+      color: playerSurfaceColor(context),
+      child: InkWell(
+        onTap: () => onExpand(item.id),
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 8, 8),
+          child: Row(
+            children: [
+              Expanded(child: _identity(context, item, false, marquee: true)),
+              const SizedBox(width: 4),
+              IconButtonTheme(
+                data: IconButtonThemeData(
+                  style: IconButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.onSurface),
+                ),
+                child: const PlaybackSettings(),
+              ),
+              ValueListenableBuilder<PlaybackVisualState>(
+                valueListenable: handler.playbackVisualNotifier,
+                builder: (context, state, _) => IconButton(
+                  tooltip: context.tr(state.playing ? 'Pause' : 'Play'),
+                  onPressed: handler.playPause,
+                  color: Theme.of(context).colorScheme.onSurface,
+                  iconSize: 32,
+                  icon: Icon(state.playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Widget _volumeAction(BuildContext context) => IconButton(
+    tooltip: context.tr('Volume'),
+    icon: const Icon(Icons.volume_up_rounded, size: 21),
+    onPressed: () => showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      useSafeArea: true,
+      builder: (_) => Provider<PlayerHandler>.value(
+        value: handler,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(context.tr('Volume'), style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 16),
+              const VolumeBar(),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 
   Widget _transport(BuildContext context, bool wide) => Directionality(
     textDirection: TextDirection.ltr,
@@ -114,9 +185,16 @@ class CompactPlayer extends StatelessWidget {
       return LayoutBuilder(
         builder: (context, constraints) {
           final wide = constraints.maxWidth >= 850;
+          final preferences = context.watch<ThemeProvider?>();
+          if (!wide &&
+              Theme.of(context).platform == TargetPlatform.android &&
+              (preferences?.modernLayout ?? false) &&
+              (preferences?.compactPlayerControls ?? true)) {
+            return _phoneMini(context, item);
+          }
           return DecoratedBox(
             decoration: BoxDecoration(
-              color: colors.surfaceContainer,
+              color: playerSurfaceColor(context),
               border: Border(top: BorderSide(color: colors.onSurface.withValues(alpha: .08))),
             ),
             child: SafeArea(
@@ -143,7 +221,7 @@ class CompactPlayer extends StatelessWidget {
                               children: [
                                 _transport(context, true),
                                 const SizedBox(height: 2),
-                                const SeekBar(showSeekSteps: false, slim: true),
+                                const SeekBar(slim: true),
                               ],
                             ),
                           ),
@@ -168,7 +246,7 @@ class CompactPlayer extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Padding(
-                            padding: const EdgeInsets.only(top: 8, bottom: 4),
+                            padding: const EdgeInsets.only(top: 4),
                             child: Row(
                               children: [
                                 Expanded(child: _identity(context, item, false)),
@@ -178,16 +256,17 @@ class CompactPlayer extends StatelessWidget {
                                   onPressed: onQueue,
                                   icon: const Icon(Icons.queue_music_rounded, size: 22),
                                 ),
+                                _volumeAction(context),
                               ],
                             ),
                           ),
-                          const SeekBar(showSeekSteps: false, slim: true),
+                          const SeekBar(slim: true),
                           Padding(
-                            padding: const EdgeInsets.only(top: 4, bottom: 8),
+                            padding: const EdgeInsets.only(top: 2, bottom: 6),
                             child: Directionality(
                               textDirection: TextDirection.ltr,
                               child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                                 children: [
                                   const PlayerModes(showLoop: false),
                                   IconButton(
@@ -201,6 +280,8 @@ class CompactPlayer extends StatelessWidget {
                                       style: IconButton.styleFrom(
                                         backgroundColor: colors.primary,
                                         foregroundColor: colors.onPrimary,
+                                        fixedSize: const Size(48, 48),
+                                        shape: const CircleBorder(),
                                       ),
                                       tooltip: context.tr(state.playing ? 'Pause' : 'Play'),
                                       onPressed: handler.playPause,
@@ -216,32 +297,6 @@ class CompactPlayer extends StatelessWidget {
                                     icon: const Icon(Icons.skip_next_rounded, size: 26),
                                   ),
                                   const PlayerModes(showShuffle: false),
-                                  IconButton(
-                                    tooltip: context.tr('Volume'),
-                                    icon: const Icon(Icons.volume_up_rounded, size: 21),
-                                    onPressed: () => showModalBottomSheet<void>(
-                                      context: context,
-                                      showDragHandle: true,
-                                      useSafeArea: true,
-                                      builder: (context) => Provider<PlayerHandler>.value(
-                                        value: handler,
-                                        child: Padding(
-                                          padding: const EdgeInsets.fromLTRB(24, 0, 24, 28),
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                context.tr('Volume'),
-                                                style: Theme.of(context).textTheme.titleMedium,
-                                              ),
-                                              const SizedBox(height: 16),
-                                              const VolumeBar(),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
                                 ],
                               ),
                             ),

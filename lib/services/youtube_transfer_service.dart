@@ -1,3 +1,4 @@
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
@@ -123,6 +124,7 @@ class YoutubeTransferService {
   Future<YoutubeDownloadResult> downloadVideo(
     String videoId, {
     required void Function(double percentage, String status) onProgress,
+    YoutubeRequest? request,
     TrackSourceMethod sourceMethod = TrackSourceMethod.importedFromQrTransfer,
     String? historyTitle,
     String? historyArtist,
@@ -130,6 +132,7 @@ class YoutubeTransferService {
     if (!TrackSourceRepository.isValidYoutubeVideoId(videoId)) {
       throw ArgumentError.value(videoId, 'videoId', 'Invalid YouTube video ID');
     }
+    request?.check();
     final url = TrackSourceRepository.canonicalUrlFor(videoId);
     var resolvedTitle = _nonEmpty(historyTitle);
     var resolvedArtist = _nonEmpty(historyArtist);
@@ -145,6 +148,7 @@ class YoutubeTransferService {
       await downloader.downloadAudio(
         url: url,
         onProgress: onProgress,
+        request: request,
         historyTitle: resolvedTitle,
         historyArtist: resolvedArtist,
         onTrackPrepared: (track) {
@@ -171,6 +175,7 @@ class YoutubeTransferService {
       final downloaded = await android_youtube.AndroidYoutubeDownloader().downloadAudio(
         url,
         onProgress: onProgress,
+        request: request,
         historyTitle: resolvedTitle,
         historyArtist: resolvedArtist,
       );
@@ -182,6 +187,7 @@ class YoutubeTransferService {
     } else {
       throw UnsupportedError('Playlist transfer downloads are supported on Windows and Android.');
     }
+    request?.check();
     await sourceRepository.saveSource(
       localPath: result.localPath,
       youtubeVideoId: videoId,

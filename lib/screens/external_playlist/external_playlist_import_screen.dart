@@ -1,3 +1,4 @@
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'dart:async';
 
@@ -49,6 +50,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
   int _progressTotal = 0;
   double _progressPercentage = 0;
   bool _stopRequested = false;
+  YoutubeRequest? _downloadRequest;
 
   @override
   void initState() {
@@ -65,6 +67,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
 
   @override
   void dispose() {
+    _downloadRequest?.cancel();
     _urlController.dispose();
     super.dispose();
   }
@@ -192,6 +195,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
     setState(() {
       _stage = _ExternalImportStage.importing;
       _stopRequested = false;
+      _downloadRequest = YoutubeRequest();
       _progressCompleted = 0;
       _progressTotal = entries.map((entry) => entry.videoId).toSet().length;
       _progressPercentage = 0;
@@ -203,6 +207,7 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
         entries: entries,
         mode: mode,
         isCancelled: () => _stopRequested,
+        request: _downloadRequest,
         onProgress: (progress) {
           if (!mounted) return;
           setState(() {
@@ -340,11 +345,14 @@ class _ExternalPlaylistImportScreenState extends State<ExternalPlaylistImportScr
       overall: overall,
       itemProgress: _progressPercentage > 0 && _progressPercentage < 100 ? _progressPercentage / 100 : null,
       action: OutlinedButton.icon(
-        onPressed: _stopRequested ? null : () => setState(() => _stopRequested = true),
+        onPressed: _stopRequested
+            ? null
+            : () {
+                setState(() => _stopRequested = true);
+                _downloadRequest?.cancel();
+              },
         icon: const Icon(Icons.stop_circle_outlined),
-        label: Text(
-          _stopRequested ? context.tr("Stopping after current track…") : context.tr("Stop after current track"),
-        ),
+        label: Text(_stopRequested ? context.tr("Stopping…") : context.tr("Cancel downloads")),
       ),
     );
   }

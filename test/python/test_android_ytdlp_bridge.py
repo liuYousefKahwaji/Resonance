@@ -754,6 +754,23 @@ class AndroidYtdlpBridgeTests(unittest.TestCase):
         self.assertEqual(sink.events[-1], "done")
         self.assertTrue(any(call.get("cookiefile") == cookies for call in FakeYoutubeDL.calls))
 
+    def test_cancelled_download_never_reports_old_track_or_done(self):
+        sink = EventSink()
+        class Flag:
+            value = False
+            def get(self): return self.value
+        flag = Flag()
+        def respond(ydl, _target, download):
+            flag.value = True
+            ydl.options["progress_hooks"][0]({"status": "finished", "filename": "/old.webm"})
+            return {"id": "aaaaaaaaaaa"}
+        FakeYoutubeDL.responder = respond
+        bridge.download("https://youtu.be/aaaaaaaaaaa", "/unused", sink, cancelled=flag)
+        self.assertEqual(sink.events[-1], "cancelled")
+        self.assertFalse(any(e.startswith("track-json:") for e in sink.events))
+        self.assertNotIn("done", sink.events)
+        self.assertEqual(len(FakeYoutubeDL.calls), 1)
+
     def test_download_retries_initial_network_failure_once(self):
         sink = EventSink()
         calls = []

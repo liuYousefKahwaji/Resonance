@@ -1,3 +1,5 @@
+import 'package:resonance/app/route_transitions.dart';
+import 'package:resonance/services/track_artwork_service.dart';
 import 'package:resonance/widgets/library/current_track_surface.dart';
 import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
@@ -119,25 +121,20 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
     }
   }
 
+  int _coverGeneration = 0;
   Future<void> _loadCoverArt({bool force = false}) async {
-    final isStream = widget.trackPath.startsWith('http://') || widget.trackPath.startsWith('https://');
-    if (isStream) return;
     final path = widget.trackPath;
+    if (path.startsWith('http')) return;
+    final generation = ++_coverGeneration;
     try {
-      final file = File(path);
-      if (!await file.exists()) return;
-      final modified = (await file.lastModified()).millisecondsSinceEpoch;
-      final cached = force ? null : _CoverArtMemoryCache.lookup(path, modified, widget.artworkRevision);
-      if (cached != null) {
-        if (mounted && widget.trackPath == path) setState(() => _coverArt = cached.bytes);
-        return;
+      final uri = await const TrackArtworkService().resolve(path);
+      final bytes = uri?.scheme == 'file' ? await File.fromUri(uri!).readAsBytes() : null;
+      if (mounted && widget.trackPath == path && generation == _coverGeneration) {
+        setState(() {
+          _coverArt = bytes;
+          _artworkUrl = uri?.scheme == 'https' || uri?.scheme == 'http' ? uri.toString() : null;
+        });
       }
-
-      final metadata = await MetadataGod.readMetadata(file: path);
-      final bytes = metadata.picture?.data;
-      final art = bytes == null || bytes.isEmpty ? null : Uint8List.fromList(bytes);
-      _CoverArtMemoryCache.set(path, modified, widget.artworkRevision, art);
-      if (mounted && widget.trackPath == path) setState(() => _coverArt = art);
     } catch (_) {}
   }
 
@@ -216,7 +213,6 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
 
   void _showMetadataEditor(BuildContext context, String currentTitle, String currentArtist) async {
     final trackPath = widget.trackPath;
-    final artworkRevision = widget.artworkRevision;
     final handler = Provider.of<PlayerHandler>(context, listen: false);
     final titleController = TextEditingController(text: currentTitle);
     final artistController = TextEditingController(text: currentArtist);
@@ -224,6 +220,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
     Uint8List? coverBytes;
     String? coverMimeType;
     var coverRemoved = false;
+    var coverEdited = false;
 
     try {
       existingMetadata = await MetadataGod.readMetadata(file: trackPath);
@@ -231,6 +228,13 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
       if (picture != null && picture.data.isNotEmpty) {
         coverBytes = Uint8List.fromList(picture.data);
         coverMimeType = picture.mimeType;
+      }
+    } catch (_) {}
+    try {
+      final uri = await const TrackArtworkService().resolve(trackPath, allowRemote: false);
+      if (uri?.scheme == 'file') {
+        coverBytes = await File.fromUri(uri!).readAsBytes();
+        coverMimeType = _mimeTypeForImage('', coverBytes);
       }
     } catch (_) {}
 
@@ -259,6 +263,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                   coverBytes = Uint8List.fromList(bytes);
                   coverMimeType = _mimeTypeForImage(file.path ?? file.name, bytes);
                   coverRemoved = false;
+                  coverEdited = true;
                 });
               }
 
@@ -325,6 +330,7 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                                               coverBytes = null;
                                               coverMimeType = null;
                                               coverRemoved = true;
+                                              coverEdited = true;
                                             }),
                                       icon: const Icon(Icons.delete_outline_rounded, size: 18),
                                       label: Text(context.tr("Remove cover")),
@@ -356,7 +362,9 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                           : () async {
                               final title = titleController.text.trim();
                               final artist = artistController.text.trim();
-                              final picture = coverRemoved
+                              final picture = !coverEdited
+                                  ? existingMetadata?.picture
+                                  : coverRemoved
                                   ? null
                                   : coverBytes == null
                                   ? existingMetadata?.picture
@@ -372,23 +380,40 @@ class _TrackTileState extends State<TrackTile> with SingleTickerProviderStateMix
                                   artist: artist,
                                   picture: picture,
                                 );
-                                await handler.withTrackFileReleased(
-                                  trackPath,
-                                  () => MetadataGod.writeMetadata(file: trackPath, metadata: updatedMetadata),
-                                  updatedTitle: title,
-                                  updatedArtist: artist,
-                                );
+                                var embedded = true;
+                                try {
+                                  await handler.withTrackFileReleased(
+                                    trackPath,
+                                    () => MetadataGod.writeMetadata(file: trackPath, metadata: updatedMetadata),
+                                    updatedTitle: title,
+                                    updatedArtist: artist,
+                                  );
+                                } catch (_) {
+                                  // Original containers may not support tag writing. A cover-only
+                                  // change still works in Resonance; never pretend text tags saved.
+                                  if (!coverEdited || title != currentTitle || artist != currentArtist) rethrow;
+                                  embedded = false;
+                                }
                                 await MetadataCacheService.set(trackPath, title, artist);
-                                final modified = (await File(trackPath).lastModified()).millisecondsSinceEpoch;
-                                final updatedCover = picture == null ? null : Uint8List.fromList(picture.data);
-                                _CoverArtMemoryCache.set(trackPath, modified, artworkRevision, updatedCover);
+                                final updatedCover = coverRemoved ? null : coverBytes;
+                                if (coverEdited) {
+                                  if (!embedded && !coverRemoved) {
+                                    await const TrackArtworkService().saveCover(trackPath, coverBytes!);
+                                  } else {
+                                    await const TrackArtworkService().embeddedChanged(trackPath, removed: coverRemoved);
+                                  }
+                                } else {
+                                  TrackArtworkService.notifyChanged(trackPath);
+                                }
                                 if (mounted && widget.trackPath == trackPath) {
                                   setState(() {
                                     _title = title;
                                     _artist = artist;
                                     _coverArt = updatedCover;
+                                    _artworkUrl = null;
                                   });
                                 }
+                                unawaited(_loadCoverArt(force: true));
                                 if (dialogContext.mounted) {
                                   Navigator.pop(dialogContext);
                                 }
@@ -602,7 +627,7 @@ class _TrackTileContent extends StatelessWidget {
     if (!context.mounted || !ready) return;
     await Navigator.of(
       context,
-    ).push(MaterialPageRoute<void>(builder: (_) => const StandalonePlayerScreen(playlistTrack: true)));
+    ).push(resonancePlayerRoute<void>(context, (_) => const StandalonePlayerScreen(playlistTrack: true)));
   }
 
   Future<void> _activateTrack(PlayerHandler handler, String resolvedTitle, String resolvedArtist) async {
@@ -1106,8 +1131,17 @@ class _TrackIcon extends StatelessWidget {
                 size: size,
                 borderRadius: 6,
               )
-            : isStream && artworkUrl != null
-            ? _StreamArtworkThumbnail(url: artworkUrl!)
+            : artworkUrl != null
+            ? isStream
+                  ? _StreamArtworkThumbnail(url: artworkUrl!)
+                  : ClipRRect(
+                      borderRadius: resonanceBorderRadius(context, 6),
+                      child: ProgressiveNetworkArtwork(
+                        url: artworkUrl!,
+                        fit: BoxFit.cover,
+                        fallback: const Icon(Icons.music_note_rounded),
+                      ),
+                    )
             : Icon(
                 isPlaying ? Icons.graphic_eq_rounded : (isStream ? Icons.sensors_rounded : Icons.music_note_rounded),
                 key: ValueKey(
@@ -1163,33 +1197,4 @@ class _StreamArtworkThumbnail extends StatelessWidget {
       ],
     ),
   );
-}
-
-class _CoverArtCacheEntry {
-  final int modified;
-  final int revision;
-  final Uint8List? bytes;
-
-  const _CoverArtCacheEntry({required this.modified, required this.revision, required this.bytes});
-}
-
-class _CoverArtMemoryCache {
-  static const int _maxEntries = 80;
-  static final Map<String, _CoverArtCacheEntry> _entries = {};
-
-  static _CoverArtCacheEntry? lookup(String path, int modified, int revision) {
-    if (!_entries.containsKey(path)) return null;
-    final entry = _entries.remove(path)!;
-    if (entry.modified != modified || entry.revision != revision) return null;
-    _entries[path] = entry;
-    return entry;
-  }
-
-  static void set(String path, int modified, int revision, Uint8List? bytes) {
-    _entries.remove(path);
-    _entries[path] = _CoverArtCacheEntry(modified: modified, revision: revision, bytes: bytes);
-    while (_entries.length > _maxEntries) {
-      _entries.remove(_entries.keys.first);
-    }
-  }
 }

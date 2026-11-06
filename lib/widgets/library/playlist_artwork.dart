@@ -1,8 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:metadata_god/metadata_god.dart';
-import 'package:resonance/services/metadata_cache_service.dart';
+import 'package:resonance/services/track_artwork_service.dart';
 import 'package:resonance/widgets/common/progressive_network_artwork.dart';
 
 /// A small mosaic of existing track art, without resolving any stream URLs.
@@ -37,16 +36,9 @@ class _PlaylistArtworkState extends State<PlaylistArtwork> {
         ? Future.value(const [])
         : Future.wait(
             _paths.map((path) async {
-              String? cachedArtwork;
-              try {
-                cachedArtwork = (await MetadataCacheService.get(path))?.artworkUrl;
-                if (Uri.tryParse(path)?.hasScheme == true && !File(path).isAbsolute) return cachedArtwork;
-                final bytes = (await MetadataGod.readMetadata(file: path)).picture?.data;
-                if (bytes != null && bytes.isNotEmpty) return Uint8List.fromList(bytes);
-              } catch (_) {}
-              // Original-format downloads keep their artwork in metadata cache
-              // instead of rewriting the audio file to embed a picture.
-              return cachedArtwork;
+              final uri = await const TrackArtworkService().resolve(path);
+              if (uri?.scheme == 'file') return File.fromUri(uri!).readAsBytes();
+              return uri?.toString();
             }),
           );
   }

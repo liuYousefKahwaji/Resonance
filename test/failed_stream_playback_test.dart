@@ -1,3 +1,4 @@
+import 'package:resonance/services/track_artwork_service.dart';
 import 'package:resonance/core/audio/playback_session.dart';
 import 'package:resonance/models/youtube_track.dart';
 import 'dart:async';
@@ -450,6 +451,118 @@ void main() {
     expect(handler.mediaItem.value, isNull);
     expect(player.opened, isEmpty);
     expect((await SharedPreferences.getInstance()).getString(PlaybackSession.preferenceKey), isNull);
+  }, skip: !Platform.isWindows);
+  test(
+    'cover edits refresh the current media item without restarting audio; removal clears every player',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final path = '${storage.path}/cover-test.webm';
+      await File(path).writeAsBytes([0]);
+      final player = _RetainingPlayer();
+      final handler = PlayerHandler(windowsPlayer: player);
+      addTearDown(handler.dispose);
+      await handler.initialization;
+      final artwork = TrackArtworkService(directory: Directory('${storage.path}/covers'));
+      await artwork.saveCover(path, Uint8List.fromList([1, 2, 3]));
+      final previous = await artwork.resolve(path);
+      handler.mediaItem.add(MediaItem(id: path, title: 'Song', artist: 'Artist', artUri: previous));
+      await artwork.saveCover(path, Uint8List.fromList([4, 5, 6]));
+      await handler.refreshTrackArtwork(path);
+      expect(handler.mediaItem.value!.artUri, isNot(previous));
+      expect(handler.mediaItem.value!.title, 'Song');
+      expect(player.opened, isEmpty, reason: 'Artwork updates must not touch the decoder.');
+      await artwork.embeddedChanged(path, removed: true);
+      await handler.refreshTrackArtwork(path);
+      expect(handler.mediaItem.value!.artUri, isNull);
+      expect(player.opened, isEmpty);
+    },
+    skip: !Platform.isWindows,
+  );
+
+  test('a late artwork refresh cannot overwrite a newly selected song', () async {
+    SharedPreferences.setMockInitialValues({});
+    final path = '${storage.path}/old.webm';
+    await File(path).writeAsBytes([0]);
+    final player = _RetainingPlayer();
+    final handler = PlayerHandler(windowsPlayer: player);
+    addTearDown(handler.dispose);
+    await handler.initialization;
+    final artwork = TrackArtworkService(directory: Directory('${storage.path}/covers'));
+    await artwork.saveCover(path, Uint8List.fromList([1, 2, 3]));
+    handler.mediaItem.add(MediaItem(id: path, title: 'Old'));
+    final refresh = handler.refreshTrackArtwork(path);
+    final newest = MediaItem(id: 'new', title: 'New', artUri: Uri.parse('https://example.com/new.jpg'));
+    handler.mediaItem.add(newest);
+    await refresh;
+    expect(handler.mediaItem.value, newest);
+    expect(player.opened, isEmpty);
+  }, skip: !Platform.isWindows);
+  test('metadata edits preserve standalone presentation and a paused source position', () async {
+    SharedPreferences.setMockInitialValues({});
+    final path = '${storage.path}/edit.wav';
+    await File(path).writeAsBytes([0]);
+    final player = _RetainingPlayer();
+    final handler = PlayerHandler(windowsPlayer: player);
+    addTearDown(handler.dispose);
+    await handler.initialization;
+    await handler.loadTrack(
+      path,
+      'Before',
+      'Artist',
+      standalone: true,
+      playWhenReady: false,
+      initialPosition: const Duration(seconds: 12),
+    );
+    await handler.withTrackFileReleased(path, () async {}, updatedTitle: 'After', updatedArtist: 'Artist');
+    expect(handler.mediaItem.value!.title, 'After');
+    expect(handler.isStandaloneMode, isTrue);
+    expect(player.state.playing, isFalse);
+    expect(player.state.position, const Duration(seconds: 12));
+  }, skip: !Platform.isWindows);
+  test('metadata completion cannot reload a track the user has moved away from', () async {
+    SharedPreferences.setMockInitialValues({});
+    final first = '${storage.path}/first.wav', second = '${storage.path}/second.wav';
+    await File(first).writeAsBytes([0]);
+    await File(second).writeAsBytes([0]);
+    final player = _RetainingPlayer();
+    final handler = PlayerHandler(windowsPlayer: player);
+    addTearDown(handler.dispose);
+    await handler.initialization;
+    await handler.loadTrack(first, 'First', 'Artist', playWhenReady: false);
+    final started = Completer<void>(), finish = Completer<void>();
+    final edit = handler.withTrackFileReleased(
+      first,
+      () {
+        started.complete();
+        return finish.future;
+      },
+      updatedTitle: 'Edited',
+      updatedArtist: 'Artist',
+    );
+    await started.future;
+    await handler.loadTrack(second, 'Second', 'Artist', playWhenReady: false);
+    finish.complete();
+    await edit;
+    expect(handler.mediaItem.value!.id, second);
+    expect(player.opened.length, 2);
+  }, skip: !Platform.isWindows);
+  test('delayed load hydration cannot restore a cover edited just after opening', () async {
+    SharedPreferences.setMockInitialValues({});
+    final path = '${storage.path}/quick-cover-edit.webm';
+    await File(path).writeAsBytes([0]);
+    final player = _RetainingPlayer();
+    final handler = PlayerHandler(windowsPlayer: player);
+    addTearDown(handler.dispose);
+    await handler.initialization;
+    final artwork = TrackArtworkService(directory: Directory('${storage.path}/covers'));
+    await artwork.saveCover(path, Uint8List.fromList([1, 2, 3]));
+    final old = await artwork.resolve(path);
+    await handler.loadTrack(path, 'Song', 'Artist', artworkUri: old, playWhenReady: false);
+    await artwork.saveCover(path, Uint8List.fromList([4, 5, 6]));
+    await handler.refreshTrackArtwork(path);
+    final newest = handler.mediaItem.value!.artUri;
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    expect(handler.mediaItem.value!.artUri, newest);
   }, skip: !Platform.isWindows);
 }
 

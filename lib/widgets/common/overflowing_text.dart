@@ -89,36 +89,47 @@ class _OverflowingTextState extends State<OverflowingText> with SingleTickerProv
         )..layout();
         final availableWidth = constraints.maxWidth.isFinite ? constraints.maxWidth : painter.width;
         final distance = (painter.width - availableWidth).clamp(0.0, double.infinity);
-        _scheduleConfiguration(distance);
+        final animate = !MediaQuery.disableAnimationsOf(context) && TickerMode.of(context);
+        _scheduleConfiguration(animate ? distance : 0);
 
-        if (distance <= 0) {
-          return Text(widget.text, style: effectiveStyle, textAlign: widget.textAlign, maxLines: 1, softWrap: false);
+        if (distance <= 0 || !animate) {
+          return Text(
+            widget.text,
+            style: effectiveStyle,
+            textAlign: widget.textAlign,
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.ellipsis,
+          );
         }
 
-        return Semantics(
-          label: widget.text,
-          child: ExcludeSemantics(
-            child: ClipRect(
-              child: AnimatedBuilder(
-                animation: _controller,
-                builder: (context, child) => Transform.translate(
-                  key: const ValueKey('overflowing-text-motion'),
-                  offset: Offset(textDirection == TextDirection.rtl ? -_offset.value : _offset.value, 0),
-                  child: child,
-                ),
-                child: OverflowBox(
-                  alignment: AlignmentDirectional.centerStart,
-                  minWidth: painter.width,
-                  maxWidth: painter.width,
-                  child: SizedBox(
-                    key: const ValueKey('overflowing-text-content'),
-                    width: painter.width,
-                    child: Text(
-                      widget.text,
-                      style: effectiveStyle,
-                      maxLines: 1,
-                      softWrap: false,
-                      textDirection: textDirection,
+        return SizedBox(
+          height: painter.height,
+          child: Semantics(
+            label: widget.text,
+            child: ExcludeSemantics(
+              child: ClipRect(
+                child: AnimatedBuilder(
+                  animation: _controller,
+                  builder: (context, child) => Transform.translate(
+                    key: const ValueKey('overflowing-text-motion'),
+                    offset: Offset(textDirection == TextDirection.rtl ? -_offset.value : _offset.value, 0),
+                    child: child,
+                  ),
+                  child: OverflowBox(
+                    alignment: AlignmentDirectional.centerStart,
+                    minWidth: painter.width,
+                    maxWidth: painter.width,
+                    child: SizedBox(
+                      key: const ValueKey('overflowing-text-content'),
+                      width: painter.width,
+                      child: Text(
+                        widget.text,
+                        style: effectiveStyle,
+                        maxLines: 1,
+                        softWrap: false,
+                        textDirection: textDirection,
+                      ),
                     ),
                   ),
                 ),

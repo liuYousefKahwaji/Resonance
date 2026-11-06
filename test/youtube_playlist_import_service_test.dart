@@ -1,3 +1,4 @@
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -93,6 +94,7 @@ class _FakeYoutubeTransferService extends YoutubeTransferService {
   Future<YoutubeDownloadResult> downloadVideo(
     String videoId, {
     required void Function(double percentage, String status) onProgress,
+    YoutubeRequest? request,
     TrackSourceMethod sourceMethod = TrackSourceMethod.importedFromQrTransfer,
     String? historyTitle,
     String? historyArtist,

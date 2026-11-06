@@ -38,7 +38,27 @@ class DownloadQueuePanel extends StatelessWidget {
           ListTile(
             title: Text(context.tr("Download queue")),
             subtitle: Text(context.tr("{0} remaining", [controller.pendingCount])),
-            trailing: TextButton(onPressed: controller.clearFinished, child: Text(context.tr("Clear finished"))),
+            trailing: PopupMenuButton<String>(
+              tooltip: context.tr('Queue options'),
+              onSelected: (value) {
+                if (value == 'all') {
+                  controller.clearAll();
+                } else {
+                  controller.clearFinished();
+                }
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem(value: 'finished', child: Text(context.tr('Clear finished'))),
+                PopupMenuItem(value: 'all', child: Text(context.tr('Cancel and clear queue'))),
+              ],
+            ),
+          ),
+          SwitchListTile.adaptive(
+            dense: true,
+            title: Text(context.tr('Queue downloads')),
+            subtitle: Text(context.tr('Add downloads without waiting on the current page')),
+            value: controller.queueMode,
+            onChanged: controller.setQueueMode,
           ),
           const Divider(height: 1),
           Expanded(
@@ -49,6 +69,9 @@ class DownloadQueuePanel extends StatelessWidget {
                     itemBuilder: (context, index) {
                       final entry = entries[index];
                       final failed = entry.status == DownloadQueueStatus.failed;
+                      final stopped = failed || entry.status == DownloadQueueStatus.cancelled;
+                      final pending =
+                          entry.status == DownloadQueueStatus.downloading || entry.status == DownloadQueueStatus.queued;
                       final accessFailure =
                           entry.failureKind == YoutubeFailureKind.verificationRequired ||
                           entry.failureKind == YoutubeFailureKind.sessionRejected ||
@@ -70,11 +93,13 @@ class DownloadQueuePanel extends StatelessWidget {
                             if (entry.status == DownloadQueueStatus.downloading)
                               Padding(
                                 padding: const EdgeInsets.only(top: 6),
-                                child: LinearProgressIndicator(value: entry.progress > 0 ? (entry.progress / 100).clamp(0, 1) : null),
+                                child: LinearProgressIndicator(
+                                  value: entry.progress > 0 ? (entry.progress / 100).clamp(0, 1) : null,
+                                ),
                               ),
                           ],
                         ),
-                        trailing: failed
+                        trailing: stopped
                             ? Wrap(
                                 spacing: 2,
                                 children: [
@@ -97,6 +122,12 @@ class DownloadQueuePanel extends StatelessWidget {
                                   ),
                                 ],
                               )
+                            : pending
+                            ? IconButton(
+                                tooltip: context.tr('Cancel download'),
+                                onPressed: () => controller.cancel(entry.id),
+                                icon: const Icon(Icons.close_rounded),
+                              )
                             : TrackLinkMenu(trackId: entry.track.url),
                       );
                     },
@@ -114,6 +145,21 @@ class DownloadQueuePanel extends StatelessWidget {
       child: CircularProgressIndicator(strokeWidth: 2.5),
     ),
     DownloadQueueStatus.completed => const Icon(Icons.check_circle_rounded, color: Colors.green),
+    DownloadQueueStatus.cancelled => const Icon(Icons.block_rounded),
     DownloadQueueStatus.failed => const Icon(Icons.error_rounded, color: Colors.redAccent),
   };
 }
+
+/// The root overlay makes the same queue reachable from every listening tab.
+Future<void> showDownloadQueue(BuildContext context, {DownloadQueueController? controller}) =>
+    showModalBottomSheet<void>(
+      context: context,
+      useRootNavigator: true,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SizedBox(
+        height: MediaQuery.sizeOf(context).height * .78,
+        child: DownloadQueuePanel(controller: controller ?? DownloadQueueController.instance),
+      ),
+    );

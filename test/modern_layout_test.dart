@@ -1,3 +1,6 @@
+import 'package:resonance/widgets/player/song_video_selector.dart';
+import 'package:resonance/widgets/player/player_surface.dart';
+import 'package:resonance/app/route_transitions.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -68,7 +71,7 @@ void main() {
   for (final locale in [const Locale('en'), const Locale('ar')]) {
     for (final width in [320.0, 390.0, 850.0, 1280.0]) {
       testWidgets('optional shell and compact Search remain usable at $width ${locale.languageCode}', (tester) async {
-        SharedPreferences.setMockInitialValues({});
+        SharedPreferences.setMockInitialValues({'compact_player_controls': false});
         await tester.binding.setSurfaceSize(Size(width, 820));
         addTearDown(() => tester.binding.setSurfaceSize(null));
         var selected = -1;
@@ -176,7 +179,7 @@ void main() {
   for (final locale in [const Locale('en'), const Locale('ar')]) {
     for (final width in [390.0, 1280.0]) {
       testWidgets('Discover grid and playlist navigation at $width ${locale.languageCode}', (tester) async {
-        SharedPreferences.setMockInitialValues({});
+        SharedPreferences.setMockInitialValues({'compact_player_controls': false});
         await tester.binding.setSurfaceSize(Size(width, 820));
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final handler = _Handler();
@@ -283,6 +286,11 @@ void main() {
         if (width < 850) {
           expect(tester.getSize(find.byType(CompactPlayer)).height, lessThan(150));
           expect(find.byTooltip(AppStrings(locale).text('Previous')), findsOneWidget);
+          expect(find.byTooltip(AppStrings(locale).text('{0} seconds', ['-5'])), findsOneWidget);
+          expect(find.byTooltip(AppStrings(locale).text('{0} seconds', ['+5'])), findsOneWidget);
+          await tester.tap(find.byTooltip(AppStrings(locale).text('{0} seconds', ['+5'])));
+          await tester.tap(find.byTooltip(AppStrings(locale).text('{0} seconds', ['-5'])));
+          expect(handler.seekSteps, [5, -5]);
           expect(find.byTooltip(AppStrings(locale).text('Loop off')), findsOneWidget);
           expect(find.byTooltip(AppStrings(locale).text('Shuffle off')), findsOneWidget);
           expect(find.byTooltip(AppStrings(locale).text('Playback Settings')), findsOneWidget);
@@ -309,6 +317,168 @@ void main() {
       });
     }
   }
+
+  test('compact player defaults on and explicit choice survives reload', () async {
+    SharedPreferences.setMockInitialValues({});
+    final theme = ThemeProvider();
+    expect(theme.compactPlayerControls, isTrue);
+    await theme.reloadPortablePreferences();
+    expect(theme.compactPlayerControls, isTrue);
+    await theme.setCompactPlayerControls(false);
+    await theme.reloadPortablePreferences();
+    expect(theme.compactPlayerControls, isFalse);
+    theme.dispose();
+  });
+
+  for (final locale in [const Locale('en'), const Locale('ar')]) {
+    for (final width in [320.0, 390.0]) {
+      testWidgets('default phone mini player shares footer, expands, and keeps two actions at $width $locale', (
+        tester,
+      ) async {
+        SharedPreferences.setMockInitialValues({});
+        await tester.binding.setSurfaceSize(Size(width, 820));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final preferences = ThemeProvider();
+        final handler = _Handler();
+        await preferences.reloadPortablePreferences();
+        var expanded = 0;
+        final capture = GlobalKey();
+        await tester.pumpWidget(
+          MultiProvider(
+            providers: [
+              ChangeNotifierProvider.value(value: preferences),
+              Provider<PlayerHandler>.value(value: handler),
+            ],
+            child: MaterialApp(
+              locale: locale,
+              supportedLocales: const [Locale('en'), Locale('ar')],
+              localizationsDelegates: const [
+                AppStrings.delegate,
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+              theme: buildResonanceTheme(ResonanceThemeStyle.obsidian, Brightness.dark).copyWith(
+                platform: TargetPlatform.android,
+                textTheme: buildResonanceTheme(
+                  ResonanceThemeStyle.obsidian,
+                  Brightness.dark,
+                ).textTheme.apply(fontFamily: 'ReviewFont'),
+              ),
+              home: Scaffold(
+                body: RepaintBoundary(
+                  key: capture,
+                  child: ModernMusicShell(
+                    selected: 2,
+                    onSelected: (_) {},
+                    playlists: const [],
+                    onCreatePlaylist: () {},
+                    onSettings: () {},
+                    onHistory: () {},
+                    downloads: const SizedBox(),
+                    content: const Center(child: Text('Your music')),
+                    player: CompactPlayer(handler: handler, onExpand: (_) => expanded++, onQueue: () {}),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(find.byKey(const Key('compact-phone-player')), findsOneWidget);
+        expect(tester.getSize(find.byType(CompactPlayer)).height, lessThan(78));
+        expect(find.byTooltip(AppStrings(locale).text('Playback Settings')), findsOneWidget);
+        expect(find.byTooltip(AppStrings(locale).text('Pause')), findsOneWidget);
+        expect(find.byTooltip(AppStrings(locale).text('Next')), findsNothing);
+        expect(find.byTooltip(AppStrings(locale).text('Show queue')), findsNothing);
+        final footer = tester.widget<Material>(find.byKey(const Key('modern-mobile-footer')));
+        final mini = tester.widget<Material>(
+          find.descendant(of: find.byKey(const Key('compact-phone-player')), matching: find.byType(Material)).first,
+        );
+        expect(footer.color, mini.color);
+        expect(footer.color, playerSurfaceColor(tester.element(find.byType(CompactPlayer))));
+        await tester.tap(find.text('Haunted House'));
+        expect(expanded, 1);
+        await tester.fling(find.byKey(const Key('compact-phone-player')), const Offset(0, -100), 800);
+        expect(expanded, 2);
+        await tester.pump(const Duration(seconds: 1));
+        final boundary = tester.renderObject<RenderRepaintBoundary>(find.byKey(capture));
+        await tester.runAsync(() async {
+          final image = await boundary.toImage();
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          final file = File('build/v402/mini-${locale.languageCode}-${width.toInt()}.png');
+          await file.parent.create(recursive: true);
+          await file.writeAsBytes(bytes!.buffer.asUint8List());
+          image.dispose();
+        });
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+        handler.close();
+        preferences.dispose();
+      });
+    }
+  }
+
+  testWidgets('Song and Video teach labels then smoothly become accessible icons', (tester) async {
+    var video = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: SongVideoSelector(video: false, onChanged: (value) => video = value)),
+      ),
+    );
+    expect(find.text('Song'), findsOneWidget);
+    expect(find.text('Video'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pump(const Duration(milliseconds: 160));
+    expect(find.byKey(const ValueKey('mode-icon-true')), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('Video'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('mode-icon-true')));
+    expect(video, isTrue);
+    expect(find.byTooltip('Video'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('modern Android player route opens vertically and reverses down', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final provider = ThemeProvider();
+    await provider.reloadPortablePreferences();
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: provider,
+        child: MaterialApp(
+          theme: ThemeData(platform: TargetPlatform.android),
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => Navigator.of(context).push(
+                resonancePlayerRoute<void>(
+                  context,
+                  (_) => const Scaffold(key: Key('full-player-fixture'), body: Text('Player')),
+                ),
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    final opening = tester.getTopLeft(find.byKey(const Key('full-player-fixture')));
+    expect(opening.dx, 0);
+    expect(opening.dy, greaterThan(0));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.byKey(const Key('full-player-fixture'))), Offset.zero);
+    Navigator.of(tester.element(find.byKey(const Key('full-player-fixture')))).pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(tester.getTopLeft(find.byKey(const Key('full-player-fixture'))).dy, greaterThan(0));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+    provider.dispose();
+  });
 
   testWidgets('cinematic intro can skip immediately with reduced motion', (tester) async {
     final position = ValueNotifier(const Duration(milliseconds: 1200));
@@ -435,6 +605,9 @@ class _Handler extends Fake implements PlayerHandler {
   Future<void> next() async {}
   @override
   Future<void> playPause() async {}
+  final seekSteps = <int>[];
+  @override
+  Future<void> seekBySeconds(int seconds) async => seekSteps.add(seconds);
   @override
   Future<void> changeVolume(double value) async => volumeNotifier.value = value;
   void close() {

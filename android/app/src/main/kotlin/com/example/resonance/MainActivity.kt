@@ -61,6 +61,7 @@ class MainActivity : AudioServiceFragmentActivity() {
     private val portableExport = PortableFileExportBridge(this)
     private var entrypointDispatchScheduled = false
     private var minimizedTileLaunch = false
+    private val downloadRequests = ConcurrentHashMap<Long, AtomicBoolean>()
     private val streamRequests = ConcurrentHashMap<Long, AtomicBoolean>()
 
     private data class RecognitionRequest(
@@ -232,6 +233,11 @@ class MainActivity : AudioServiceFragmentActivity() {
                     }
 
                     // ── download ──────────────────────────────────────────────
+                    "cancelDownload" -> {
+                        val requestId = call.argument<Number>("requestId")?.toLong()
+                        if (requestId != null) downloadRequests[requestId]?.set(true)
+                        result.success(null)
+                    }
                     "download" -> {
                         val includeCover = call.argument<Boolean>("includeCover") ?: true
                         val requestId = call.argument<Number>("requestId")?.toLong()
@@ -246,6 +252,8 @@ class MainActivity : AudioServiceFragmentActivity() {
 
                         File(outputDir).mkdirs()
 
+                        val cancelled = AtomicBoolean(false)
+                        downloadRequests[requestId] = cancelled
                         // Acknowledge immediately; progress comes via EventChannel.
                         result.success(null)
 
@@ -263,10 +271,13 @@ class MainActivity : AudioServiceFragmentActivity() {
                                         events,
                                         cookiePath,
                                         includeCover,
+                                        cancelled,
                                     )
                                 }
                             } catch (e: Exception) {
-                                events.success("error:${e.message}")
+                                events.success(if (cancelled.get()) "cancelled" else "error:${e.message}")
+                            } finally {
+                                downloadRequests.remove(requestId, cancelled)
                             }
                         }
                     }

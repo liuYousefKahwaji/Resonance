@@ -951,7 +951,7 @@ def test_access(url: str, cookie_file) -> str:
 
 # ── download ───────────────────────────────────────────────────────────────────
 
-def download(url: str, output_dir: str, event_sink, cookie_file=None, include_cover=True) -> None:
+def download(url: str, output_dir: str, event_sink, cookie_file=None, include_cover=True, cancelled=None) -> None:
     """
     Download audio to output_dir, reporting progress via event_sink.
 
@@ -998,6 +998,7 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None, include_co
     total_items = [1]
 
     def progress_hook(d):
+        _check_cancelled(cancelled)
         status = d.get("status")
         if status == "downloading":
             pct_str = d.get("_percent_str", "0%").strip().replace("%", "")
@@ -1047,10 +1048,12 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None, include_co
                         except OSError:
                             pass
                         cover_path = ""
+                _check_cancelled(cancelled)
                 event_sink.success(track_event(filepath, title, artist, cover_path, video_id))
                 current_item[0] += 1
 
     def postprocessor_hook(d):
+        _check_cancelled(cancelled)
         if d.get("status") == "finished":
             filepath = d.get("info_dict", {}).get("filepath") or d.get("filepath", "")
             if not filepath:
@@ -1088,29 +1091,32 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None, include_co
     }
 
     try:
+        _check_cancelled(cancelled)
         event_sink.success("progress:0:Finding audio...")
         cached = _take_audio_info(url, cookie_file)
-        for attempt in range(2):
+        for attempt in range(2 if cancelled is None else 1):
             try:
                 if cached is not None:
                     try:
-                        with _make_ydl(opts) as ydl:
+                        with _make_ydl(opts, cancelled=cancelled) as ydl:
                             info = ydl.process_ie_result(cached, download=True)
                     except Exception:
+                        _check_cancelled(cancelled)
                         if current_item[0] > 1:
                             raise
                         event_sink.success('progress:0:Refreshing audio link...')
                         # A different extractor client can select another
                         # encoding. Never append it to a stale cached .part.
                         opts['continuedl'] = False
-                        info, _ = _extract_info(url, opts, download=True, cookie_file=cookie_file, prefer_guest=True)
+                        info, _ = _extract_info(url, opts, download=True, cookie_file=cookie_file, prefer_guest=True, cancelled=cancelled)
                     finally:
                         cached = None
                 else:
                     info, _ = _extract_info(url, opts, download=True, cookie_file=cookie_file,
-                                            prefer_guest=True)
+                                            prefer_guest=True, cancelled=cancelled)
                 break
             except Exception as error:
+                _check_cancelled(cancelled)
                 # A failed initial connection is not retried by yt-dlp's media
                 # retries. Retry it once, but never replay completed items or
                 # hammer an account/rate-limit/permanently unavailable error.
@@ -1131,6 +1137,12 @@ def download(url: str, output_dir: str, event_sink, cookie_file=None, include_co
         entries = info.get("entries") if info else None
         if entries:
             total_items[0] = len(list(entries))
+        _check_cancelled(cancelled)
         event_sink.success("done")
+    except StreamRequestCancelled:
+        event_sink.success("cancelled")
     except Exception as e:
+        if cancelled is not None and cancelled.get():
+            event_sink.success("cancelled")
+            return
         event_sink.success(f"error:{unicode_text(e)}")

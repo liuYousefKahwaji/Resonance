@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/player/player_surface.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/resonance_motion.dart';
@@ -57,9 +58,11 @@ class _ModernMusicShellState extends State<ModernMusicShell> {
       Widget navigation(int index, {bool compact = false}) {
         final active = widget.selected == index;
         final icon = Icon(
-          icons[index],
-          size: compact ? 22 : 21,
-          color: active ? colors.primary : colors.onSurfaceVariant,
+          compact && active
+              ? [Icons.explore_rounded, Icons.search_rounded, Icons.library_music_rounded][index]
+              : icons[index],
+          size: compact ? 25 : 21,
+          color: active ? (compact ? colors.onSurface : colors.primary) : colors.onSurfaceVariant,
         );
         return Semantics(
           selected: active,
@@ -77,7 +80,7 @@ class _ModernMusicShellState extends State<ModernMusicShell> {
                       : compact
                       ? 12
                       : 16,
-                  vertical: compact ? 8 : 12,
+                  vertical: 12,
                 ),
                 child: compact
                     ? Column(
@@ -360,7 +363,8 @@ class _ModernMusicShellState extends State<ModernMusicShell> {
             widget.player,
             if (!wide)
               Material(
-                color: colors.surface,
+                key: const Key('modern-mobile-footer'),
+                color: playerSurfaceColor(context),
                 child: SafeArea(
                   top: false,
                   child: Row(

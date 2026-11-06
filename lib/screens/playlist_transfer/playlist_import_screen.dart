@@ -1,3 +1,4 @@
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
@@ -62,6 +63,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
   var _streamedCount = 0;
   var _isStreaming = false;
   var _stopRequested = false;
+  YoutubeRequest? _downloadRequest;
   bool _cancelledDuringDownload = false;
   String? _createdPlaylistName;
   bool _keepInSync = false;
@@ -97,6 +99,7 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
 
   @override
   void dispose() {
+    _downloadRequest?.cancel();
     _session.clear();
     unawaited(_scannerController?.dispose());
     super.dispose();
@@ -239,8 +242,10 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
         _downloadStatus = 'Preparing download…';
       });
       try {
+        _downloadRequest = YoutubeRequest();
         final result = await _youtube.downloadVideo(
           videoId,
+          request: _downloadRequest,
           historyTitle: _manifest!.trackMetadata[videoId]?.title,
           historyArtist: _manifest!.trackMetadata[videoId]?.artist,
           onProgress: (percentage, status) {
@@ -254,6 +259,9 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
         );
         _resolvedById[videoId] = result.localPath;
         _downloadedCount++;
+      } on YoutubeRequestCancelled {
+        _cancelledDuringDownload = true;
+        break;
       } catch (error) {
         _downloadFailures[videoId] = error is YoutubeFailure ? error.userMessage : error.toString();
         if (error is YoutubeFailure && error.isAccessFailure) {
@@ -549,11 +557,14 @@ class _PlaylistImportScreenState extends State<PlaylistImportScreen> {
         Text(context.trRendered(_downloadStatus), textAlign: TextAlign.center),
         const SizedBox(height: 20),
         OutlinedButton.icon(
-          onPressed: _stopRequested ? null : () => setState(() => _stopRequested = true),
+          onPressed: _stopRequested
+              ? null
+              : () {
+                  setState(() => _stopRequested = true);
+                  _downloadRequest?.cancel();
+                },
           icon: const Icon(Icons.stop_circle_outlined),
-          label: Text(
-            _stopRequested ? context.tr("Stopping after current track…") : context.tr("Stop after current track"),
-          ),
+          label: Text(_stopRequested ? context.tr("Stopping…") : context.tr("Cancel downloads")),
         ),
         const SizedBox(height: 8),
         Text(

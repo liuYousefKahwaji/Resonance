@@ -1,3 +1,4 @@
+import 'package:resonance/widgets/player/song_video_selector.dart';
 import 'package:resonance/widgets/player/lyrics_picker.dart';
 import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
@@ -806,30 +807,12 @@ class _SongVideoSelector extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.only(top: 4, bottom: 8),
-          child: SegmentedButton<bool>(
+          child: SongVideoSelector(
             key: const Key('song-video-selector'),
-            showSelectedIcon: false,
-            style: ButtonStyle(
-              visualDensity: VisualDensity.compact,
-              padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 18)),
-              backgroundColor: WidgetStateProperty.resolveWith(
-                (states) => states.contains(WidgetState.selected)
-                    ? Theme.of(context).colorScheme.primary
-                    : Theme.of(context).colorScheme.surface.withValues(alpha: 0.8),
-              ),
-              foregroundColor: WidgetStateProperty.resolveWith(
-                (states) => states.contains(WidgetState.selected)
-                    ? Theme.of(context).colorScheme.onPrimary
-                    : Theme.of(context).colorScheme.onSurface,
-              ),
-            ),
-            segments: [
-              ButtonSegment(value: false, label: Text(context.tr('Song'))),
-              ButtonSegment(value: true, label: Text(context.tr('Video'))),
-            ],
-            selected: {session.wantsVideo},
-            onSelectionChanged: (selection) {
-              if (selection.single) {
+            video: session.wantsVideo,
+            collapse: context.watch<ThemeProvider?>()?.modernLayout ?? false,
+            onChanged: (video) {
+              if (video) {
                 onVideo();
                 unawaited(session.showVideo());
               } else {

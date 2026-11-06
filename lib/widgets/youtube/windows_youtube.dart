@@ -1,3 +1,4 @@
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
@@ -255,12 +256,14 @@ class MediaDownloader {
     required Function(double percentage, String status) onProgress,
 
     required Function(String filePath, String? youtubeVideoId) onTrackDownloaded,
+    YoutubeRequest? request,
     String? historyTitle,
     String? historyArtist,
     FutureOr<void> Function(YoutubeDownloadResult track)? onTrackPrepared,
   }) => YoutubeDownloadGate.instance.run(
     () => _downloadAudioUnlocked(
       url: url,
+      request: request,
       onProgress: onProgress,
       onTrackDownloaded: onTrackDownloaded,
       historyTitle: historyTitle,
@@ -276,10 +279,12 @@ class MediaDownloader {
     required Function(double percentage, String status) onProgress,
 
     required Function(String filePath, String? youtubeVideoId) onTrackDownloaded,
+    YoutubeRequest? request,
     String? historyTitle,
     String? historyArtist,
     FutureOr<void> Function(YoutubeDownloadResult track)? onTrackPrepared,
   }) async {
+    request?.check();
     onProgress(0, 'Finding audio...');
     final binDir = await binDirPath;
 
@@ -309,7 +314,7 @@ class MediaDownloader {
     final requestedVideoId = TrackSourceRepository.videoIdFromUrlOrId(url);
     final singleVideo = requestedVideoId != null && Uri.tryParse(url)?.queryParameters.containsKey('list') != true;
 
-    const int maxAttempts = 3;
+    final maxAttempts = request == null ? 3 : 1;
 
     int attempt = 0;
     var guest = true;
@@ -318,6 +323,7 @@ class MediaDownloader {
     var refreshFromStart = false;
 
     while (attempt < maxAttempts) {
+      request?.check();
       attempt++;
 
       if (switchingAccount) {
@@ -393,6 +399,22 @@ class MediaDownloader {
             ? await _runner.start(arguments, guest: guest)
             : await _runner.startWithAudioInfo(arguments, cachedInfo, guest: guest);
         final process = started.process;
+        var exited = false;
+        final exitCodeFuture = process.exitCode.whenComplete(() => exited = true);
+        if (request != null) {
+          unawaited(
+            request.cancelled.then((_) async {
+              if (exited) return;
+              // Kill only this owned process tree, including any FFmpeg child.
+              try {
+                if (Platform.isWindows) await Process.run('taskkill', ['/PID', '${process.pid}', '/T', '/F']);
+              } catch (_) {
+              } finally {
+                if (!exited) process.kill();
+              }
+            }),
+          );
+        }
 
         final playlistItemRegex = RegExp(r'\[download\]\s+Downloading item\s+(\d+)\s+of\s+(\d+)');
         final alreadyDownloadedRegex = RegExp(r'\[download\]\s+(.+?)\s+has already been downloaded');
@@ -469,8 +491,10 @@ class MediaDownloader {
         // the stream; the directory scan below remains the path fallback.
         final stdoutDone = decodeWindowsProcessLines(process.stdout).listen(handleStdoutLine).asFuture<void>();
         final stderrDone = decodeWindowsProcessLines(process.stderr).listen(handleLine).asFuture<void>();
-        final exitCodeFuture = process.exitCode;
+
         await Future.wait<void>([stdoutDone, stderrDone]);
+        await exitCodeFuture;
+        request?.check();
 
         // ── Process filepath lines sequentially, fully awaited ──
 
@@ -479,6 +503,7 @@ class MediaDownloader {
         var completedRequestedVideo = false;
 
         Future<void> importPath(String path, {String? youtubeVideoId}) async {
+          request?.check();
           final normalized = p.normalize(path);
           if (processedPaths.add(normalized) &&
               await File(normalized).exists() &&
@@ -496,6 +521,7 @@ class MediaDownloader {
                     (youtubeVideoId == null ? null : TrackSourceRepository.thumbnailUrlFor(youtubeVideoId)),
               );
             }
+            request?.check();
             await onTrackPrepared?.call(
               YoutubeDownloadResult(
                 localPath: normalized,
@@ -504,6 +530,7 @@ class MediaDownloader {
                 artist: metadata?.artist ?? historyArtist,
               ),
             );
+            request?.check();
             await onTrackDownloaded(normalized, youtubeVideoId);
             try {
               await const DownloadHistoryRepository().recordSuccess(
@@ -617,6 +644,8 @@ class MediaDownloader {
 
         return;
       } catch (e) {
+        request?.check();
+        if (e is YoutubeRequestCancelled) rethrow;
         if (cachedInfo != null) {
           cachedInfo = null;
           refreshFromStart = true;

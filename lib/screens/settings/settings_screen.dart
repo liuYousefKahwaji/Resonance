@@ -1,3 +1,5 @@
+import 'package:resonance/services/track_artwork_service.dart';
+import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/widgets/player/playback_settings.dart';
 import 'dart:async';
@@ -324,7 +326,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         title: Text(context.tr("Fill missing covers?")),
         content: Text(
           context.tr(
-            "This searches YouTube for each local track in the current playlist and embeds the first result thumbnail only when the track has no cover.",
+            "This fills missing covers using saved YouTube links first, then a title and artist search. Covers are saved in Resonance without changing your audio files.",
           ),
         ),
         actions: [
@@ -366,49 +368,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
             continue;
           }
 
-          final metadata = await MetadataGod.readMetadata(file: track);
-          final existingPicture = metadata.picture;
-          if (existingPicture != null && existingPicture.data.isNotEmpty) {
-            skipped++;
-            continue;
-          }
-
-          final query = (metadata.title?.trim().isNotEmpty ?? false)
-              ? metadata.title!.trim()
-              : p.basenameWithoutExtension(track);
-          if (query.isEmpty) {
-            failed++;
-            continue;
-          }
-
-          setState(() => _coverLookupStatus = 'Searching YouTube: $query');
-          final thumbnailUrl = await _lookupFirstThumbnail(query);
-          if (thumbnailUrl == null || thumbnailUrl.isEmpty) {
-            failed++;
-            continue;
-          }
-
-          final bytes = await _downloadBytes(thumbnailUrl);
-          if (bytes.isEmpty) {
-            failed++;
-            continue;
-          }
-
-          await handler.withTrackFileReleased(
+          final result = await const TrackArtworkService().fillMissingCover(
             track,
-            () => MetadataGod.writeMetadata(
-              file: track,
-              metadata: _metadataWithPicture(
-                metadata,
-                Picture(mimeType: _mimeTypeForImage(thumbnailUrl, bytes), data: bytes),
-              ),
-            ),
-            updatedTitle: metadata.title?.trim().isNotEmpty == true
-                ? metadata.title!.trim()
-                : p.basenameWithoutExtension(track),
-            updatedArtist: metadata.artist?.trim().isNotEmpty == true ? metadata.artist!.trim() : 'Unknown Artist',
+            download: _downloadBytes,
+            lookup: () async {
+              final cached = await MetadataCacheService.get(track);
+              Metadata? metadata;
+              try {
+                metadata = await MetadataGod.readMetadata(file: track);
+              } catch (_) {}
+              final title = cached?.title ?? metadata?.title ?? p.basenameWithoutExtension(track);
+              final artist = cached?.artist ?? metadata?.artist ?? '';
+              final query = [
+                title,
+                if (artist != 'Unknown Artist') artist,
+              ].where((part) => part.trim().isNotEmpty).join(' ');
+              if (query.isEmpty || !mounted) return null;
+              setState(() => _coverLookupStatus = 'Searching YouTube: $query');
+              return _lookupFirstThumbnail(query);
+            },
           );
-          updated++;
+          switch (result) {
+            case CoverRepairResult.updated:
+              await handler.refreshTrackArtwork(track);
+              updated++;
+            case CoverRepairResult.unchanged:
+              skipped++;
+            case CoverRepairResult.notFound:
+              failed++;
+          }
         } on YoutubeFailure catch (failure) {
           if (failure.isAccessFailure) rethrow;
           failed++;
@@ -484,52 +472,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final request = await client.getUrl(Uri.parse(url));
       request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0');
-      final response = await request.close();
+      final response = await request.close().timeout(const Duration(seconds: 10));
       if (response.statusCode < 200 || response.statusCode >= 300) return Uint8List(0);
       final chunks = <int>[];
-      await for (final chunk in response) {
+      await for (final chunk in response.timeout(const Duration(seconds: 10))) {
+        if (chunks.length + chunk.length > 4 * 1024 * 1024) throw StateError('Cover image too large');
         chunks.addAll(chunk);
       }
       return Uint8List.fromList(chunks);
     } finally {
       client.close(force: true);
     }
-  }
-
-  Metadata _metadataWithPicture(Metadata metadata, Picture picture) {
-    return Metadata(
-      title: metadata.title,
-      durationMs: metadata.durationMs,
-      artist: metadata.artist,
-      album: metadata.album,
-      albumArtist: metadata.albumArtist,
-      trackNumber: metadata.trackNumber,
-      trackTotal: metadata.trackTotal,
-      discNumber: metadata.discNumber,
-      discTotal: metadata.discTotal,
-      year: metadata.year,
-      genre: metadata.genre,
-      picture: picture,
-      fileSize: metadata.fileSize,
-    );
-  }
-
-  String _mimeTypeForImage(String path, List<int> bytes) {
-    final extension = p.extension(Uri.tryParse(path)?.path ?? path).toLowerCase();
-    if (extension == '.png' || (bytes.length > 4 && bytes[0] == 0x89 && bytes[1] == 0x50)) {
-      return 'image/png';
-    }
-    if (extension == '.webp' ||
-        (bytes.length > 12 &&
-            bytes[0] == 0x52 &&
-            bytes[1] == 0x49 &&
-            bytes[2] == 0x46 &&
-            bytes[3] == 0x46 &&
-            bytes[8] == 0x57 &&
-            bytes[9] == 0x45)) {
-      return 'image/webp';
-    }
-    return 'image/jpeg';
   }
 
   @override
@@ -688,6 +641,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     trailing: Switch(value: provider.modernLayout, onChanged: provider.setModernLayout),
                   ),
                 ),
+                if (Platform.isAndroid)
+                  Consumer<ThemeProvider>(
+                    builder: (context, provider, _) => provider.modernLayout
+                        ? Column(
+                            children: [
+                              _Divider(),
+                              _SettingsTile(
+                                icon: Icons.view_stream_outlined,
+                                title: context.tr('Compact player controls'),
+                                subtitle: context.tr('A simpler player above navigation; open it for all controls'),
+                                trailing: Switch(
+                                  value: provider.compactPlayerControls,
+                                  onChanged: provider.setCompactPlayerControls,
+                                ),
+                              ),
+                            ],
+                          )
+                        : const SizedBox.shrink(),
+                  ),
                 _Divider(),
                 Consumer<ThemeProvider>(
                   builder: (context, themeProvider, child) {
@@ -1098,7 +1070,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     title: context.tr("Fill Missing Covers"),
                     subtitle: _coverLookupRunning
                         ? context.trRendered(_coverLookupStatus)
-                        : context.tr("Search YouTube for cover art for tracks missing embedded images"),
+                        : context.tr("Restore missing covers from saved links or YouTube search"),
                     trailing: _coverLookupRunning
                         ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.play_arrow_rounded, size: 18),

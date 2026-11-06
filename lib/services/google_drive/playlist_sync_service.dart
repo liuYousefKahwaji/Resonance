@@ -90,15 +90,13 @@ class PlaylistSyncService extends ChangeNotifier with WidgetsBindingObserver {
     this.debounce = const Duration(seconds: 2),
   }) : files = files ?? FileService(),
        sources = sources ?? const TrackSourceRepository(),
-       _download =
-           download ??
-           ((track, playlist) => DownloadQueueController.instance.enqueue(track, playlist, replaceStream: true));
+       _download = download;
   static final instance = PlaylistSyncService(drive: GoogleDriveService.instance);
   static const storageKey = 'google_drive_playlist_sync_v1'; // Excluded from portable backups.
   final GoogleDriveService drive;
   final FileService files;
   final TrackSourceRepository sources;
-  final SyncDownload _download;
+  final SyncDownload? _download;
   final Duration pollInterval, debounce;
   final List<SyncedPlaylist> _links = [];
   final Set<String> _downloadAttempts = {};
@@ -537,7 +535,16 @@ class PlaylistSyncService extends ChangeNotifier with WidgetsBindingObserver {
               url: TrackSourceRepository.canonicalUrlFor(entry.videoId),
               thumbnailUrl: TrackSourceRepository.thumbnailUrlFor(entry.videoId),
             );
-            unawaited(_download(track, link.number).catchError((Object _) => null));
+            unawaited(
+              (_download?.call(track, link.number) ??
+                      DownloadQueueController.instance.enqueue(
+                        track,
+                        link.number,
+                        replaceStream: true,
+                        automaticKey: key,
+                      ))
+                  .catchError((Object _) => null),
+            );
           }
         }
         return;

@@ -1,3 +1,4 @@
+import 'package:resonance/app/route_transitions.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -18,7 +19,8 @@ Future<void> navigateFromNowPlaying({
   switch (nowPlayingDestination(isStandalone: isStandalone)) {
     case NowPlayingDestination.standalonePlayer:
       await navigator.push<void>(
-        standaloneRouteBuilder?.call() ?? MaterialPageRoute<void>(builder: (_) => const StandalonePlayerScreen()),
+        standaloneRouteBuilder?.call() ??
+            resonancePlayerRoute<void>(navigator.context, (_) => const StandalonePlayerScreen()),
       );
     case NowPlayingDestination.playlist:
       await revealTrack(trackPath);

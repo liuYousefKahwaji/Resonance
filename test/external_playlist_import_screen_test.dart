@@ -1,3 +1,4 @@
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -78,6 +79,7 @@ class _RecordingImporter extends YoutubePlaylistImportService {
     required YoutubePlaylistImportMode mode,
     void Function(YoutubePlaylistImportProgress progress)? onProgress,
     bool Function()? isCancelled,
+    YoutubeRequest? request,
   }) async {
     requestedMode = mode;
     return YoutubePlaylistImportResult(

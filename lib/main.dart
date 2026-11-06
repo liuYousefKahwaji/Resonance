@@ -1,3 +1,5 @@
+import 'package:resonance/widgets/youtube/download_queue_panel.dart';
+import 'package:resonance/services/track_artwork_service.dart';
 import 'package:resonance/widgets/player/playback_recovery_banner.dart';
 import 'package:resonance/app/route_transitions.dart';
 import 'package:resonance/widgets/common/resonance_dialog.dart';
@@ -442,11 +444,13 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
   final ScrollController _playlistScrollController = ScrollController();
   int _trackPulse = 0;
   int _artworkRevision = 0;
+  StreamSubscription<String>? _artworkSubscription;
   int? _pulsingTrackIndex;
   final Map<({int playlistNumber, int index}), GlobalKey> _trackItemKeys = {};
   bool _exitInProgress = false;
   bool _uiVisible = true;
   bool _queueDrawerOpen = false;
+  bool _downloadSheetOpen = false;
   bool _mobileQueueOpen = false;
   final Set<int> _selectedTrackIndices = <int>{};
   bool? _windowsChromeEnabled;
@@ -485,6 +489,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     _initIntro();
     DownloadQueueController.instance.addListener(_refreshCompletedDownloads);
     _loadPlaylistFromDisk();
+    _artworkSubscription = TrackArtworkService.changes.listen((_) {
+      if (mounted) setState(() => _artworkRevision++);
+    });
     _playlistMutationSubscription = FileService.mutations.listen((mutation) {
       if (!mounted) return;
       if (mutation.playlistNumber != activePlaylistNumber &&
@@ -655,6 +662,7 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     _updates.dispose();
     if (Platform.isAndroid) widget.handler.playbackVisualNotifier.removeListener(_openStreamControlsOnFirstPlay);
     _playlistMutationSubscription?.cancel();
+    _artworkSubscription?.cancel();
     _playlistRefreshTimer?.cancel();
     widget.handler.youtubeFailureNotifier.removeListener(_showPlaybackYoutubeFailure);
     widget.handler.outputDeviceErrorNotifier.removeListener(_showOutputDeviceError);
@@ -1988,19 +1996,38 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     onTap: () => context.read<ThemeProvider>().setListeningFocus(option),
   );
 
+  Future<void> _openDownloadQueue() async {
+    final overlay = _navigatorKey.currentState?.overlay?.context;
+    if (_downloadSheetOpen || overlay == null) return;
+    _downloadSheetOpen = true;
+    try {
+      await showDownloadQueue(overlay);
+    } finally {
+      _downloadSheetOpen = false;
+    }
+  }
+
   Widget _buildRootDownloadQueueToggle({bool compact = false}) => AnimatedBuilder(
     animation: DownloadQueueController.instance,
     builder: (context, _) {
       final queue = DownloadQueueController.instance;
       return IconButton(
         key: const Key('root-download-queue-toggle'),
-        tooltip: queue.queueMode ? context.tr("Disable download queue") : context.tr("Enable download queue"),
-        onPressed: () => queue.setQueueMode(!queue.queueMode),
+        tooltip: Platform.isAndroid
+            ? context.tr("Download queue")
+            : queue.queueMode
+            ? context.tr("Disable download queue")
+            : context.tr("Enable download queue"),
+        onPressed: Platform.isAndroid ? _openDownloadQueue : () => queue.setQueueMode(!queue.queueMode),
         icon: Badge(
           isLabelVisible: queue.pendingCount > 0,
           label: Text('${queue.pendingCount}'),
           child: Icon(
-            queue.queueMode ? Icons.playlist_add_check_circle_rounded : Icons.playlist_add_rounded,
+            Platform.isAndroid
+                ? Icons.download_rounded
+                : queue.queueMode
+                ? Icons.playlist_add_check_circle_rounded
+                : Icons.playlist_add_rounded,
             size: compact ? 18 : null,
           ),
         ),
@@ -2752,8 +2779,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
       isStandalone: handler.isStandaloneMode,
       trackPath: trackPath,
       revealTrack: _revealCurrentTrack,
-      standaloneRouteBuilder: () => MaterialPageRoute<void>(
-        builder: (_) => StandalonePlayerScreen(onLibraryChanged: () => unawaited(_loadPlaylistFromDisk())),
+      standaloneRouteBuilder: () => resonancePlayerRoute<void>(
+        navigator.context,
+        (_) => StandalonePlayerScreen(onLibraryChanged: () => unawaited(_loadPlaylistFromDisk())),
       ),
     );
   }
@@ -2765,8 +2793,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
 
     if (handler.isStandaloneMode) {
       await navigator.push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => StandalonePlayerScreen(onLibraryChanged: () => unawaited(_loadPlaylistFromDisk())),
+        resonancePlayerRoute<void>(
+          navigator.context,
+          (_) => StandalonePlayerScreen(onLibraryChanged: () => unawaited(_loadPlaylistFromDisk())),
         ),
       );
       return;
@@ -2810,7 +2839,7 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
     }
 
     await navigator.push<void>(
-      MaterialPageRoute<void>(builder: (_) => const StandalonePlayerScreen(playlistTrack: true)),
+      resonancePlayerRoute<void>(navigator.context, (_) => const StandalonePlayerScreen(playlistTrack: true)),
     );
   }
 

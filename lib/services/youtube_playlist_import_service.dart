@@ -1,3 +1,4 @@
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/track_source_record.dart';
 import 'package:resonance/services/track_source_repository.dart';
@@ -93,6 +94,7 @@ class YoutubePlaylistImportService {
     required YoutubePlaylistImportMode mode,
     void Function(YoutubePlaylistImportProgress progress)? onProgress,
     bool Function()? isCancelled,
+    YoutubeRequest? request,
   }) async {
     if (entries.isEmpty) throw StateError('Select at least one YouTube result before importing.');
 
@@ -115,7 +117,7 @@ class YoutubePlaylistImportService {
         : const <String, String>{};
 
     for (var index = 0; index < uniqueEntries.length; index++) {
-      if (isCancelled?.call() ?? false) {
+      if ((isCancelled?.call() ?? false) || (request?.isCancelled ?? false)) {
         cancelled = true;
         break;
       }
@@ -153,6 +155,7 @@ class YoutubePlaylistImportService {
           } else {
             final result = await youtube.downloadVideo(
               entry.videoId,
+              request: request,
               sourceMethod: TrackSourceMethod.importedFromExternalPlaylist,
               historyTitle: entry.title,
               historyArtist: entry.artist,
@@ -162,6 +165,9 @@ class YoutubePlaylistImportService {
             downloaded++;
           }
         }
+      } on YoutubeRequestCancelled {
+        cancelled = true;
+        break;
       } catch (error) {
         failures[entry.videoId] = error.toString();
       }

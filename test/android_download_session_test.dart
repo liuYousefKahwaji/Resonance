@@ -1,3 +1,4 @@
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -70,5 +71,22 @@ void main() {
     await emit('ready:$id');
     expect(await failure.future.timeout(const Duration(seconds: 1)), isA<PlatformException>());
     await subscription.cancel();
+  });
+  test('cancellation targets the worker and retains listener until acknowledgment', () async {
+    final request = YoutubeRequest();
+    final received = <String>[];
+    final subscription = AndroidDownloadSession.open('song', 'folder', request: request).listen(received.add);
+    await Future<void>.delayed(Duration.zero);
+    await emit('ready:$id');
+    request.cancel();
+    await Future<void>.delayed(Duration.zero);
+    expect(starts.last.method, 'cancelDownload');
+    expect(starts.last.arguments, {'requestId': id});
+    expect(controls, ['listen']);
+    await emit('cancelled');
+    expect(received.last, 'cancelled');
+    await subscription.cancel();
+    expect(starts.where((c) => c.method == 'cancelDownload'), hasLength(1));
+    expect(controls.last, 'cancel');
   });
 }

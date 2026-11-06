@@ -1,3 +1,4 @@
+import 'package:resonance/app/route_transitions.dart';
 import 'dart:async';
 import 'package:resonance/widgets/common/track_link_menu.dart';
 import 'dart:math';
@@ -68,7 +69,7 @@ Future<void> openYoutubeArtist(
               }
               return;
             }
-            final route = MaterialPageRoute<void>(builder: (_) => const StandalonePlayerScreen());
+            final route = resonancePlayerRoute<void>(context, (_) => const StandalonePlayerScreen());
             final player = Navigator.push(context, route);
             try {
               await playback;

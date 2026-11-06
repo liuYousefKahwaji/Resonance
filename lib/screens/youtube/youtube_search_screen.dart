@@ -1,3 +1,4 @@
+import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/app/route_transitions.dart';
 import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
 import 'package:resonance/l10n/app_strings.dart';
@@ -915,12 +916,19 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       await playback;
       return;
     }
-    final route = PageRouteBuilder<String?>(
-      pageBuilder: (_, __, ___) => StandalonePlayerScreen(onLibraryChanged: widget.onLibraryChanged),
-      transitionDuration: const Duration(milliseconds: 420),
-      reverseTransitionDuration: const Duration(milliseconds: 420),
-      transitionsBuilder: resonanceFadeTransition,
-    );
+    final modernAndroid =
+        Theme.of(context).platform == TargetPlatform.android && (context.read<ThemeProvider?>()?.modernLayout ?? false);
+    final route = modernAndroid
+        ? resonancePlayerRoute<String?>(
+            context,
+            (_) => StandalonePlayerScreen(onLibraryChanged: widget.onLibraryChanged),
+          )
+        : PageRouteBuilder<String?>(
+            pageBuilder: (_, __, ___) => StandalonePlayerScreen(onLibraryChanged: widget.onLibraryChanged),
+            transitionDuration: const Duration(milliseconds: 420),
+            reverseTransitionDuration: const Duration(milliseconds: 420),
+            transitionsBuilder: resonanceFadeTransition,
+          );
     final page = Navigator.push<String?>(context, route);
     try {
       await playback;
@@ -1012,6 +1020,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
     setState(() => _busyUrl = track.url);
     try {
       final addedTrack = await queue.enqueue(track, widget.playlistNumber);
+      if (addedTrack == null) return;
       if (mounted) {
         if (widget.embedded) {
           widget.onLibraryChanged?.call();

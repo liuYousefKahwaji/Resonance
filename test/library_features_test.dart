@@ -161,14 +161,14 @@ void main() {
     addTearDown(offline.dispose);
     addTearDown(queue.dispose);
     await offline.makeOffline(1);
-    expect(calls, [first, second]);
+    expect(calls, [first, ...List.filled(4, second)]);
     expect(offline.progress[1]!.failures.keys, [second]);
     final downloaded = p.join(directory.path, 'aaaaaaaaaaa.mp3');
     expect(await files.readPlaylistTracks(1), [downloaded, local.path, second, downloaded]);
     expect(await files.readPlaylistTracks(0), [downloaded]);
     failSecond = false;
     await offline.makeOffline(1);
-    expect(calls, [first, second, second]);
+    expect(calls, [first, ...List.filled(5, second)]);
     expect(offline.progress[1]!.failures, isEmpty);
     final other = p.join(directory.path, 'bbbbbbbbbbb.mp3');
     await files.replacePlaylistTracks(2, [other]);

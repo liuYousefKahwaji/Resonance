@@ -1,3 +1,4 @@
+import 'package:resonance/services/track_artwork_service.dart';
 import 'package:resonance/core/audio/playback_failure.dart';
 import 'package:resonance/core/audio/playback_session.dart';
 // lib/core/audio/audio_service.dart
@@ -414,7 +415,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> _sessionSaveTail = Future.value();
   int? _sessionResumeGeneration;
 
-  final Map<String, Uri?> _artUriCache = {};
+  StreamSubscription<String>? _artworkSubscription;
+  int _artworkGeneration = 0;
   final AudioEnvelopeAnalyzer _envelopeAnalyzer = AudioEnvelopeAnalyzer();
   AudioEnvelope? _audioEnvelope;
   String? _audioEnvelopeTrackId;
@@ -796,6 +798,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       }
     }
 
+    _artworkSubscription = TrackArtworkService.changes.listen((path) {
+      unawaited(refreshTrackArtwork(path));
+    });
     _playlistMutationSubscription = FileService.mutations.listen((mutation) {
       if (mutation.kind == PlaylistMutationKind.deleted) _shuffleOrders.remove(mutation.playlistNumber);
       // Queue views re-read the file and reconcile before publishing their rows.
@@ -1991,20 +1996,30 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
     final wasPlaying = _isWindowsPlaying;
     final position = _currentPosition;
+    final generation = _loadGeneration;
+    final standalone = isStandaloneMode;
+    final playlistNumber = _standalonePlaylistNumber;
+    final playlistIndex = _standalonePlaylistIndex;
     var updated = false;
     try {
       await _windowsPlayer!.stop();
       final result = await action();
       updated = true;
+      TrackArtworkService.notifyChanged(filePath);
       return result;
     } finally {
-      await loadTrack(
-        filePath,
-        updated ? updatedTitle : current.title,
-        updated ? updatedArtist : current.artist ?? 'Unknown Artist',
-      );
-      await seek(position);
-      if (!wasPlaying) await pause();
+      if (_loadGeneration == generation && mediaItem.value?.id == current.id) {
+        await loadTrack(
+          filePath,
+          updated ? updatedTitle : current.title,
+          updated ? updatedArtist : current.artist ?? 'Unknown Artist',
+          standalone: standalone,
+          standalonePlaylistNumber: playlistNumber,
+          standalonePlaylistIndex: playlistIndex,
+          playWhenReady: wasPlaying,
+          initialPosition: position,
+        );
+      }
     }
   }
 
@@ -3897,13 +3912,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     required Uri? artworkUri,
     required bool externalSource,
   }) async {
+    final artRevision = _artworkGeneration;
     try {
       // Let playback win the initial disk/CPU race. The playing stream owns
       // Discord updates, so do not perform a duplicate presence request here.
       await Future<void>.delayed(const Duration(milliseconds: 250));
       if (_loadGeneration == generation) {
         final resolvedArtwork = artworkUri ?? await _albumArtUri(filePath);
-        if (_loadGeneration == generation && resolvedArtwork != null) {
+        if (_loadGeneration == generation && artRevision == _artworkGeneration && resolvedArtwork != null) {
           final current = mediaItem.value;
           if (current != null && _sameTrackId(current.id, filePath) && current.artUri != resolvedArtwork) {
             mediaItem.add(current.copyWith(artUri: resolvedArtwork));
@@ -4103,13 +4119,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     removeTrackFromActivePlaybackOrder(filePath, allOccurrences: true);
     final retainedQueue = queue.value.where((item) => !_sameTrackId(item.id, filePath)).toList(growable: false);
     if (retainedQueue.length != queue.value.length) await updateQueue(retainedQueue);
-    final artworkUri = _artUriCache.remove(filePath);
-    if (artworkUri?.scheme == 'file') {
-      try {
-        final artworkFile = File.fromUri(artworkUri!);
-        if (await artworkFile.exists()) await artworkFile.delete();
-      } catch (_) {}
-    }
     if (filePath.runes.any((rune) => rune > 127)) {
       try {
         final tempDir = await getTemporaryDirectory();
@@ -4193,65 +4202,22 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     return (title: p.basenameWithoutExtension(path), artist: 'Unknown Artist');
   }
 
-  Future<Uri?> _albumArtUri(String path) async {
-    if (path.startsWith('http://') || path.startsWith('https://')) {
-      final cached = await MetadataCacheService.get(path);
-      return Uri.tryParse(cached?.artworkUrl ?? '');
-    }
-    if (_artUriCache.containsKey(path)) return _artUriCache[path];
+  Future<Uri?> _albumArtUri(String path) => const TrackArtworkService().resolve(path);
 
-    try {
-      final source = File(path);
-      if (!await source.exists()) return _cacheArtworkUri(path, null);
-      final modified = await source.lastModified();
-      final cacheDir = Directory(p.join((await getTemporaryDirectory()).path, 'notification_art'));
-      await cacheDir.create(recursive: true);
-      final cacheKey = '${path.hashCode}_${modified.millisecondsSinceEpoch}';
-
-      for (final extension in const ['jpg', 'png', 'webp']) {
-        final cached = File(p.join(cacheDir.path, '$cacheKey.$extension'));
-        if (await cached.exists() && await cached.length() > 0) {
-          return _cacheArtworkUri(path, Uri.file(cached.path));
-        }
-      }
-
-      final metadata = await MetadataGod.readMetadata(file: path);
-      final bytes = metadata.picture?.data;
-      if (bytes == null || bytes.isEmpty) return _cacheArtworkUri(path, null);
-      final extension = _imageExtension(bytes);
-      final artwork = File(p.join(cacheDir.path, '$cacheKey.$extension'));
-      await artwork.writeAsBytes(bytes, flush: true);
-      return _cacheArtworkUri(path, Uri.file(artwork.path));
-    } catch (e) {
-      debugPrint('[PlayerHandler] Could not extract notification artwork: $e');
-      return _cacheArtworkUri(path, null);
-    }
-  }
-
-  Uri? _cacheArtworkUri(String path, Uri? uri) {
-    if (!_artUriCache.containsKey(path) && _artUriCache.length >= 64) {
-      _artUriCache.remove(_artUriCache.keys.first);
-    }
-    _artUriCache[path] = uri;
-    return uri;
-  }
-
-  String _imageExtension(List<int> bytes) {
-    if (bytes.length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4e && bytes[3] == 0x47) {
-      return 'png';
-    }
-    if (bytes.length >= 12 &&
-        bytes[0] == 0x52 &&
-        bytes[1] == 0x49 &&
-        bytes[2] == 0x46 &&
-        bytes[3] == 0x46 &&
-        bytes[8] == 0x57 &&
-        bytes[9] == 0x45 &&
-        bytes[10] == 0x42 &&
-        bytes[11] == 0x50) {
-      return 'webp';
-    }
-    return 'jpg';
+  Future<void> refreshTrackArtwork(String path) async {
+    final current = mediaItem.value;
+    if (current == null || !_sameTrackId(current.id, path)) return;
+    final revision = ++_artworkGeneration;
+    final generation = _loadGeneration;
+    final artwork = await _albumArtUri(path);
+    if (revision != _artworkGeneration || generation != _loadGeneration) return;
+    final live = mediaItem.value;
+    if (live == null || !_sameTrackId(live.id, path)) return;
+    final updated = live.copyWith(artUri: artwork);
+    mediaItem.add(updated);
+    if (_pendingRestoredTrack != null) _pendingRestoredTrack = updated;
+    playbackModeRevision.value++;
+    await savePlaybackSession();
   }
 
   Future<void> _advanceAfterCompletion() async {
@@ -4755,6 +4721,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     await _noisySubscription?.cancel();
     _cancelPendingSeeks();
     await _playlistMutationSubscription?.cancel();
+    await _artworkSubscription?.cancel();
     _youtubeAccessService?.removeListener(_handleYoutubeAccessChanged);
     WidgetsBinding.instance.removeObserver(this);
     _periodicPositionSaveTimer?.cancel();

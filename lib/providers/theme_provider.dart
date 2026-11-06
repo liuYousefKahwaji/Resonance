@@ -14,6 +14,7 @@ class ThemeProvider extends ChangeNotifier {
   bool _fullThemePalette = true;
   bool _rounderCorners = false;
   bool _modernLayout = true;
+  bool _compactPlayerControls = true;
   bool _sidebarCollapsed = false;
   bool _cinematicIntro = false;
   bool _artworkPlayerColors = false;
@@ -30,6 +31,7 @@ class ThemeProvider extends ChangeNotifier {
   Color get customColor => _customColor;
   bool get fullThemePalette => _fullThemePalette;
   bool get rounderCorners => _rounderCorners;
+  bool get compactPlayerControls => _compactPlayerControls;
   bool get modernLayout => _modernLayout;
   bool get sidebarCollapsed => _sidebarCollapsed;
   bool get cinematicIntro => _cinematicIntro;
@@ -53,6 +55,7 @@ class ThemeProvider extends ChangeNotifier {
     _fullThemePalette = prefs.getBool('theme_full_palette') ?? true;
     _rounderCorners = prefs.getBool('rounder_corners') ?? false;
     _modernLayout = prefs.getBool('modern_layout') ?? true;
+    _compactPlayerControls = prefs.getBool('compact_player_controls') ?? true;
     _sidebarCollapsed = prefs.getBool('modern_sidebar_collapsed') ?? false;
     _cinematicIntro = prefs.getBool('cinematic_intro') ?? false;
     _windowsNativeControls = prefs.getBool('windows_native_controls') ?? Platform.isWindows;
@@ -109,6 +112,12 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('rounder_corners', enabled);
+  }
+
+  Future<void> setCompactPlayerControls(bool enabled) async {
+    _compactPlayerControls = enabled;
+    notifyListeners();
+    await (await SharedPreferences.getInstance()).setBool('compact_player_controls', enabled);
   }
 
   Future<void> setModernLayout(bool enabled) async {

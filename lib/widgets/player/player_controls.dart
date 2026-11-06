@@ -95,7 +95,7 @@ class _MobileControls extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             // ── Row 1: Seek bar ──────────────────────────────────────
-            _LockedControl(locked: transportLocked, child: const SeekBar(showSeekSteps: false)),
+            _LockedControl(locked: transportLocked, child: const SeekBar()),
 
             const SizedBox(height: 6),
 
@@ -251,35 +251,17 @@ class _PlayPauseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: primary,
-          boxShadow: isPlaying
-              ? [
-                  BoxShadow(
-                    color: primary.withValues(alpha: isDark ? 0.45 : 0.3),
-                    blurRadius: 16,
-                    spreadRadius: 0,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-              : [],
-        ),
-        child: Icon(
-          isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-          color: Theme.of(context).colorScheme.onPrimary,
-          size: size * 0.5,
-        ),
+    final colors = Theme.of(context).colorScheme;
+    return IconButton.filled(
+      tooltip: context.tr(isPlaying ? 'Pause' : 'Play'),
+      onPressed: onTap,
+      style: IconButton.styleFrom(
+        fixedSize: Size.square(size),
+        backgroundColor: colors.onSurface,
+        foregroundColor: colors.surface,
+        shape: const CircleBorder(),
       ),
+      icon: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, size: size * .52),
     );
   }
 }
@@ -293,8 +275,7 @@ class _SkipButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final iconColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+    final iconColor = Theme.of(context).colorScheme.onSurface;
 
     return IconButton(
       onPressed: onTap,

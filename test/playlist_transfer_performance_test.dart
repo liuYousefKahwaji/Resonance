@@ -1,3 +1,4 @@
+import 'package:resonance/services/youtube/youtube_request.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -142,6 +143,7 @@ class _DownloadBackend extends MediaDownloader {
     required String url,
     required Function(double, String) onProgress,
     required Function(String, String?) onTrackDownloaded,
+    YoutubeRequest? request,
     String? historyTitle,
     String? historyArtist,
     FutureOr<void> Function(YoutubeDownloadResult track)? onTrackPrepared,

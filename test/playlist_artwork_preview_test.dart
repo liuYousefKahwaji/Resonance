@@ -43,7 +43,12 @@ void main() {
         ),
       ),
     );
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+    // Each real file/stat stage needs a real-zone turn followed by a widget
+    // microtask turn; a single sleep does not drain a multi-stage IO pipeline.
+    for (var attempt = 0; attempt < 20 && find.byType(ProgressiveNetworkArtwork).evaluate().isEmpty; attempt++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
     await tester.pumpAndSettle();
     final artwork = tester.widget<ProgressiveNetworkArtwork>(find.byType(ProgressiveNetworkArtwork));
     expect(artwork.url, cover);
