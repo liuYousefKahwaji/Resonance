@@ -17,10 +17,11 @@ void main() {
   });
 
   test('Windows five-band filter uses one lavfi graph with explicit format conversion', () {
+    expect(buildWindowsAudioFilter(PlaybackAdjustments.neutral), isEmpty);
     expect(
-      buildWindowsAudioFilter(PlaybackAdjustments.neutral),
-      'scaletempo:scale=1.00000000',
-      reason: 'the pitch-correction filter must remain installed with a flat equalizer',
+      buildWindowsAudioFilter(PlaybackAdjustments(speed: 1.5, pitch: 0.75)),
+      'scaletempo:scale=2.00000000',
+      reason: 'pitch correction still applies with a flat equalizer when speed and pitch differ',
     );
 
     final filter = buildWindowsAudioFilter(
@@ -41,12 +42,11 @@ void main() {
     );
   });
 
-  test('equalizer automatically reserves headroom for the largest positive band', () {
-    expect(equalizerOutputHeadroomMultiplier(EqualizerSettings.flat, effectApplied: false), 1.0);
+  test('equalizer reserves extra headroom only above the boosted output ceiling', () {
     final boosted = EqualizerSettings.forPreset(EqualizerPreset.bassBoost);
-    final multiplier = equalizerOutputHeadroomMultiplier(boosted, effectApplied: true);
-
     expect(boosted.automaticPreampDb, -7);
-    expect(multiplier, closeTo(0.447, 0.001));
+    expect(equalizerOutputHeadroomMultiplier(boosted, effectApplied: true, outputGain: 0.25), 1.0);
+    expect(equalizerOutputHeadroomMultiplier(boosted, effectApplied: true, outputGain: 1.0), closeTo(0.447, 0.001));
+    expect(equalizerOutputHeadroomMultiplier(boosted, effectApplied: false, outputGain: 1.0), 1.0);
   });
 }

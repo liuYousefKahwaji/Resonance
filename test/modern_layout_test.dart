@@ -17,6 +17,7 @@ import 'package:resonance/widgets/library/modern_music_shell.dart';
 import 'package:resonance/widgets/player/cinematic_intro.dart';
 import 'package:resonance/screens/youtube/youtube_search_screen.dart';
 import 'package:resonance/models/youtube_track.dart';
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/widgets/player/compact_player.dart';
 import 'package:resonance/core/audio/audio_service.dart';
 import 'package:resonance/core/audio/playback_preferences.dart';
@@ -76,6 +77,7 @@ void main() {
         addTearDown(() => tester.binding.setSurfaceSize(null));
         var selected = -1;
         final handler = _Handler();
+        handler.activeQueueSurface.value = PlaybackQueueSurface.search;
         addTearDown(() async {
           await tester.pumpWidget(const SizedBox.shrink());
           handler.close();
@@ -183,6 +185,7 @@ void main() {
         await tester.binding.setSurfaceSize(Size(width, 820));
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final handler = _Handler();
+        handler.activeQueueSurface.value = PlaybackQueueSurface.discover;
         addTearDown(() async {
           await tester.pumpWidget(const SizedBox.shrink());
           handler.close();
@@ -542,6 +545,8 @@ void main() {
 
 class _Handler extends Fake implements PlayerHandler {
   @override
+  final activeQueueSurface = ValueNotifier<PlaybackQueueSurface?>(null);
+  @override
   final speedNotifier = ValueNotifier<double>(1);
   @override
   final pitchNotifier = ValueNotifier<double>(1);
@@ -611,6 +616,7 @@ class _Handler extends Fake implements PlayerHandler {
   @override
   Future<void> changeVolume(double value) async => volumeNotifier.value = value;
   void close() {
+    activeQueueSurface.dispose();
     speedNotifier.dispose();
     pitchNotifier.dispose();
     equalizerNotifier.dispose();

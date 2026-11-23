@@ -14,6 +14,8 @@ import 'package:resonance/app/theme.dart';
 
 import 'dart:async';
 import 'package:resonance/widgets/common/track_link_menu.dart';
+import 'package:resonance/widgets/common/play_next_button.dart';
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/services/download/download_preferences.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -831,6 +833,7 @@ class _AndroidYoutubeState extends State<AndroidYoutube> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      PlayNextButton(entry: PlaybackQueueEntry.youtube(result), surface: PlaybackQueueSurface.discover),
                       TrackLinkMenu(trackId: result.url),
                       SizedBox(
                         width: 36,

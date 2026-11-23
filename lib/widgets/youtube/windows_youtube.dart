@@ -5,6 +5,8 @@ import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'package:resonance/widgets/common/track_link_menu.dart';
+import 'package:resonance/widgets/common/play_next_button.dart';
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/services/download/download_preferences.dart';
 
 import 'dart:convert';
@@ -1244,6 +1246,7 @@ class _WindowsYoutubeState extends State<WindowsYoutube> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     // ── Stream button ──────────────────────────────────
+                    PlayNextButton(entry: PlaybackQueueEntry.youtube(result), surface: PlaybackQueueSurface.discover),
                     TrackLinkMenu(trackId: result.url),
                     IconButton(
                       icon: Icon(Icons.sensors_rounded, color: theme.colorScheme.primary),

@@ -1,3 +1,4 @@
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/app/route_transitions.dart';
 import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
@@ -5,6 +6,7 @@ import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'dart:async';
 import 'package:resonance/widgets/common/track_link_menu.dart';
+import 'package:resonance/widgets/common/play_next_button.dart';
 import 'dart:io';
 
 import 'package:flutter/gestures.dart';
@@ -911,6 +913,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
       queueItems: queue,
       queueIndex: queue.indexWhere((item) => item.url == selected.url),
       relatedQueue: relatedQueue,
+      queueSurface: widget.searchOnly ? PlaybackQueueSurface.search : PlaybackQueueSurface.discover,
     );
     if (!mounted) {
       await playback;
@@ -1509,6 +1512,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
         final pending = DownloadQueueController.instance.pendingEntryFor(track.url, widget.playlistNumber);
         final card = widget.compactResults
             ? _CompactResultRow(
+                queueSurface: widget.searchOnly ? PlaybackQueueSurface.search : PlaybackQueueSurface.discover,
                 track: track,
                 busy: _playingUrl == track.url,
                 queued: pending != null,
@@ -1518,6 +1522,7 @@ class _YoutubeSearchScreenState extends State<YoutubeSearchScreen> {
                 fetchDates: !_injectedSearch,
               )
             : _ResultCard(
+                queueSurface: widget.searchOnly ? PlaybackQueueSurface.search : PlaybackQueueSurface.discover,
                 track: track,
                 fetchDates: !_injectedSearch,
                 busy: _busyUrl == track.url || _playingUrl == track.url,
@@ -2000,6 +2005,16 @@ class _MobileSpeedDialShelf extends StatelessWidget {
 
                       PositionedDirectional(
                         end: 0,
+                        top: 0,
+                        child: PlayNextButton(
+                          entry: PlaybackQueueEntry.youtube(track),
+                          surface: PlaybackQueueSurface.discover,
+                          color: Colors.white,
+                          extent: 40,
+                        ),
+                      ),
+                      PositionedDirectional(
+                        end: 0,
                         bottom: 0,
                         child: TrackLinkMenu(
                           trackId: track.url,
@@ -2104,6 +2119,10 @@ class _QuickPickShelf extends StatelessWidget {
                                   ),
                                 ],
                               ),
+                            ),
+                            PlayNextButton(
+                              entry: PlaybackQueueEntry.youtube(track),
+                              surface: PlaybackQueueSurface.discover,
                             ),
                             const SizedBox(width: 48),
                           ],
@@ -2218,6 +2237,7 @@ class _SuggestedTrackCard extends StatelessWidget {
                   ],
                 ),
               ),
+              PlayNextButton(entry: PlaybackQueueEntry.youtube(track), surface: PlaybackQueueSurface.discover),
               SizedBox(
                 width: 28,
                 height: 32,
@@ -2243,6 +2263,7 @@ class _SuggestedTrackCard extends StatelessWidget {
 
 class _CompactResultRow extends StatelessWidget {
   const _CompactResultRow({
+    required this.queueSurface,
     required this.track,
     required this.busy,
     required this.queued,
@@ -2252,6 +2273,7 @@ class _CompactResultRow extends StatelessWidget {
     required this.fetchDates,
   });
   final YoutubeTrack track;
+  final PlaybackQueueSurface queueSurface;
   final bool busy, queued, fetchDates;
   final VoidCallback onPlay, onStream, onDownload;
   @override
@@ -2327,6 +2349,7 @@ class _CompactResultRow extends StatelessWidget {
                   padding: EdgeInsets.symmetric(horizontal: 6),
                   child: Icon(Icons.downloading_rounded, size: 19),
                 ),
+              PlayNextButton(entry: PlaybackQueueEntry.youtube(track), surface: queueSurface),
               TrackLinkMenu(
                 trackId: track.url,
                 onExtraSelected: (action) {
@@ -2348,6 +2371,7 @@ class _CompactResultRow extends StatelessWidget {
 
 class _ResultCard extends StatelessWidget {
   final YoutubeTrack track;
+  final PlaybackQueueSurface queueSurface;
   final bool fetchDates;
   final bool busy;
   final bool queued;
@@ -2359,6 +2383,7 @@ class _ResultCard extends StatelessWidget {
 
   const _ResultCard({
     required this.track,
+    required this.queueSurface,
     this.fetchDates = true,
     required this.busy,
     required this.queued,
@@ -2423,6 +2448,7 @@ class _ResultCard extends StatelessWidget {
                       icon: const Icon(Icons.play_arrow_rounded),
                       label: Text(context.tr("Play")),
                     ),
+                    PlayNextButton(entry: PlaybackQueueEntry.youtube(track), surface: queueSurface),
                     TrackLinkMenu(trackId: track.url),
                     TextButton.icon(
                       onPressed: busy ? null : onStream,

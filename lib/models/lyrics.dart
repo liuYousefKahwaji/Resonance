@@ -9,6 +9,8 @@ class LrclibCandidate {
   final bool instrumental;
   final bool hasSyncedLyrics;
   final bool hasPlainLyrics;
+  final bool hasWordSync;
+  final LyricsDocument? document;
 
   const LrclibCandidate({
     required this.id,
@@ -19,19 +21,33 @@ class LrclibCandidate {
     required this.instrumental,
     required this.hasSyncedLyrics,
     required this.hasPlainLyrics,
+    this.hasWordSync = false,
+    this.document,
   });
 
-  bool get hasLyrics => instrumental || hasSyncedLyrics || hasPlainLyrics;
+  bool get hasLyrics => instrumental || hasWordSync || hasSyncedLyrics || hasPlainLyrics;
+  String get source => document?.source ?? 'LRCLIB';
+  LyricTimingQuality get timingQuality =>
+      document?.timingQuality ??
+      (hasWordSync
+          ? LyricTimingQuality.word
+          : hasSyncedLyrics
+          ? LyricTimingQuality.line
+          : LyricTimingQuality.plain);
 
-  factory LrclibCandidate.fromJson(Map<String, dynamic> json) => LrclibCandidate(
+  factory LrclibCandidate.fromJson(Map<String, dynamic> json, {LyricsDocument? document}) => LrclibCandidate(
     id: (json['id'] as num?)?.toInt() ?? 0,
     trackName: json['trackName']?.toString().trim() ?? '',
     artistName: json['artistName']?.toString().trim() ?? '',
     albumName: json['albumName']?.toString().trim() ?? '',
     duration: Duration(milliseconds: (((json['duration'] as num?)?.toDouble() ?? 0) * 1000).round()),
     instrumental: json['instrumental'] == true,
-    hasSyncedLyrics: (json['syncedLyrics']?.toString().trim().isNotEmpty ?? false),
-    hasPlainLyrics: (json['plainLyrics']?.toString().trim().isNotEmpty ?? false),
+    hasWordSync: document == null ? json['hasWordSync'] == true : document.timingQuality == LyricTimingQuality.word,
+    hasSyncedLyrics: document == null
+        ? json['hasSyncedLyrics'] == true || (json['syncedLyrics']?.toString().trim().isNotEmpty ?? false)
+        : document.timingQuality != LyricTimingQuality.plain,
+    hasPlainLyrics: json['hasPlainLyrics'] == true || (json['plainLyrics']?.toString().trim().isNotEmpty ?? false),
+    document: document,
   );
 }
 

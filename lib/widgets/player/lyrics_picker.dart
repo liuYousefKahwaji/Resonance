@@ -19,6 +19,9 @@ class LyricsPicker extends StatefulWidget {
 class LyricsPickerState extends State<LyricsPicker> {
   late final TextEditingController _queryController;
   List<LrclibCandidate> _results = const [];
+  String? _source;
+  int? _durationTolerance;
+  LyricTimingQuality? _timing;
   bool _loading = true;
   bool _searched = false;
   String? _error;
@@ -60,7 +63,22 @@ class LyricsPickerState extends State<LyricsPicker> {
     try {
       final results = await (widget.search ?? const LyricsService().searchLrclibCandidates)(query);
       if (!mounted || generation != _generation) return;
-      setState(() => _results = results);
+      int rank(LrclibCandidate candidate) {
+        final target = widget.targetDuration;
+        final wordTimed = candidate.timingQuality == LyricTimingQuality.word;
+        if (target == null || target <= Duration.zero) return wordTimed ? 0 : 1;
+        if (candidate.duration <= Duration.zero) return wordTimed ? 1 : 3;
+        final difference = (candidate.duration - target).abs();
+        if (difference <= const Duration(seconds: 3)) return wordTimed ? 0 : 2;
+        return 3;
+      }
+
+      final ranked = results.indexed.toList()
+        ..sort((a, b) {
+          final order = rank(a.$2).compareTo(rank(b.$2));
+          return order == 0 ? a.$1.compareTo(b.$1) : order;
+        });
+      setState(() => _results = ranked.map((entry) => entry.$2).toList(growable: false));
     } catch (error) {
       if (mounted && generation == _generation) {
         _retryAt = error is LyricsLookupException ? error.retryAt : null;
@@ -95,9 +113,68 @@ class LyricsPickerState extends State<LyricsPicker> {
     return '${difference > 0 ? '+' : ''}${difference}s';
   }
 
+  String _timingLabel(LyricTimingQuality timing) => context.tr(switch (timing) {
+    LyricTimingQuality.word => 'Word-synced',
+    LyricTimingQuality.line => 'Line-synced',
+    LyricTimingQuality.plain => 'Plain',
+  });
+
+  void _clearFilters() => setState(() {
+    _source = null;
+    _durationTolerance = null;
+    _timing = null;
+  });
+
+  Widget _filter<T>({
+    required String label,
+    required String tooltip,
+    required T? selected,
+    required Map<T?, String> options,
+    required ValueChanged<T?> onChanged,
+  }) => MenuAnchor(
+    menuChildren: [
+      for (final option in options.entries)
+        MenuItemButton(
+          leadingIcon: Icon(option.key == selected ? Icons.check_rounded : null, size: 18),
+          onPressed: () => onChanged(option.key),
+          child: Text(option.value),
+        ),
+    ],
+    builder: (context, controller, _) => Tooltip(
+      message: tooltip,
+      child: OutlinedButton(
+        onPressed: controller.isOpen ? controller.close : controller.open,
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsetsDirectional.only(start: 11, end: 7),
+          foregroundColor: selected == null ? null : Theme.of(context).colorScheme.primary,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(selected == null ? label : options[selected] ?? label),
+            const Icon(Icons.expand_more, size: 17),
+          ],
+        ),
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final sources = _results.map((result) => result.source).toSet().toList()..sort();
+    final target = widget.targetDuration;
+    final results = _results
+        .where((candidate) {
+          if (_source != null && candidate.source != _source) return false;
+          if (_timing != null && (candidate.instrumental || candidate.timingQuality != _timing)) return false;
+          final tolerance = _durationTolerance;
+          return tolerance == null ||
+              target == null ||
+              (candidate.duration > Duration.zero &&
+                  (candidate.duration - target).abs() <= Duration(seconds: tolerance));
+        })
+        .toList(growable: false);
     return Material(
       color: theme.colorScheme.surface,
       child: Column(
@@ -135,15 +212,43 @@ class LyricsPickerState extends State<LyricsPicker> {
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsetsDirectional.fromSTEB(20, 10, 20, 8),
-            child: Text(
-              context.tr(
-                "Automatic matching only accepts results within 3 seconds. You can deliberately choose any version here.",
+          if (_results.isNotEmpty && !_loading && _error == null)
+            Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(20, 6, 20, 4),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  _filter<String>(
+                    label: context.tr('Source'),
+                    tooltip: context.tr('Filter by lyrics source'),
+                    selected: _source,
+                    options: {null: context.tr('Any source'), for (final source in sources) source: source},
+                    onChanged: (value) => setState(() => _source = value),
+                  ),
+                  if (target != null && target > Duration.zero)
+                    _filter<int>(
+                      label: context.tr('Length'),
+                      tooltip: context.tr('Filter by duration difference'),
+                      selected: _durationTolerance,
+                      options: {
+                        null: context.tr('Any length'),
+                        for (final seconds in [3, 10, 30]) seconds: context.tr('Within {0}s', [seconds]),
+                      },
+                      onChanged: (value) => setState(() => _durationTolerance = value),
+                    ),
+                  _filter<LyricTimingQuality>(
+                    label: context.tr('Timing'),
+                    tooltip: context.tr('Filter by timing'),
+                    selected: _timing,
+                    options: {
+                      null: context.tr('Any timing'),
+                      for (final timing in LyricTimingQuality.values) timing: _timingLabel(timing),
+                    },
+                    onChanged: (value) => setState(() => _timing = value),
+                  ),
+                ],
               ),
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
-          ),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -166,65 +271,101 @@ class LyricsPickerState extends State<LyricsPicker> {
                       ),
                     ),
                   )
-                : _results.isEmpty
+                : results.isEmpty
                 ? Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
-                      child: Text(
-                        _searched
-                            ? context.tr("No LRCLIB results for this search.")
-                            : context.tr("Search LRCLIB to choose a result."),
-                        textAlign: TextAlign.center,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _results.isNotEmpty
+                                ? context.tr('No lyrics match these filters.')
+                                : _searched
+                                ? context.tr("No lyrics found for this search.")
+                                : context.tr("Search for lyrics by title and artist."),
+                            textAlign: TextAlign.center,
+                          ),
+                          if (_results.isNotEmpty)
+                            TextButton(onPressed: _clearFilters, child: Text(context.tr('Clear filters'))),
+                        ],
                       ),
                     ),
                   )
                 : ListView.separated(
                     padding: const EdgeInsetsDirectional.fromSTEB(12, 4, 12, 24),
-                    itemCount: _results.length,
+                    itemCount: results.length,
                     separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (context, index) {
-                      final candidate = _results[index];
+                      final candidate = results[index];
                       final difference = _difference(candidate);
                       final details = [
                         candidate.artistName,
                         if (candidate.albumName.isNotEmpty) candidate.albumName,
+                        candidate.source,
                       ].where((part) => part.isNotEmpty).join(' · ');
-                      return ListTile(
+                      return InkWell(
                         key: ValueKey('lrclib-candidate-${candidate.id}'),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                        title: Text(candidate.trackName, maxLines: 2, overflow: TextOverflow.ellipsis),
-                        subtitle: Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(details, maxLines: 2, overflow: TextOverflow.ellipsis),
-                        ),
-                        trailing: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 116),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(_duration(candidate.duration), style: theme.textTheme.labelLarge),
-                              Text(
-                                candidate.instrumental
-                                    ? context.tr("Instrumental")
-                                    : candidate.hasSyncedLyrics
-                                    ? context.tr("Synced")
-                                    : context.tr("Plain"),
-                                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary),
-                              ),
-                              if (difference != null)
-                                Text(
-                                  difference,
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                    color: difference == 'exact duration'
-                                        ? theme.colorScheme.primary
-                                        : theme.colorScheme.onSurfaceVariant,
+                        onTap: () => Navigator.pop(context, candidate),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(minHeight: 56),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        candidate.trackName,
+                                        style: theme.textTheme.titleMedium,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        details,
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: theme.colorScheme.onSurfaceVariant,
+                                        ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
                                   ),
                                 ),
-                            ],
+                                const SizedBox(width: 12),
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 110),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        candidate.instrumental
+                                            ? context.tr("Instrumental")
+                                            : _timingLabel(candidate.timingQuality),
+                                        textAlign: TextAlign.end,
+                                        style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary),
+                                      ),
+                                      if (candidate.duration > Duration.zero)
+                                        Text(
+                                          [
+                                            _duration(candidate.duration),
+                                            if (difference != null && difference != 'exact duration') difference,
+                                          ].join(' · '),
+                                          textAlign: TextAlign.end,
+                                          style: theme.textTheme.labelSmall?.copyWith(
+                                            color: theme.colorScheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                        onTap: () => Navigator.pop(context, candidate),
                       );
                     },
                   ),

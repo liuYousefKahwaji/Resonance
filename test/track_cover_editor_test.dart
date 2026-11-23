@@ -10,6 +10,7 @@ import 'package:metadata_god/metadata_god.dart';
 import 'package:metadata_god/src/rust/frb_generated.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/core/audio/playback_range.dart';
 import 'package:resonance/services/metadata_cache_service.dart';
 import 'package:resonance/services/track_artwork_service.dart';
@@ -211,6 +212,9 @@ class _AppendingMetadataApi extends RustLibApi {
 }
 
 class _Handler extends Fake implements PlayerHandler {
+  @override
+  final activeQueueSurface = ValueNotifier<PlaybackQueueSurface?>(null);
+
   @override
   final playbackVisualNotifier = ValueNotifier(const PlaybackVisualState());
   @override

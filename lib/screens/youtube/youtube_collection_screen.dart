@@ -1,7 +1,9 @@
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/widgets/youtube/youtube_artist_link.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'dart:async';
 import 'package:resonance/widgets/common/track_link_menu.dart';
+import 'package:resonance/widgets/common/play_next_button.dart';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -502,6 +504,7 @@ class _CollectionTrackRowState extends State<_CollectionTrackRow> {
                   track.formattedDuration,
                   style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                 ),
+                PlayNextButton(entry: PlaybackQueueEntry.youtube(track), surface: PlaybackQueueSurface.discover),
                 TrackLinkMenu(trackId: track.url),
               ],
             ),

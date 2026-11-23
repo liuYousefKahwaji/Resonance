@@ -1,6 +1,8 @@
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/app/route_transitions.dart';
 import 'dart:async';
 import 'package:resonance/widgets/common/track_link_menu.dart';
+import 'package:resonance/widgets/common/play_next_button.dart';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -696,6 +698,7 @@ class _ArtistTrackRow extends StatelessWidget {
                         style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                       ),
               ),
+              PlayNextButton(entry: PlaybackQueueEntry.youtube(track), surface: PlaybackQueueSurface.discover),
               TrackLinkMenu(trackId: track.url),
             ],
           ),

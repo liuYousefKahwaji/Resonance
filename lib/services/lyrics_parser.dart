@@ -1,3 +1,4 @@
+import 'package:yaml/yaml.dart';
 import 'package:resonance/models/lyrics.dart';
 import 'package:xml/xml.dart';
 
@@ -35,7 +36,7 @@ class LyricsParser {
           text: parsed.text,
           start: current.start.isNegative ? Duration.zero : current.start,
           end: nextStart,
-          words: parsed.words.isEmpty ? estimateWords(parsed.text, current.start, nextStart) : parsed.words,
+          words: parsed.words,
         ),
       );
     }
@@ -69,32 +70,60 @@ class LyricsParser {
     for (final paragraph in paragraphs) {
       final lineStart = _ttmlTime(_attribute(paragraph, 'begin'));
       final lineEnd = _ttmlEnd(paragraph, lineStart);
-      final wordElements = paragraph.descendants
-          .whereType<XmlElement>()
-          .where(
-            (element) =>
-                element.name.local == 'span' &&
-                _attribute(element, 'begin') != null &&
-                !_isAlternateText(element, paragraph),
-          )
-          .toList(growable: false);
+      final segments = <({XmlElement element, String text})>[];
+      final leading = StringBuffer();
+      void visit(XmlNode node) {
+        if (node is XmlText) {
+          final value = node.value.replaceAll(RegExp(r'\s+'), ' ');
+          if (segments.isEmpty) {
+            leading.write(value);
+          } else if (value.isNotEmpty) {
+            final last = segments.removeLast();
+            segments.add((element: last.element, text: last.text + value));
+          }
+          return;
+        }
+        if (node is! XmlElement || _isAlternateText(node, paragraph)) return;
+        if (node.name.local == 'span' &&
+            _ttmlTime(_attribute(node, 'begin')) != null &&
+            !node.descendants.whereType<XmlElement>().any(
+              (span) =>
+                  span.name.local == 'span' &&
+                  !_isAlternateText(span, paragraph) &&
+                  _ttmlTime(_attribute(span, 'begin')) != null,
+            )) {
+          final text = _primaryText(node);
+          if (text.trim().isNotEmpty) {
+            segments.add((element: node, text: segments.isEmpty ? leading.toString().trimLeft() + text : text));
+          }
+          return;
+        }
+        for (final child in node.children) {
+          visit(child);
+        }
+      }
+
+      visit(paragraph);
       final words = <LyricWord>[];
-      for (var index = 0; index < wordElements.length; index++) {
-        final element = wordElements[index];
-        final start = _ttmlTime(_attribute(element, 'begin'));
-        if (start == null) continue;
-        final followingStart = index + 1 < wordElements.length
-            ? _ttmlTime(_attribute(wordElements[index + 1], 'begin'))
+      for (var index = 0; index < segments.length; index++) {
+        final segment = segments[index];
+        final start = _ttmlTime(_attribute(segment.element, 'begin'))!;
+        final followingStart = index + 1 < segments.length
+            ? _ttmlTime(_attribute(segments[index + 1].element, 'begin'))
             : null;
-        final end = _ttmlEnd(element, start) ?? followingStart ?? lineEnd ?? start + const Duration(milliseconds: 600);
-        final text = element.innerText;
-        if (text.trim().isEmpty) continue;
+        final end = _ttmlEnd(segment.element, start) ?? followingStart ?? lineEnd ?? start;
+        final text = segment.text;
         words.add(LyricWord(text: text, start: start, end: end < start ? start : end));
       }
       hasNativeWords |= words.isNotEmpty;
       final text = words.isNotEmpty ? words.map((word) => word.text).join().trim() : _primaryText(paragraph).trim();
       if (text.isEmpty) continue;
-      staged.add((text: text, start: lineStart, end: lineEnd, words: words));
+      staged.add((
+        text: text,
+        start: lineStart ?? (words.isEmpty ? null : words.first.start),
+        end: lineEnd,
+        words: words,
+      ));
     }
 
     final lines = <LyricLine>[];
@@ -104,12 +133,7 @@ class LyricsParser {
           current.end ??
           (index + 1 < staged.length ? staged[index + 1].start : null) ??
           (current.start == null ? null : current.start! + const Duration(seconds: 5));
-      final words = current.words.isNotEmpty
-          ? current.words
-          : current.start != null && inferredEnd != null
-          ? estimateWords(current.text, current.start!, inferredEnd)
-          : const <LyricWord>[];
-      lines.add(LyricLine(text: current.text, start: current.start, end: inferredEnd, words: words));
+      lines.add(LyricLine(text: current.text, start: current.start, end: inferredEnd, words: current.words));
     }
 
     return LyricsDocument(
@@ -123,27 +147,120 @@ class LyricsParser {
     );
   }
 
-  static List<LyricWord> estimateWords(String text, Duration start, Duration end) {
-    final matches = RegExp(r'\S+\s*').allMatches(text).toList(growable: false);
-    if (matches.isEmpty || end <= start) return const [];
-    final weights = [for (final match in matches) (match.group(0)!.trim().runes.length + 1).clamp(2, 14)];
-    final total = weights.fold<int>(0, (sum, weight) => sum + weight);
-    var cursor = start.inMilliseconds;
-    return [
-      for (var index = 0; index < matches.length; index++)
-        () {
-          final wordStart = cursor;
-          final wordEnd = index == matches.length - 1
-              ? end.inMilliseconds
-              : cursor + ((end.inMilliseconds - start.inMilliseconds) * weights[index] / total).round();
-          cursor = wordEnd;
-          return LyricWord(
-            text: matches[index].group(0)!,
+  static LyricsDocument parseQrc(String input, {required String source, String title = '', String artist = ''}) {
+    final body = input.trimLeft().startsWith('<')
+        ? XmlDocument.parse(input).descendants
+                  .whereType<XmlElement>()
+                  .map((element) => element.getAttribute('LyricContent'))
+                  .nonNulls
+                  .firstOrNull ??
+              ''
+        : input;
+    final headers = RegExp(r'\[(\d+),(\d+)\]').allMatches(body).toList();
+    final wordTime = RegExp(r'\((\d+),(\d+)\)');
+    final credits = RegExp(
+      r'^(?:lyrics by|composed by|arranged by|producer|作词|作曲|编曲|制作人)\s*[:：]',
+      caseSensitive: false,
+    );
+    final lines = <LyricLine>[];
+    for (var index = 0; index < headers.length; index++) {
+      final header = headers[index];
+      final start = int.parse(header.group(1)!);
+      final duration = int.parse(header.group(2)!);
+      final content = body.substring(header.end, index + 1 < headers.length ? headers[index + 1].start : body.length);
+      var cursor = 0;
+      final words = <LyricWord>[];
+      for (final time in wordTime.allMatches(content)) {
+        final text = content.substring(cursor, time.start);
+        cursor = time.end;
+        if (text.trim().isEmpty) {
+          if (text.isNotEmpty && words.isNotEmpty && !words.last.text.endsWith(' ')) {
+            final previous = words.removeLast();
+            words.add(LyricWord(text: '${previous.text} ', start: previous.start, end: previous.end));
+          }
+          continue;
+        }
+        final wordStart = int.parse(time.group(1)!);
+        final length = int.parse(time.group(2)!);
+        words.add(
+          LyricWord(
+            text: text,
             start: Duration(milliseconds: wordStart),
-            end: Duration(milliseconds: wordEnd),
+            end: Duration(milliseconds: wordStart + length),
+          ),
+        );
+      }
+      final text = words.map((word) => word.text).join().trim();
+      if (text.isEmpty || credits.hasMatch(text)) continue;
+      final identity = text.toLowerCase();
+      if (lines.isEmpty && [title, artist, '$title - $artist'].any((name) => identity == name.trim().toLowerCase())) {
+        continue;
+      }
+      final lineEnd = duration > 0
+          ? start + duration
+          : index + 1 < headers.length
+          ? int.parse(headers[index + 1].group(1)!)
+          : words.last.end.inMilliseconds;
+      lines.add(
+        LyricLine(
+          text: text,
+          start: Duration(milliseconds: start),
+          end: Duration(milliseconds: lineEnd),
+          words: words,
+        ),
+      );
+    }
+    return LyricsDocument(lines: lines, timingQuality: LyricTimingQuality.word, source: source);
+  }
+
+  static LyricsDocument parseLyricsfile(String input, {required String source}) {
+    final data = loadYaml(input);
+    final rawLines = data is Map ? data['lines'] : null;
+    final entries = rawLines is List ? rawLines.whereType<Map>().toList() : const <Map>[];
+    final lines = <LyricLine>[];
+    Duration? time(Object? value) => value is int && value >= 0 ? Duration(milliseconds: value) : null;
+    final pending = entries
+        .map((entry) {
+          final rawWords = entry['words'];
+          final words = <({String text, Duration start, Duration? end})>[];
+          if (rawWords is List) {
+            for (final word in rawWords.whereType<Map>()) {
+              final start = time(word['start_ms']);
+              final label = word['text'];
+              if (label is String && label.trim().isNotEmpty && start != null) {
+                words.add((text: label, start: start, end: time(word['end_ms'])));
+              }
+            }
+          }
+          return (
+            text: entry['text'] is String ? entry['text'] as String : words.map((word) => word.text).join(),
+            start: time(entry['start_ms']) ?? words.firstOrNull?.start,
+            end: time(entry['end_ms']),
+            words: words,
           );
-        }(),
-    ];
+        })
+        .where((entry) => entry.text.trim().isNotEmpty)
+        .toList();
+
+    for (final (index, entry) in pending.indexed) {
+      final lineEnd = entry.end ?? (index + 1 < pending.length ? pending[index + 1].start : null);
+      final words = <LyricWord>[];
+      for (final (wordIndex, word) in entry.words.indexed) {
+        final next = wordIndex + 1 < entry.words.length ? entry.words[wordIndex + 1].start : lineEnd;
+        final end = word.end ?? next ?? word.start;
+        words.add(LyricWord(text: word.text, start: word.start, end: end < word.start ? word.start : end));
+      }
+      lines.add(LyricLine(text: entry.text, start: entry.start, end: lineEnd ?? words.lastOrNull?.end, words: words));
+    }
+    return LyricsDocument(
+      lines: lines,
+      source: source,
+      timingQuality: lines.any((line) => line.words.isNotEmpty)
+          ? LyricTimingQuality.word
+          : lines.any((line) => line.start != null)
+          ? LyricTimingQuality.line
+          : LyricTimingQuality.plain,
+    );
   }
 
   static ({String text, List<LyricWord> words}) _parseEnhancedWords(

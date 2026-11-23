@@ -1,3 +1,4 @@
+import 'package:resonance/core/audio/windows_audio_filter.dart';
 import 'package:resonance/services/track_artwork_service.dart';
 import 'package:resonance/core/audio/playback_failure.dart';
 import 'package:resonance/core/audio/playback_session.dart';
@@ -297,28 +298,37 @@ bool restoredTrackIsExternal({required bool? persistedValue, required bool track
 /// Builds the complete libmpv audio-filter chain.
 ///
 /// media_kit implements independent Windows speed and pitch with scaletempo.
-/// Replacing `af` with only an EQ filter silently removes scaletempo, coupling
-/// speed and pitch even at 0% bass. The audio-only Windows libmpv build exposes
+/// Retain scaletempo while speed and pitch differ. At a 1:1 ratio the
+/// resynthesis is redundant and can color the signal. The Windows libmpv build exposes
 /// FFmpeg's equalizer but not its automatic sample-format converter, so the
 /// combined `lavfi` graph and native `format` filters around it are required.
 @visibleForTesting
 String buildWindowsAudioFilter(PlaybackAdjustments adjustments) {
-  final tempoScale = (adjustments.speed / adjustments.pitch).clamp(0.25, 4.0).toStringAsFixed(8);
-  final pitchCorrection = 'scaletempo:scale=$tempoScale';
+  final tempoScale = (adjustments.speed / adjustments.pitch).clamp(0.25, 4.0);
+  final pitchCorrection = (tempoScale - 1).abs() < 0.00001 ? '' : 'scaletempo:scale=${tempoScale.toStringAsFixed(8)}';
   if (!adjustments.equalizer.isActive) return pitchCorrection;
   final filters = List<String>.generate(equalizerBandFrequencies.length, (index) {
     final frequency = equalizerBandFrequencies[index].toStringAsFixed(0);
     final gain = adjustments.equalizer.gainsDb[index].toStringAsFixed(2);
     return 'equalizer=f=$frequency:t=q:w=0.70:g=$gain';
   }).join(',');
-  return '$pitchCorrection,format=format=floatp,'
-      'lavfi=[$filters],'
-      'format=format=float';
+  return [
+    if (pitchCorrection.isNotEmpty) pitchCorrection,
+    'format=format=floatp',
+    'lavfi=[$filters]',
+    'format=format=float',
+  ].join(',');
 }
 
 @visibleForTesting
-double equalizerOutputHeadroomMultiplier(EqualizerSettings settings, {required bool effectApplied}) =>
-    effectApplied ? settings.automaticPreampMultiplier : 1.0;
+double equalizerOutputHeadroomMultiplier(
+  EqualizerSettings settings, {
+  required bool effectApplied,
+  required double outputGain,
+}) {
+  if (!effectApplied || outputGain <= 0 || settings.automaticPreampDb == 0) return 1.0;
+  return (settings.automaticPreampMultiplier / outputGain).clamp(0.0, 1.0);
+}
 
 @immutable
 class TrackTransitionState {
@@ -350,7 +360,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   final AndroidAutoCatalog _androidAutoCatalog = AndroidAutoCatalog();
   late AudioPlayer _player;
   late AndroidLoudnessEnhancer _loudnessEnhancer;
-  late AndroidEqualizer _androidEqualizer;
+  static const _androidEqChannel = MethodChannel('resonance/equalizer');
+  final Map<AudioPlayer, int> _androidEqualizerSessions = {};
+  final Map<AudioPlayer, int> _androidEqualizerRevisions = {};
+  bool _disposingAudio = false;
   mk.Player? _windowsPlayer;
   VoiceChatController? voiceChat;
   int _voiceChatSeekRevision = 0;
@@ -422,7 +435,73 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   String? _audioEnvelopeTrackId;
 
   int? _standalonePlaylistNumber;
+  int? _libraryPlaybackPlaylistNumber;
   int? _standalonePlaylistIndex;
+  int? get _playbackPlaylistNumber => isStandaloneMode ? _standalonePlaylistNumber : _libraryPlaybackPlaylistNumber;
+  // Explicit requests interrupt the generated order without changing its cursor.
+  final _playlistPlayNext = <int, List<PlaybackQueueEntry>>{};
+  final _standalonePlayNext = <PlaybackQueueEntry>[];
+  PlaybackQueueSurface _standaloneQueueSurface = PlaybackQueueSurface.discover;
+  MediaItem? _queueAnchor;
+  PlaybackQueueEntry? _playingOverride;
+
+  final activeQueueSurface = ValueNotifier<PlaybackQueueSurface?>(null);
+  List<PlaybackQueueEntry> get _playNext {
+    final standalone = standaloneModeNotifier.value;
+    final number = standalone ? _standalonePlaylistNumber : _libraryPlaybackPlaylistNumber;
+    if (standalone && number == null) return _standalonePlayNext;
+    return _playlistPlayNext.putIfAbsent(number ?? FileService.activePlaylistNumber, () => []);
+  }
+
+  void _publishQueueSurface() {
+    activeQueueSurface.value = mediaItem.value == null || _syncPeerControlled
+        ? null
+        : standaloneModeNotifier.value && _standalonePlaylistNumber == null
+        ? _standaloneQueueSurface
+        : PlaybackQueueSurface.library;
+  }
+
+  bool playNext(PlaybackQueueEntry entry, {required PlaybackQueueSurface surface}) {
+    if (activeQueueSurface.value != surface || _syncControlLocked || _playNext.length >= 500) return false;
+    _playNext.insert(0, entry);
+    if (_crossfadeInProgress) {
+      _crossfadeGeneration++;
+      _crossfadeInProgress = false;
+      unawaited(_applyOutputVolume());
+    }
+    playbackModeRevision.value++;
+    return true;
+  }
+
+  Future<bool> _playQueuedOverride({PlaybackQueueEntry? selected}) async {
+    if (_playNext.isEmpty || _syncControlLocked) return false;
+    if (selected == null) {
+      selected = _playNext.removeAt(0);
+    } else if (!_playNext.remove(selected)) {
+      return false;
+    }
+    if (_playingOverride == null) _queueAnchor = mediaItem.value;
+    _playingOverride = selected;
+    playbackModeRevision.value++;
+    // Resolve outside the navigation mutex so a subsequent skip can replace a slow stream.
+    unawaited(
+      loadTrack(
+        selected.id,
+        selected.title,
+        selected.artist,
+        standalone: isStandaloneMode,
+        artworkUri: selected.artworkUri,
+        standalonePlaylistNumber: _playbackPlaylistNumber,
+        standalonePlaylistIndex: _standalonePlaylistIndex,
+        transitionDirection: TrackTransitionDirection.next,
+        preserveQueueAnchor: true,
+      ).catchError((Object error) {
+        debugPrint('[PlayerHandler] Queued track could not be loaded: $error');
+      }),
+    );
+    return true;
+  }
+
   List<StandaloneStreamQueueItem> _standaloneStreamQueue = const [];
   List<StandaloneStreamQueueItem> _standaloneQueueOriginal = const [];
   final PlaylistShuffleOrder _standaloneShuffleOrder = PlaylistShuffleOrder();
@@ -636,10 +715,17 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (active) unawaited(_standaloneVideo?.showSong());
     _syncSessionActive = active;
     _syncPeerControlled = active && peerControlled;
+    if (active) {
+      _playlistPlayNext.clear();
+      _standalonePlayNext.clear();
+      _queueAnchor = null;
+      _playingOverride = null;
+    }
     if (active && _crossfadeInProgress) {
       _crossfadeGeneration++;
       _crossfadeInProgress = false;
     }
+    _publishQueueSurface();
   }
 
   Future<T> runSynchronizedCommand<T>(Future<T> Function() command) async {
@@ -682,6 +768,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     standaloneModeNotifier.value = enabled;
     if (!enabled) {
       unawaited(_standaloneVideo?.showSong());
+      _libraryPlaybackPlaylistNumber = _standalonePlaylistNumber ?? _libraryPlaybackPlaylistNumber;
       _standalonePlaylistNumber = null;
       _standalonePlaylistIndex = null;
       _standaloneStreamQueue = const [];
@@ -696,6 +783,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       extras.remove('resonanceStandalone');
     }
     mediaItem.add(current.copyWith(extras: extras));
+    _publishQueueSurface();
   }
 
   /// Opens the existing player session in the large playlist view. The audio
@@ -707,6 +795,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     required int playlistNumber,
     required int playlistIndex,
   }) async {
+    final previousPlaylist = _playbackPlaylistNumber;
     _standalonePlaylistNumber = playlistNumber;
     _standalonePlaylistIndex = playlistIndex;
     final current = mediaItem.value;
@@ -714,6 +803,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         _pendingRestoredTrack == null &&
         _sameTrackId(current.id, filePath) &&
         playbackState.value.processingState != AudioProcessingState.idle) {
+      if (previousPlaylist != playlistNumber) {
+        _queueAnchor = null;
+        _playingOverride = null;
+        playbackModeRevision.value++;
+      }
       trackTransitionNotifier.value = TrackTransitionState(revision: trackTransitionNotifier.value.revision + 1);
       setStandalonePresentation(true);
       return true;
@@ -787,7 +881,6 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       final backend = _createJustAudioBackend();
       _player = backend.player;
       _loudnessEnhancer = backend.loudnessEnhancer;
-      _androidEqualizer = backend.equalizer;
       _attachJustAudioPlayer(_player);
       if (Platform.isAndroid) {
         if (audioSession != null) {
@@ -802,7 +895,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       unawaited(refreshTrackArtwork(path));
     });
     _playlistMutationSubscription = FileService.mutations.listen((mutation) {
-      if (mutation.kind == PlaylistMutationKind.deleted) _shuffleOrders.remove(mutation.playlistNumber);
+      if (mutation.kind == PlaylistMutationKind.deleted) {
+        _shuffleOrders.remove(mutation.playlistNumber);
+        _playlistPlayNext.remove(mutation.playlistNumber);
+      }
       // Queue views re-read the file and reconcile before publishing their rows.
       playbackModeRevision.value++;
     });
@@ -841,7 +937,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       gain:
           _normalizationMultiplier *
           trackVolumeMultiplier(trackVolumePercentNotifier.value, 1) *
-          equalizerOutputHeadroomMultiplier(equalizerNotifier.value, effectApplied: _equalizerEffectApplied),
+          equalizerOutputHeadroomMultiplier(
+            equalizerNotifier.value,
+            effectApplied: _equalizerEffectApplied,
+            outputGain: _normalizationMultiplier * trackVolumeMultiplier(trackVolumePercentNotifier.value, 1),
+          ),
     );
   }
 
@@ -881,16 +981,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _forceAuthenticatedStreamIds.clear();
   }
 
-  ({AudioPlayer player, AndroidLoudnessEnhancer loudnessEnhancer, AndroidEqualizer equalizer})
-  _createJustAudioBackend() {
+  ({AudioPlayer player, AndroidLoudnessEnhancer loudnessEnhancer}) _createJustAudioBackend() {
     final loudnessEnhancer = AndroidLoudnessEnhancer();
-    final equalizer = AndroidEqualizer();
     final player = AudioPlayer(
       handleInterruptions: !Platform.isAndroid,
       handleAudioSessionActivation: !Platform.isAndroid,
-      audioPipeline: AudioPipeline(androidAudioEffects: [loudnessEnhancer, equalizer]),
+      audioPipeline: AudioPipeline(androidAudioEffects: [loudnessEnhancer]),
     );
-    return (player: player, loudnessEnhancer: loudnessEnhancer, equalizer: equalizer);
+    return (player: player, loudnessEnhancer: loudnessEnhancer);
   }
 
   void _attachAudioSession(AudioSession session) {
@@ -1127,6 +1225,23 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   void _attachJustAudioPlayer(AudioPlayer player) {
+    if (Platform.isAndroid) {
+      player.androidAudioSessionIdStream.distinct().listen((id) {
+        if (id == null || !identical(player, _player) || _disposingAudio) return;
+        _playbackAdjustmentQueue = _playbackAdjustmentQueue
+            .then((_) async {
+              if (_disposingAudio || !identical(player, _player) || player.androidAudioSessionId != id) return;
+              final settings = _requestedPlaybackAdjustments.equalizer;
+              final applied = await _applyAndroidEqualizer(player, settings);
+              if (_disposingAudio || !identical(player, _player) || player.androidAudioSessionId != id) return;
+              _equalizerEffectApplied = applied;
+              await _applyOutputVolume();
+            })
+            .catchError((Object error) {
+              debugPrint('[PlayerHandler] Could not restore Android equalizer: $error');
+            });
+      });
+    }
     player.playbackEventStream.listen(
       (_) {
         if (identical(player, _player)) _updatePlaybackState();
@@ -1449,7 +1564,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (_loadGeneration != generation || (isStandaloneMode && _standalonePlaylistNumber == null)) return;
     final current = mediaItem.value;
     if (current == null) return;
-    final playlist = await _effectivePlaybackOrder(playlistNumber: _standalonePlaylistNumber);
+    final playlist = await _effectivePlaybackOrder(playlistNumber: _playbackPlaylistNumber);
     if (_loadGeneration != generation || playlist.length < 2) return;
     final index = _currentPlaylistIndex(playlist, current.id);
     if (index < 0) return;
@@ -1579,9 +1694,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       item.artist ?? '',
       artworkUri: item.artUri,
       standalone: standaloneModeNotifier.value,
-      standalonePlaylistNumber: _standalonePlaylistNumber,
+      standalonePlaylistNumber: _playbackPlaylistNumber,
       standalonePlaylistIndex: _standalonePlaylistIndex,
       playWhenReady: false,
+      preserveQueueAnchor: true,
       preservePosition: false,
     );
     if (_loadGeneration != selectedGeneration + 1 || mediaItem.value?.id != path) return;
@@ -1810,9 +1926,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         current.artist ?? 'Unknown Artist',
         standalone: isStandaloneMode,
         artworkUri: current.artUri,
-        standalonePlaylistNumber: _standalonePlaylistNumber,
+        standalonePlaylistNumber: _playbackPlaylistNumber,
         standalonePlaylistIndex: _standalonePlaylistIndex,
         preserveFailureHistory: true,
+        preserveQueueAnchor: true,
         initialPosition: recoveringStream ? _currentPosition : null,
       );
       return;
@@ -1829,14 +1946,15 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   Future<void> _advanceAfterPlaybackFailure(MediaItem failedItem, int generation) async {
     if (!_playbackRequested) return;
-    final playlistNumber = _standalonePlaylistNumber;
+    if (await _playQueuedOverride()) return;
+    final playlistNumber = _playbackPlaylistNumber;
     if (isStandaloneMode && playlistNumber == null) {
       await _markPlaybackUnavailable(generation);
       return;
     }
     final playlist = await _effectivePlaybackOrder(playlistNumber: playlistNumber, reset: isRandom);
     if (_loadGeneration != generation || !_playbackRequested) return;
-    final currentIndex = _currentPlaylistIndex(playlist, failedItem.id);
+    final currentIndex = _currentPlaylistIndex(playlist, (_queueAnchor ?? failedItem).id);
     final nextIndex = nextPlayablePlaylistIndex(
       playlist: playlist,
       currentIndex: currentIndex,
@@ -1854,7 +1972,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       path,
       metadata.title,
       metadata.artist,
-      standalone: playlistNumber != null,
+      standalone: isStandaloneMode,
       standalonePlaylistNumber: playlistNumber,
       standalonePlaylistIndex: nextIndex,
       transitionDirection: TrackTransitionDirection.next,
@@ -1910,9 +2028,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       failure.track.artist ?? 'Unknown Artist',
       standalone: isStandaloneMode,
       artworkUri: failure.track.artUri,
-      standalonePlaylistNumber: _standalonePlaylistNumber,
+      standalonePlaylistNumber: _playbackPlaylistNumber,
       standalonePlaylistIndex: _standalonePlaylistIndex,
       initialPosition: failure.position,
+      preserveQueueAnchor: true,
     );
   }
 
@@ -1920,6 +2039,21 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   /// The user's playlist and saved source mapping are never silently rewritten.
   Future<void> playFailureAlternative(PlaybackFailure failure, YoutubeTrack alternative) async {
     if (!isCurrentPlaybackFailure(failure) || _syncControlLocked) return;
+    if (_playingOverride != null) {
+      final entry = PlaybackQueueEntry.youtube(alternative);
+      _playingOverride = entry;
+      await loadTrack(
+        entry.id,
+        entry.title,
+        entry.artist,
+        artworkUri: entry.artworkUri,
+        standalone: isStandaloneMode,
+        standalonePlaylistNumber: _playbackPlaylistNumber,
+        standalonePlaylistIndex: _standalonePlaylistIndex,
+        preserveQueueAnchor: true,
+      );
+      return;
+    }
     if (isStandaloneMode && _standalonePlaylistNumber == null && _standaloneStreamQueue.isNotEmpty) {
       final items = _standaloneStreamQueue.toList();
       final index = _standaloneStreamQueueIndex ?? items.indexWhere((e) => e.url == failure.track.id);
@@ -1938,6 +2072,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         queueItems: items,
         queueIndex: index,
         relatedQueue: false,
+        startNewQueue: false,
       );
     } else {
       final snapshot = await playbackQueueSnapshot();
@@ -1965,6 +2100,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         queueItems: items,
         queueIndex: 0,
         relatedQueue: false,
+        queueSurface: activeQueueSurface.value ?? PlaybackQueueSurface.discover,
       );
     }
   }
@@ -1998,7 +2134,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final position = _currentPosition;
     final generation = _loadGeneration;
     final standalone = isStandaloneMode;
-    final playlistNumber = _standalonePlaylistNumber;
+    final playlistNumber = _playbackPlaylistNumber;
     final playlistIndex = _standalonePlaylistIndex;
     var updated = false;
     try {
@@ -2018,12 +2154,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
           standalonePlaylistIndex: playlistIndex,
           playWhenReady: wasPlaying,
           initialPosition: position,
+          preserveQueueAnchor: true,
         );
       }
     }
   }
 
   void _updatePlaybackState({bool force = false}) {
+    _publishQueueSurface();
     final streamSourcePending = _pendingStreamSourceGeneration == _loadGeneration;
     final playing =
         !_playbackUnavailable && !streamSourcePending && (Platform.isWindows ? _isWindowsPlaying : _player.playing);
@@ -2033,7 +2171,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       playing: playing,
       position: _currentPosition,
       speed: speedNotifier.value,
-      playlist: _standalonePlaylistNumber ?? (isStandaloneMode ? null : FileService.activePlaylistNumber),
+      playlist: _playbackPlaylistNumber ?? (isStandaloneMode ? null : FileService.activePlaylistNumber),
       loading: streamSourcePending || _playbackUnavailable,
     );
     if (currentItem == null) {
@@ -2187,6 +2325,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
               if (!saved.standalone) await FileService().setActivePlaylistNumber(number);
               if (_loadGeneration != initialGeneration) return;
               _standalonePlaylistNumber = saved.standalone ? number : null;
+              _libraryPlaybackPlaylistNumber = saved.standalone ? null : number;
               _standalonePlaylistIndex = saved.playlistIndex;
               if (isShuffle && saved.shufflePaths.isNotEmpty) {
                 final order = PlaylistShuffleOrder()..restore(saved.shufflePaths, saved.shuffleIndex);
@@ -2196,6 +2335,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
               }
             }
             if (saved.standalone && saved.playlistNumber == null) {
+              _standaloneQueueSurface = saved.standaloneSurface ?? PlaybackQueueSurface.discover;
               StandaloneStreamQueueItem entry(SavedPlaybackEntry e) =>
                   StandaloneStreamQueueItem(url: e.id, title: e.title, artist: e.artist, thumbnailUrl: e.artwork);
               _standaloneStreamQueue = saved.queue.map(entry).toList();
@@ -2253,6 +2393,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (_loadGeneration != generation) return;
       standaloneModeNotifier.value = restoredFromOutsidePlaylist;
       _standalonePlaylistNumber = null;
+      _libraryPlaybackPlaylistNumber = restoredFromOutsidePlaylist ? null : FileService.activePlaylistNumber;
       _standalonePlaylistIndex = null;
       final restored = MediaItem(
         id: filePath,
@@ -2283,10 +2424,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   Future<void> savePlaybackSession() {
     final current = mediaItem.value;
-    if (current == null || _activeTrackLoadGeneration != null || _syncPeerControlled) return Future.value();
+    if (current == null || _activeTrackLoadGeneration != null || _syncPeerControlled || _playingOverride != null) {
+      return Future.value();
+    }
     SavedPlaybackEntry entry(StandaloneStreamQueueItem e) =>
         SavedPlaybackEntry(id: e.url, title: e.title, artist: e.artist, artwork: e.thumbnailUrl);
-    final number = _standalonePlaylistNumber ?? (isStandaloneMode ? null : FileService.activePlaylistNumber);
+    final number = _playbackPlaylistNumber ?? (isStandaloneMode ? null : FileService.activePlaylistNumber);
     final order = number == null ? null : _shuffleOrders[number];
     final session = _pendingRestoredTrack != null && _restoredSession != null
         ? _restoredSession!
@@ -2301,6 +2444,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             duration: _currentDuration,
             standalone: isStandaloneMode,
             playlistNumber: number,
+            standaloneSurface: isStandaloneMode && number == null ? _standaloneQueueSurface : null,
             playlistIndex: _standalonePlaylistIndex,
             queue: _standaloneStreamQueue.map(entry).toList(),
             originalQueue: _standaloneQueueOriginal.map(entry).toList(),
@@ -2508,7 +2652,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       await _player.setSpeed(normalized.speed);
       await _player.setPitch(normalized.pitch);
       if (mediaItem.value != null || !normalized.equalizer.isActive) {
-        equalizerApplied = await _applyAndroidEqualizer(_androidEqualizer, normalized.equalizer);
+        equalizerApplied = await _applyAndroidEqualizer(_player, normalized.equalizer);
       }
     }
     speedNotifier.value = normalized.speed;
@@ -2525,44 +2669,46 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _updatePlaybackState();
   }
 
+  Future<void> _releaseAndroidEqualizer(AudioPlayer player) async {
+    _androidEqualizerRevisions.update(player, (revision) => revision + 1, ifAbsent: () => 1);
+    final id = _androidEqualizerSessions.remove(player);
+    if (id == null) return;
+    try {
+      await _androidEqChannel.invokeMethod<void>('release', {'sessionId': id}).timeout(const Duration(seconds: 2));
+    } catch (_) {}
+  }
+
   Future<bool> _applyAndroidEqualizer(
-    AndroidEqualizer equalizer,
+    AudioPlayer player,
     EqualizerSettings settings, {
     bool updateSupport = true,
   }) async {
-    if (!Platform.isAndroid) {
-      if (updateSupport && settings.isActive) equalizerSupportedNotifier.value = false;
+    if (!Platform.isAndroid || _disposingAudio) return false;
+    final id = player.androidAudioSessionId;
+    if (!settings.isActive || id == null || id <= 0) {
+      await _releaseAndroidEqualizer(player);
       return false;
     }
+    final oldId = _androidEqualizerSessions[player];
+    if (oldId != id) await _releaseAndroidEqualizer(player);
+    if (player.androidAudioSessionId != id || _disposingAudio) return false;
+    final revision = _androidEqualizerRevisions.update(player, (value) => value + 1, ifAbsent: () => 1);
+    _androidEqualizerSessions[player] = id;
+    var applied = false;
     try {
-      if (!settings.isActive) {
-        await equalizer.setEnabled(false);
-        return false;
-      }
-
-      final parameters = await equalizer.parameters.timeout(const Duration(seconds: 2));
-      if (parameters.bands.isEmpty) {
-        throw StateError('The active Android audio session exposes no equalizer bands');
-      }
-      for (final band in parameters.bands) {
-        await band.setGain(
-          interpolatedEqualizerGain(
-            band.centerFrequency,
-            settings,
-          ).clamp(parameters.minDecibels, parameters.maxDecibels),
-        );
-      }
-      await equalizer.setEnabled(true);
-      if (updateSupport) equalizerSupportedNotifier.value = true;
-      return true;
+      applied =
+          await _androidEqChannel
+              .invokeMethod<bool>('apply', {'sessionId': id, 'gains': settings.gainsDb})
+              .timeout(const Duration(seconds: 2)) ==
+          true;
     } catch (error) {
-      debugPrint('[PlayerHandler] Android equalizer unavailable: $error');
-      try {
-        await equalizer.setEnabled(false);
-      } catch (_) {}
+      debugPrint('[PlayerHandler] Android audio effect unavailable: $error');
     }
-    if (updateSupport) equalizerSupportedNotifier.value = false;
-    return false;
+    if (_androidEqualizerRevisions[player] != revision || player.androidAudioSessionId != id || _disposingAudio) {
+      return false;
+    }
+    if (updateSupport) equalizerSupportedNotifier.value = applied;
+    return applied;
   }
 
   Future<bool> _applyWindowsPlaybackAdjustments(
@@ -2570,15 +2716,21 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     PlaybackAdjustments adjustments, {
     bool updateSupport = true,
   }) async {
-    await player.setRate(adjustments.speed);
-    await player.setPitch(adjustments.pitch);
+    if (player.state.rate != adjustments.speed) await player.setRate(adjustments.speed);
+    if (player.state.pitch != adjustments.pitch) await player.setPitch(adjustments.pitch);
+    final platform = player.platform;
+    if (platform is! mk.NativePlayer) return false;
     try {
-      final platform = player.platform;
-      if (platform is! mk.NativePlayer) throw UnsupportedError('Native libmpv filters are unavailable');
-      await platform.setProperty('af', buildWindowsAudioFilter(adjustments));
+      await WindowsAudioFilter.apply(platform, buildWindowsAudioFilter(adjustments));
       if (updateSupport) equalizerSupportedNotifier.value = true;
       return adjustments.equalizer.isActive;
     } catch (error) {
+      try {
+        await WindowsAudioFilter.apply(
+          platform,
+          buildWindowsAudioFilter(adjustments.copyWith(equalizer: EqualizerSettings.flat)),
+        );
+      } catch (_) {}
       debugPrint('[PlayerHandler] Windows equalizer filter unavailable: $error');
       if (updateSupport && adjustments.equalizer.isActive) equalizerSupportedNotifier.value = false;
       return false;
@@ -2599,7 +2751,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         multiplier *
         normalizationMultiplier *
         trackVolumeMultiplier(trackVolumePercent, volumeNotifier.value);
-    final headroom = equalizerOutputHeadroomMultiplier(equalizer, effectApplied: equalizerApplied);
+    final headroom = equalizerOutputHeadroomMultiplier(equalizer, effectApplied: equalizerApplied, outputGain: raw);
     if (Platform.isAndroid) {
       final effectiveRaw = raw * headroom;
       await player.setVolume(effectiveRaw.clamp(0.0, 1.0));
@@ -2617,14 +2769,20 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     bool equalizerApplied,
     double normalizationMultiplier,
     double trackVolumePercent,
-  ) => player.setVolume(
-    volumeNotifier.value *
+  ) {
+    final raw =
+        volumeNotifier.value *
         multiplier *
         normalizationMultiplier *
-        trackVolumeMultiplier(trackVolumePercent, volumeNotifier.value) *
-        equalizerOutputHeadroomMultiplier(equalizer, effectApplied: equalizerApplied) *
-        100.0,
-  );
+        trackVolumeMultiplier(trackVolumePercent, volumeNotifier.value);
+    // libmpv's volume property is cubed internally before it scales samples.
+    final headroom = equalizerOutputHeadroomMultiplier(
+      equalizer,
+      effectApplied: equalizerApplied,
+      outputGain: raw * raw * raw,
+    );
+    return player.setVolume(raw * math.pow(headroom, 1 / 3) * 100.0);
+  }
 
   Future<void> _applyOutputVolume() {
     _volumeApplyPending = true;
@@ -2791,6 +2949,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         _activeTrackLoadGeneration != null ||
         _activeSeekGeneration != null ||
         !crossfadeEnabledNotifier.value ||
+        _playNext.isNotEmpty ||
+        _playingOverride != null ||
         currentLoopMode == LoopMode.one ||
         !_isBackendPlaying) {
       return;
@@ -2806,9 +2966,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   }
 
   Future<_AutomaticTrackTarget?> _automaticNextTarget() async {
-    final currentItem = mediaItem.value;
+    final currentItem = _queueAnchor ?? mediaItem.value;
     if (currentItem == null) return null;
-    final playlistNumber = _standalonePlaylistNumber;
+    final playlistNumber = _playbackPlaylistNumber;
     if (isStandaloneMode && playlistNumber == null) return null;
     var playlist = await _effectivePlaybackOrder(playlistNumber: playlistNumber, reset: isRandom);
     if (playlist.length < 2) return null;
@@ -2828,7 +2988,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       path: path,
       title: metadata.title,
       artist: metadata.artist,
-      standalone: playlistNumber != null,
+      standalone: isStandaloneMode,
       playlistNumber: playlistNumber,
       playlistIndex: nextIndex,
     );
@@ -3004,7 +3164,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       if (!adopted) {
         await incoming.stop().catchError((_) {});
         await incoming.dispose().catchError((_) {});
-        if (generation == _crossfadeGeneration && identical(outgoing, _windowsPlayer)) {
+        if (identical(outgoing, _windowsPlayer) && generation == _crossfadeGeneration) {
           _crossfadeInProgress = false;
           await _setWindowsOutputVolume(
             outgoing,
@@ -3014,6 +3174,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
             outgoingNormalization,
             outgoingAdjustments.volumePercent,
           );
+        } else if (identical(outgoing, _windowsPlayer) && _playNext.isNotEmpty && !_crossfadeInProgress) {
+          await _applyOutputVolume();
         }
       }
     }
@@ -3051,7 +3213,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       await incoming.setSpeed(incomingAdjustments.speed);
       await incoming.setPitch(incomingAdjustments.pitch);
       final incomingEqualizerApplied = await _applyAndroidEqualizer(
-        backend.equalizer,
+        incoming,
         incomingAdjustments.equalizer,
         updateSupport: false,
       );
@@ -3104,19 +3266,25 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _originalTrackDuration = originalDuration;
       _player = incoming;
       _loudnessEnhancer = backend.loudnessEnhancer;
-      _androidEqualizer = backend.equalizer;
       _equalizerEffectApplied = incomingEqualizerApplied;
       _normalizationMultiplier = incomingNormalization;
       adopted = true;
       await _finishAutomaticCrossfade(generation, outgoingItem, target, incomingAdjustments);
       unawaited(outgoing.stop().catchError((_) {}));
+      await _releaseAndroidEqualizer(outgoing);
+      _androidEqualizerRevisions.remove(outgoing);
       unawaited(outgoing.dispose().catchError((_) {}));
     } finally {
       if (identical(_androidCrossfadePlayer, incoming)) _androidCrossfadePlayer = null;
       if (!adopted) {
         await incoming.stop().catchError((_) {});
+        await _releaseAndroidEqualizer(incoming);
+        _androidEqualizerRevisions.remove(incoming);
         await incoming.dispose().catchError((_) {});
-        if (_interruptions.blocked && identical(outgoing, _player)) await _applyOutputVolume();
+        if (identical(outgoing, _player) &&
+            (_interruptions.blocked || (_playNext.isNotEmpty && !_crossfadeInProgress))) {
+          await _applyOutputVolume();
+        }
         if (generation == _crossfadeGeneration && identical(outgoing, _player)) {
           _crossfadeInProgress = false;
           await _setJustAudioOutputVolume(
@@ -3155,7 +3323,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _audioEnvelopeTrackId = null;
     _envelopeAnalyzer.cancel();
     standaloneModeNotifier.value = target.standalone;
-    _standalonePlaylistNumber = target.playlistNumber;
+    _standalonePlaylistNumber = target.standalone ? target.playlistNumber : null;
+    _libraryPlaybackPlaylistNumber = target.standalone ? null : target.playlistNumber;
     _standalonePlaylistIndex = target.playlistIndex;
     trackVolumePercentNotifier.value = adjustments.volumePercent;
     speedNotifier.value = adjustments.speed;
@@ -3210,6 +3379,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> play() async {
     await stopPlaybackRangePreview(resume: false);
     if (_syncControlLocked) return;
+    if (mediaItem.value == null && await _playQueuedOverride()) return;
     final restored = _pendingRestoredTrack;
     if (restored != null) {
       final session = _restoredSession;
@@ -3222,7 +3392,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         restored.artist ?? 'Unknown Artist',
         standalone: restored.extras?['resonanceStandalone'] == true,
         artworkUri: restored.artUri,
-        standalonePlaylistNumber: _standalonePlaylistNumber,
+        standalonePlaylistNumber: _playbackPlaylistNumber,
         standalonePlaylistIndex: _standalonePlaylistIndex,
         initialPosition: session?.position,
       );
@@ -3238,8 +3408,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         current.artist ?? 'Unknown Artist',
         standalone: isStandaloneMode,
         artworkUri: current.artUri,
-        standalonePlaylistNumber: _standalonePlaylistNumber,
+        standalonePlaylistNumber: _playbackPlaylistNumber,
         standalonePlaylistIndex: _standalonePlaylistIndex,
+        preserveQueueAnchor: true,
       );
       return;
     }
@@ -3441,6 +3612,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _cancelPendingSeeks();
     await _seekOperations.idle;
     await saveCurrentPlaybackPosition();
+    _playlistPlayNext.clear();
+    _standalonePlayNext.clear();
+    _queueAnchor = null;
+    _playingOverride = null;
+    playbackModeRevision.value++;
     _pendingRestoredTrack = null;
     _playbackUnavailable = false;
     _failedTrackIds.clear();
@@ -3463,6 +3639,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _streamUrlCache.clear();
     standaloneModeNotifier.value = false;
     _standalonePlaylistNumber = null;
+    _libraryPlaybackPlaylistNumber = null;
     _standalonePlaylistIndex = null;
     _standaloneStreamQueue = const [];
     _standaloneStreamQueueIndex = null;
@@ -3512,6 +3689,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   @override
   Future<void> setSpeed(double speed) async {
     if (_syncControlLocked) return;
+
     await _applyPlaybackAdjustments(
       _requestedPlaybackAdjustments.copyWith(speed: speed.clamp(0.5, 2.0)),
       persist: true,
@@ -3526,9 +3704,9 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     );
   }
 
-  Future<void> setEqualizer(EqualizerSettings settings) async {
+  Future<void> setEqualizer(EqualizerSettings settings, {bool persist = true}) async {
     if (_syncControlLocked) return;
-    await _applyPlaybackAdjustments(_requestedPlaybackAdjustments.copyWith(equalizer: settings), persist: true);
+    await _applyPlaybackAdjustments(_requestedPlaybackAdjustments.copyWith(equalizer: settings), persist: persist);
   }
 
   /// Compatibility shim for older companion clients during the protocol
@@ -3551,8 +3729,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     bool playWhenReady = true,
     bool preservePosition = true,
     Duration? initialPosition,
+    bool preserveQueueAnchor = false,
   }) async {
     if (_syncControlLocked) return;
+    // Browsing another library playlist must not move the playback cursor.
+    final playlistNumber = standalonePlaylistNumber ?? (standalone ? null : FileService.activePlaylistNumber);
     final stopPreview = stopPlaybackRangePreview(resume: false);
     final interruptSource =
         // Each explicit track load begins a new listening session.
@@ -3561,6 +3742,10 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         filePath.startsWith('http://') ||
         filePath.startsWith('https://');
     final outgoingPositionSave = preservePosition ? saveCurrentPlaybackPosition() : Future<void>.value();
+    if (!preserveQueueAnchor) {
+      _queueAnchor = null;
+      _playingOverride = null;
+    }
     ListeningStatistics.instance.onSessionEnded();
     final generation = ++_loadGeneration;
     playbackFailureNotifier.value = null;
@@ -3621,7 +3806,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         generation: generation,
         standalone: standalone,
         artworkUri: artworkUri,
-        standalonePlaylistNumber: standalonePlaylistNumber,
+        playlistNumber: playlistNumber,
         standalonePlaylistIndex: standalonePlaylistIndex,
         transitionDirection: transitionDirection,
         restorePosition: preservePosition,
@@ -3648,7 +3833,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     required int generation,
     required bool standalone,
     required Uri? artworkUri,
-    required int? standalonePlaylistNumber,
+    required int? playlistNumber,
     required int? standalonePlaylistIndex,
     required TrackTransitionDirection transitionDirection,
     required bool restorePosition,
@@ -3666,9 +3851,11 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     _audioEnvelope = null;
     _audioEnvelopeTrackId = null;
     standaloneModeNotifier.value = standalone;
-    _standalonePlaylistNumber = standalone ? standalonePlaylistNumber : null;
+    _standalonePlaylistNumber = standalone ? playlistNumber : null;
+    _libraryPlaybackPlaylistNumber = standalone ? null : playlistNumber;
+    _publishQueueSurface();
     _standalonePlaylistIndex = standalonePlaylistIndex;
-    if (!standalone || standalonePlaylistNumber != null) {
+    if (!standalone || playlistNumber != null) {
       _standaloneStreamQueue = const [];
       _standaloneStreamQueueIndex = null;
     }
@@ -3966,7 +4153,14 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     List<StandaloneStreamQueueItem>? queueItems,
     int? queueIndex,
     bool relatedQueue = true,
+    PlaybackQueueSurface queueSurface = PlaybackQueueSurface.discover,
+    bool startNewQueue = true,
   }) async {
+    if (_syncControlLocked) return;
+    if (startNewQueue) {
+      _standalonePlayNext.clear();
+      _standaloneQueueSurface = queueSurface;
+    }
     _standaloneRelatedGeneration++;
     _standaloneRelatedEnabled = relatedQueue;
     final requestedQueue = queueItems ?? const <StandaloneStreamQueueItem>[];
@@ -4098,6 +4292,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       }
       standaloneModeNotifier.value = false;
       _standalonePlaylistNumber = null;
+      _libraryPlaybackPlaylistNumber = null;
       _standalonePlaylistIndex = null;
       mediaItem.add(null);
       playbackVisualNotifier.value = const PlaybackVisualState();
@@ -4222,6 +4417,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   Future<void> _advanceAfterCompletion() async {
     if (!_playbackRequested) return;
+    if (await _playQueuedOverride()) return;
     final generation = _loadGeneration;
     if (isStandaloneMode && _standalonePlaylistNumber == null && _standaloneStreamQueue.isNotEmpty) {
       await _moveStandaloneStreamQueue(1, TrackTransitionDirection.next);
@@ -4249,20 +4445,21 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   Future<void> _nextInternal() async {
     if (_syncControlLocked) return;
     final generation = _loadGeneration;
-    final currentItem = mediaItem.value;
+    if (await _playQueuedOverride()) return;
+    final currentItem = _queueAnchor ?? mediaItem.value;
     if (currentItem == null) return;
-    final standalonePlaylistNumber = _standalonePlaylistNumber;
-    if (isStandaloneMode && standalonePlaylistNumber == null) {
+    final playlistNumber = _playbackPlaylistNumber;
+    if (isStandaloneMode && playlistNumber == null) {
       await _moveStandaloneStreamQueue(1, TrackTransitionDirection.next);
       return;
     }
-    var playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber, reset: isRandom);
+    var playlist = await _effectivePlaybackOrder(playlistNumber: playlistNumber, reset: isRandom);
     if (_loadGeneration != generation || playlist.isEmpty) return;
     final index = _currentPlaylistIndex(playlist, currentItem.id);
     if (index == -1) return;
     var nextIndex = (index + 1) % playlist.length;
     if (isShuffle && !isRandom && index + 1 >= playlist.length) {
-      playlist = await _restartPlaylistShuffleCycle(standalonePlaylistNumber);
+      playlist = await _restartPlaylistShuffleCycle(playlistNumber);
       if (_loadGeneration != generation || playlist.isEmpty) return;
       nextIndex = 0;
     }
@@ -4273,8 +4470,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       nextPath,
       meta.title,
       meta.artist,
-      standalone: standalonePlaylistNumber != null,
-      standalonePlaylistNumber: standalonePlaylistNumber,
+      standalone: isStandaloneMode,
+      standalonePlaylistNumber: playlistNumber,
       standalonePlaylistIndex: nextIndex,
       transitionDirection: TrackTransitionDirection.next,
     );
@@ -4287,11 +4484,35 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
 
   Future<void> _previousInternal({bool restartCurrent = true}) async {
     if (_syncControlLocked) return;
+    final interrupted = _queueAnchor;
+    final oneOff = _playingOverride;
+    if (oneOff != null) {
+      if (!isRandom && restartCurrent && _currentPosition > const Duration(seconds: 3)) {
+        await seek(Duration.zero);
+        return;
+      }
+      if (interrupted == null) return;
+      _playNext.insert(0, oneOff);
+      _queueAnchor = null;
+      _playingOverride = null;
+      playbackModeRevision.value++;
+      await loadTrack(
+        interrupted.id,
+        interrupted.title,
+        interrupted.artist ?? 'Unknown Artist',
+        standalone: isStandaloneMode,
+        artworkUri: interrupted.artUri,
+        standalonePlaylistNumber: _playbackPlaylistNumber,
+        standalonePlaylistIndex: _standalonePlaylistIndex,
+        transitionDirection: TrackTransitionDirection.previous,
+      );
+      return;
+    }
     final generation = _loadGeneration;
     final currentItem = mediaItem.value;
     if (currentItem == null) return;
-    final standalonePlaylistNumber = _standalonePlaylistNumber;
-    if (isStandaloneMode && standalonePlaylistNumber == null) {
+    final playlistNumber = _playbackPlaylistNumber;
+    if (isStandaloneMode && playlistNumber == null) {
       if (!isRandom && restartCurrent && _currentPosition > const Duration(seconds: 3)) {
         await seek(Duration.zero);
         return;
@@ -4299,7 +4520,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       await _moveStandaloneStreamQueue(-1, TrackTransitionDirection.previous);
       return;
     }
-    final playlist = await _effectivePlaybackOrder(playlistNumber: standalonePlaylistNumber, reset: isRandom);
+    final playlist = await _effectivePlaybackOrder(playlistNumber: playlistNumber, reset: isRandom);
     if (_loadGeneration != generation || playlist.isEmpty) return;
     final index = _currentPlaylistIndex(playlist, currentItem.id);
     if (index == -1) return;
@@ -4314,8 +4535,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       playlist[prevIndex],
       meta.title,
       meta.artist,
-      standalone: standalonePlaylistNumber != null,
-      standalonePlaylistNumber: standalonePlaylistNumber,
+      standalone: isStandaloneMode,
+      standalonePlaylistNumber: playlistNumber,
       standalonePlaylistIndex: prevIndex,
       transitionDirection: TrackTransitionDirection.previous,
     );
@@ -4363,7 +4584,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     if (items.isEmpty) return;
     var index = _standaloneStreamQueueIndex;
     if (index == null || index < 0 || index >= items.length) {
-      index = items.indexWhere((item) => item.url == mediaItem.value?.id);
+      index = items.indexWhere((item) => item.url == (_queueAnchor ?? mediaItem.value)?.id);
     }
     if (index < 0) return;
     var targetIndex = loopingStandaloneQueueIndex(currentIndex: index, offset: offset, length: items.length);
@@ -4546,12 +4767,12 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       _orderStandaloneQueue(reset: reset);
       return;
     }
-    await _effectivePlaybackOrder(playlistNumber: _standalonePlaylistNumber, reset: reset);
+    await _effectivePlaybackOrder(playlistNumber: _playbackPlaylistNumber, reset: reset);
   }
 
   void _orderStandaloneQueue({bool reset = false, bool newCycle = false}) {
     if (_standaloneQueueOriginal.isEmpty) _standaloneQueueOriginal = List.of(_standaloneStreamQueue);
-    final current = mediaItem.value?.id;
+    final current = (_queueAnchor ?? mediaItem.value)?.id;
     if (!isShuffle) {
       _standaloneStreamQueue = List.unmodifiable(_standaloneQueueOriginal);
     } else {
@@ -4577,7 +4798,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       final playlist = number ?? await FileService().getActivePlaylistNumber();
       final tracks = await _getCleanPlaylist(playlistNumber: playlist);
       final order = _shuffleOrders.putIfAbsent(playlist, PlaylistShuffleOrder.new);
-      order.restartCycle(tracks, previous: mediaItem.value?.id, same: _sameTrackId);
+      order.restartCycle(tracks, previous: (_queueAnchor ?? mediaItem.value)?.id, same: _sameTrackId);
       result = order.paths;
       _shuffleOrderForPaths[result] = order;
     });
@@ -4597,7 +4818,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       final existing = _shuffleOrders[number];
       final order = existing ?? PlaylistShuffleOrder();
       if (reset || existing == null) {
-        order.reset(clean, current: mediaItem.value?.id, same: _sameTrackId);
+        order.reset(clean, current: (_queueAnchor ?? mediaItem.value)?.id, same: _sameTrackId);
         // The reset already selected the current occurrence at the front;
         // its old unshuffled index must not move that cursor again.
         _shuffleSelectionGeneration = _loadGeneration;
@@ -4629,23 +4850,34 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   /// opening the visual queue never generates a new shuffle order.
   Future<PlaybackQueueSnapshot> playbackQueueSnapshot() async {
     final current = mediaItem.value;
+    final anchor = _queueAnchor ?? current;
+    final pending = List<PlaybackQueueEntry>.of(_playNext);
+    final displayCurrent = current == null
+        ? null
+        : PlaybackQueueEntry(
+            id: current.id,
+            title: current.title,
+            artist: current.artist ?? 'Unknown Artist',
+            artworkUri: current.artUri,
+          );
+
     final loopBehavior = switch (currentLoopMode) {
       LoopMode.off => QueueLoopBehavior.off,
       LoopMode.one => QueueLoopBehavior.one,
       LoopMode.all => QueueLoopBehavior.all,
     };
     if (current == null) {
-      return PlaybackQueueSnapshot(current: null, upcoming: const [], loopBehavior: loopBehavior, shuffled: isShuffle);
+      return PlaybackQueueSnapshot(current: null, upcoming: pending, loopBehavior: loopBehavior, shuffled: isShuffle);
     }
 
-    final playlistNumber = _standalonePlaylistNumber;
+    final playlistNumber = _playbackPlaylistNumber;
     if (isStandaloneMode && playlistNumber == null && _standaloneStreamQueue.isNotEmpty) {
       var currentIndex = _standaloneStreamQueueIndex;
       if (currentIndex == null ||
           currentIndex < 0 ||
           currentIndex >= _standaloneStreamQueue.length ||
-          _standaloneStreamQueue[currentIndex].url != current.id) {
-        currentIndex = _standaloneStreamQueue.indexWhere((item) => item.url == current.id);
+          _standaloneStreamQueue[currentIndex].url != anchor?.id) {
+        currentIndex = _standaloneStreamQueue.indexWhere((item) => item.url == anchor?.id);
       }
       final snapshot = standaloneStreamQueueSnapshot(
         items: _standaloneStreamQueue,
@@ -4655,8 +4887,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         loopBehavior: QueueLoopBehavior.all,
       );
       return PlaybackQueueSnapshot(
-        current: snapshot.current,
-        upcoming: snapshot.upcoming,
+        current: displayCurrent,
+        upcoming: [...pending, ...snapshot.upcoming],
         loopBehavior: snapshot.loopBehavior,
         shuffled: isShuffle,
       );
@@ -4664,7 +4896,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     final paths = isStandaloneMode && playlistNumber == null
         ? const <String>[]
         : await _effectivePlaybackOrder(playlistNumber: playlistNumber);
-    final currentIndex = _currentPlaylistIndex(paths, current.id);
+    final currentIndex = _currentPlaylistIndex(paths, anchor!.id);
     final upcomingPaths = switch (loopBehavior) {
       QueueLoopBehavior.one => const <String>[],
       QueueLoopBehavior.off => currentIndex < 0 ? paths : paths.sublist(currentIndex + 1),
@@ -4678,13 +4910,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
       }),
     );
     return PlaybackQueueSnapshot(
-      current: PlaybackQueueEntry(
-        id: current.id,
-        title: current.title,
-        artist: current.artist ?? 'Unknown Artist',
-        artworkUri: current.artUri,
-      ),
-      upcoming: upcoming,
+      current: displayCurrent,
+      upcoming: [...pending, ...upcoming],
       loopBehavior: loopBehavior,
       shuffled: isShuffle,
     );
@@ -4695,7 +4922,8 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
   /// local playlist before the queue can open.
   Future<Uri?> queueArtworkUri(String trackId) => _albumArtUri(trackId);
 
-  Future<void> playPlaybackQueueEntry(PlaybackQueueEntry entry) async {
+  Future<void> playPlaybackQueueEntry(PlaybackQueueEntry entry) => _queueNavigation(() async {
+    if (_syncControlLocked || await _playQueuedOverride(selected: entry)) return;
     if (isStandaloneMode && _standalonePlaylistNumber == null && _standaloneStreamQueue.isNotEmpty) {
       final index = _standaloneStreamQueue.indexWhere((item) => item.url == entry.id);
       if (index >= 0) {
@@ -4703,13 +4931,24 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
         return;
       }
     }
-    await loadTrack(entry.id, entry.title, entry.artist, transitionDirection: TrackTransitionDirection.next);
-  }
+    await loadTrack(
+      entry.id,
+      entry.title,
+      entry.artist,
+      standalone: isStandaloneMode,
+      standalonePlaylistNumber: _playbackPlaylistNumber,
+      transitionDirection: TrackTransitionDirection.next,
+    );
+  });
 
   bool getShuffleMode() => isShuffle;
   LoopMode getLoopMode() => currentLoopMode;
 
   Future<void> dispose() async {
+    _disposingAudio = true;
+    for (final player in _androidEqualizerSessions.keys.toList()) {
+      await _releaseAndroidEqualizer(player);
+    }
     _cancelSupersededAndroidStreams(null);
     if (_watchingDriveAccount) DriveMusicService.instance.drive.removeListener(_driveAccountChanged);
     await _standaloneVideo?.close();
@@ -4765,6 +5004,7 @@ class PlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler, Wid
     playbackSettingsScopeNotifier.dispose();
     seekStepNotifier.dispose();
     playbackModeRevision.dispose();
+    activeQueueSurface.dispose();
     standaloneModeNotifier.dispose();
     playbackVisualNotifier.dispose();
     playbackFailureNotifier.dispose();

@@ -119,6 +119,7 @@ class MainActivity : AudioServiceFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         AndroidBassBoostBridge.register(flutterEngine)
+        AndroidEqualizerBridge.register(flutterEngine)
         ResonancePlaybackWidgetBridge.register(flutterEngine, applicationContext)
         ResonanceUpdateBridge.register(this, flutterEngine)
         portableExport.register(flutterEngine)

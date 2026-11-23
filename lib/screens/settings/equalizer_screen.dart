@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/theme.dart';
 import 'package:flutter/material.dart';
@@ -16,6 +18,8 @@ class EqualizerScreen extends StatefulWidget {
 class _EqualizerScreenState extends State<EqualizerScreen> {
   late EqualizerSettings _settings;
   bool _applying = false;
+  bool _dragging = false;
+  Timer? _preview;
 
   @override
   void initState() {
@@ -28,33 +32,49 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
   void didUpdateWidget(covariant EqualizerScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.handler == widget.handler) return;
+    _preview?.cancel();
+    _dragging = false;
     oldWidget.handler.equalizerNotifier.removeListener(_syncSettings);
     _settings = widget.handler.equalizerNotifier.value;
     widget.handler.equalizerNotifier.addListener(_syncSettings);
   }
 
   void _syncSettings() {
-    if (mounted && !_applying) {
+    if (mounted && !_applying && !_dragging) {
       setState(() => _settings = widget.handler.equalizerNotifier.value);
     }
   }
 
   @override
   void dispose() {
+    _preview?.cancel();
     widget.handler.equalizerNotifier.removeListener(_syncSettings);
     super.dispose();
   }
 
   Future<void> _apply(EqualizerSettings settings) async {
+    _preview?.cancel();
     setState(() {
       _settings = settings;
       _applying = true;
+      _dragging = false;
     });
     try {
       await widget.handler.setEqualizer(settings);
     } finally {
       if (mounted) setState(() => _applying = false);
     }
+  }
+
+  void _previewBand(int index, double gain) {
+    setState(() {
+      _settings = _settings.withBandGain(index, gain);
+      _dragging = true;
+    });
+    _preview ??= Timer(const Duration(milliseconds: 85), () {
+      _preview = null;
+      unawaited(widget.handler.setEqualizer(_settings, persist: false));
+    });
   }
 
   @override
@@ -92,7 +112,7 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
                       children: [
                         Text(context.tr("Five-band equalizer"), style: TextStyle(fontWeight: FontWeight.w700)),
                         Text(
-                          context.tr("Automatic headroom prevents boosted bands from clipping"),
+                          context.tr("Adjusts bass, mids and treble for music and streams."),
                           style: TextStyle(fontSize: 12),
                         ),
                       ],
@@ -144,7 +164,7 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
                         label: equalizerBandLabels[index],
                         value: _settings.gainsDb[index],
                         enabled: _settings.enabled,
-                        onChanged: (gain) => setState(() => _settings = _settings.withBandGain(index, gain)),
+                        onChanged: (gain) => _previewBand(index, gain),
                         onChangeEnd: (_) => _apply(_settings),
                       ),
                     ),
@@ -152,10 +172,19 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            Text(
-              context.tr("Preamp {0} dB", [_settings.automaticPreampDb.toStringAsFixed(1)]),
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall,
+            ValueListenableBuilder<bool>(
+              valueListenable: widget.handler.equalizerSupportedNotifier,
+              builder: (context, supported, _) => Text(
+                context.tr(
+                  supported || !_settings.isActive
+                      ? "Boosted bands may limit the maximum output level."
+                      : "Equalizer unavailable for this audio output.",
+                ),
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: supported || !_settings.isActive ? colors.onSurfaceVariant : colors.error,
+                ),
+              ),
             ),
           ],
         ),

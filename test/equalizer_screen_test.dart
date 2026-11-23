@@ -39,7 +39,10 @@ class _FakePlayerHandler extends Fake implements PlayerHandler {
   final ValueNotifier<EqualizerSettings> equalizerNotifier;
 
   @override
-  Future<void> setEqualizer(EqualizerSettings settings) async {
+  final ValueNotifier<bool> equalizerSupportedNotifier = ValueNotifier(true);
+
+  @override
+  Future<void> setEqualizer(EqualizerSettings settings, {bool persist = true}) async {
     equalizerNotifier.value = settings;
   }
 }

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:resonance/models/lyrics.dart';
 import 'package:resonance/services/lyrics_service.dart';
 import 'package:resonance/widgets/player/lyrics_picker.dart';
 
@@ -68,6 +69,95 @@ void main() {
     expect(attempts, 2);
     expect(results.single.id, 42);
     expect(results.single.hasLyrics, isTrue);
+  });
+  test('search labels actual word timings and ignores contradictory LRCLIB flags', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      expect(request.uri.path, '/api/search');
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        jsonEncode([
+          {...record, 'hasWordSync': true},
+          {
+            ...record,
+            'id': 43,
+            'hasWordSync': true,
+            'lyricsfile': '''
+lines:
+  - text: Test line
+    start_ms: 1000
+    end_ms: 2000
+    words:
+      - {text: "Test ", start_ms: 1000}
+      - {text: line, start_ms: 1500}
+''',
+          },
+        ]),
+      );
+      await request.response.close();
+    });
+    final service = LyricsService(lrclibClientFactory: () => _Client(server.port));
+    final candidates = await service.searchLrclibCandidates('Artist Song');
+    expect(candidates[0].timingQuality, LyricTimingQuality.line);
+    expect(candidates[0].hasWordSync, isFalse);
+    expect(candidates[1].timingQuality, LyricTimingQuality.word);
+    expect(candidates[1].document!.lines.single.words.map((word) => word.end.inMilliseconds), [1500, 2000]);
+  });
+
+  testWidgets('source, duration, and timing filters work together without another request', (tester) async {
+    tester.view.physicalSize = const Size(360, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var requests = 0;
+    LrclibCandidate result(int id, String title, int seconds, LyricTimingQuality timing, String source) =>
+        LrclibCandidate(
+          id: id,
+          trackName: title,
+          artistName: 'Artist',
+          albumName: '',
+          duration: Duration(seconds: seconds),
+          instrumental: false,
+          hasSyncedLyrics: true,
+          hasPlainLyrics: false,
+          document: LyricsDocument(lines: const [], timingQuality: timing, source: source),
+        );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: LyricsPicker(
+            initialQuery: 'Test',
+            targetDuration: const Duration(seconds: 180),
+            search: (_) async {
+              requests++;
+              return [
+                result(1, 'Close word result', 182, LyricTimingQuality.word, 'LRCLIB'),
+                result(2, 'Long word result', 205, LyricTimingQuality.word, 'LRCLIB'),
+                result(3, 'Close line result', 180, LyricTimingQuality.line, 'LRCLIB'),
+                result(4, 'Another source', 180, LyricTimingQuality.word, 'QQ Music'),
+              ];
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    Future<void> choose(String label, String option) async {
+      await tester.tap(find.byTooltip(label));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(MenuItemButton, option));
+      await tester.pumpAndSettle();
+    }
+
+    await choose('Filter by lyrics source', 'LRCLIB');
+    await choose('Filter by duration difference', 'Within 3s');
+    await choose('Filter by timing', 'Word-synced');
+    expect(find.text('Close word result'), findsOneWidget);
+    expect(find.text('Long word result'), findsNothing);
+    expect(find.text('Close line result'), findsNothing);
+    expect(find.text('Another source'), findsNothing);
+    expect(requests, 1);
   });
   test('a stalled response does not hold later searches in the global request queue', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -154,11 +244,11 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('LRCLIB is busy. Try again in a moment.'), findsOneWidget);
-    expect(find.text('No LRCLIB results for this search.'), findsNothing);
+    expect(find.text('No lyrics found for this search.'), findsNothing);
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(calls, 2);
-    expect(find.text('No LRCLIB results for this search.'), findsOneWidget);
+    expect(find.text('No lyrics found for this search.'), findsOneWidget);
   });
   testWidgets('picker shows server cooldown and disables Retry until permitted', (tester) async {
     var calls = 0;

@@ -1083,9 +1083,17 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
   Future<void> _chooseLyrics() async {
     final item = widget.item;
     if (item == null) return;
+    final duration = widget.handler.currentSourceDuration ?? item.duration;
     final picker = LyricsPicker(
       initialQuery: LyricsService.searchQueryForTrack(item.title, item.artist ?? ''),
-      targetDuration: widget.handler.currentSourceDuration ?? item.duration,
+      targetDuration: duration,
+      search: (query) => const LyricsService().searchCandidates(
+        query,
+        title: item.title,
+        artist: item.artist ?? '',
+        album: item.album ?? '',
+        duration: duration,
+      ),
     );
     final candidate = Platform.isWindows
         ? await showResonanceDialog<LrclibCandidate>(
@@ -1106,8 +1114,9 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
             showDragHandle: true,
             builder: (context) => SizedBox(height: MediaQuery.sizeOf(context).height * 0.82, child: picker),
           );
-    if (candidate == null || !mounted) return;
+    if (candidate == null || !mounted || widget.item?.id != item.id) return;
 
+    final generation = ++_generation;
     final previous = _document;
     setState(() {
       _loading = true;
@@ -1119,10 +1128,10 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
         title: item.title,
         artist: item.artist ?? '',
         album: item.album ?? '',
-        duration: widget.handler.currentSourceDuration ?? item.duration,
+        duration: duration,
         candidate: candidate,
       );
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       if (document == null) throw StateError('The selected lyrics could not be loaded.');
       setState(() {
         _document = document;
@@ -1132,7 +1141,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
         _loading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       setState(() {
         _document = previous;
         _loading = false;
@@ -1478,7 +1487,7 @@ class _LyricsPanelState extends State<_LyricsPanel> with SingleTickerProviderSta
               document.timingQuality == LyricTimingQuality.word
                   ? context.tr('Word-synced')
                   : document.timingQuality == LyricTimingQuality.line
-                  ? context.tr("Line-synced · word flow estimated")
+                  ? context.tr("Line-synced")
                   : context.tr("Unsynced lyrics"),
               style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -1563,7 +1572,8 @@ class _KaraokePainter extends CustomPainter {
   final double maxWidth;
   final TextScaler textScaler;
   final TextDirection textDirection;
-  late final String text = line.words.map((word) => word.text).join();
+  late final List<TextRange>? _wordRanges = _matchWordRanges();
+  late final String text = _wordRanges == null ? line.words.map((word) => word.text).join().trimRight() : line.text;
   late final TextPainter _base = _layout(baseStyle);
   late final TextPainter _active = _layout(activeStyle);
 
@@ -1586,14 +1596,28 @@ class _KaraokePainter extends CustomPainter {
 
   double get height => _base.height;
 
+  List<TextRange>? _matchWordRanges() {
+    final ranges = <TextRange>[];
+    var offset = 0;
+    for (final word in line.words) {
+      final label = word.text.trim();
+      final start = line.text.indexOf(label, offset);
+      if (start < 0) return null;
+      offset = start + label.length;
+      ranges.add(TextRange(start: start, end: offset));
+    }
+    return ranges;
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     _base.paint(canvas, Offset.zero);
     final path = Path();
     var offset = 0;
     final currentPosition = position.value;
-    for (final word in line.words) {
-      final end = offset + word.text.length;
+    for (final (index, word) in line.words.indexed) {
+      final range = _wordRanges?[index];
+      final end = range?.end ?? (offset + word.text.length).clamp(0, text.length);
       final span = word.end - word.start;
       final fraction = currentPosition <= word.start
           ? 0.0
@@ -1601,7 +1625,9 @@ class _KaraokePainter extends CustomPainter {
           ? 1.0
           : (currentPosition - word.start).inMicroseconds / span.inMicroseconds;
       if (fraction > 0) {
-        for (final box in _active.getBoxesForSelection(TextSelection(baseOffset: offset, extentOffset: end))) {
+        for (final box in _active.getBoxesForSelection(
+          TextSelection(baseOffset: range?.start ?? offset, extentOffset: end),
+        )) {
           final width = box.toRect().width * fraction;
           path.addRect(
             box.direction == TextDirection.rtl

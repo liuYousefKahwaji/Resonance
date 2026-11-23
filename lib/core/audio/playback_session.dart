@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:resonance/models/playback_queue_snapshot.dart';
 
 /// Only source references and presentation data, never resolved media URLs,
 /// cookies or request headers. The decoder is opened only after pressing Play.
@@ -27,6 +28,7 @@ class PlaybackSession {
     this.duration,
     required this.standalone,
     this.playlistNumber,
+    this.standaloneSurface,
     this.playlistIndex,
     this.queue = const [],
     this.originalQueue = const [],
@@ -39,6 +41,7 @@ class PlaybackSession {
   final Duration position;
   final Duration? duration;
   final bool standalone;
+  final PlaybackQueueSurface? standaloneSurface;
   final int? playlistNumber, playlistIndex, queueIndex;
   final List<SavedPlaybackEntry> queue, originalQueue;
   final List<String> shufflePaths;
@@ -50,6 +53,7 @@ class PlaybackSession {
     duration: duration,
     standalone: standalone,
     playlistNumber: playlistNumber,
+    standaloneSurface: standaloneSurface,
     playlistIndex: playlistIndex,
     queue: queue,
     originalQueue: originalQueue,
@@ -65,6 +69,7 @@ class PlaybackSession {
     'duration': duration?.inMilliseconds,
     'standalone': standalone,
     'playlist': playlistNumber,
+    if (standaloneSurface != null) 'standaloneSurface': standaloneSurface!.name,
     'playlistIndex': playlistIndex,
     'queue': queue.take(5000).map((e) => e.toJson()).toList(),
     'originalQueue': originalQueue.take(5000).map((e) => e.toJson()).toList(),
@@ -97,6 +102,9 @@ class PlaybackSession {
         duration: duration == null ? null : Duration(milliseconds: duration),
         standalone: value['standalone'] == true,
         playlistNumber: number('playlist'),
+        standaloneSurface: PlaybackQueueSurface.values
+            .where((surface) => surface.name == value['standaloneSurface'])
+            .firstOrNull,
         playlistIndex: number('playlistIndex'),
         queueIndex: number('queueIndex'),
         queue: entries('queue'),

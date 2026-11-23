@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/models/listening_history_entry.dart';
 import 'package:resonance/models/track_source_record.dart';
@@ -130,6 +131,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
   Future<void> _playYoutube(YoutubeTrack selected) async {
     final tracks = _visibleYoutube;
     final playback = context.read<PlayerHandler>().playStandaloneStream(
+      queueSurface: PlaybackQueueSurface.other,
       url: selected.url,
       title: selected.title,
       artist: selected.artist,

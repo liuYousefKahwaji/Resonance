@@ -1,3 +1,4 @@
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/widgets/library/cover_crop_dialog.dart';
 import 'package:resonance/app/route_transitions.dart';
 import 'package:resonance/services/track_artwork_service.dart';
@@ -6,6 +7,7 @@ import 'package:resonance/widgets/common/resonance_dialog.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/providers/theme_provider.dart';
 import 'package:resonance/widgets/common/track_link_menu.dart';
+import 'package:resonance/widgets/common/play_next_button.dart';
 import 'package:resonance/widgets/player/playback_range_dialog.dart';
 import 'package:resonance/widgets/player/playback_range_indicator.dart';
 // lib/widgets/library/track_tile.dart
@@ -942,6 +944,10 @@ class _TrackTileContent extends StatelessWidget {
                       ),
 
                       if (!selectionMode) ...[
+                        PlayNextButton(
+                          entry: PlaybackQueueEntry(id: trackPath, title: resolvedTitle, artist: resolvedArtist),
+                          surface: PlaybackQueueSurface.library,
+                        ),
                         MenuAnchor(
                           alignmentOffset: const Offset(-196, 4),
                           style: MenuStyle(

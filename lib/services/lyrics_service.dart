@@ -18,10 +18,11 @@ class LyricsLookupException implements Exception {
 }
 
 class LyricsService {
-  static const _cacheVersion = 3;
+  static const _cacheVersion = 5;
+  static const _fallbackCacheDuration = Duration(hours: 12);
   static const _requestTimeout = Duration(seconds: 5);
   static const _lrclibRequestGap = Duration(milliseconds: 300);
-  static const _lrclibUserAgent = 'Resonance/4.0.1 (https://github.com/liuYousefKahwaji/Resonance)';
+  static const _lrclibUserAgent = 'Resonance/4.1.0 (https://github.com/liuYousefKahwaji/Resonance)';
   static final Map<String, LyricsDocument> _memory = {};
   static final Map<String, Future<LyricsDocument?>> _inFlight = {};
   static Future<void> _lrclibQueue = Future.value();
@@ -75,7 +76,9 @@ class LyricsService {
     _inFlight[key] = future;
     try {
       final result = await future;
-      if (result != null) _memory[key] = result;
+      if (result != null && (result.timingQuality == LyricTimingQuality.word || result.instrumental)) {
+        _memory[key] = result;
+      }
       return result;
     } finally {
       if (identical(_inFlight[key], future)) _inFlight.remove(key);
@@ -100,36 +103,56 @@ class LyricsService {
     required String album,
     required Duration? duration,
   }) async {
-    final cached = await _readCache(key);
+    final cached = await _readCache(key, refreshFallback: true);
     if (cached != null) return cached;
 
+    final previousKey = _key(trackId, title, artist, album, duration, version: 4);
+    final chosen = await _readCache('chosen_$key') ?? await _readCache('chosen_$previousKey');
+    if (chosen != null) return chosen;
     final sidecar = await _readSidecar(trackId);
     if (sidecar != null && !sidecar.isEmpty) return _store(key, sidecar);
 
     final metadata = _lookupMetadata(title, artist);
-    final selectedId = await _readManualSelection(key);
+    final selectedId =
+        await _readManualSelection(key) ??
+        await _readManualSelection(previousKey) ??
+        await _readManualSelection(_key(trackId, title, artist, album, duration, version: 3));
     if (selectedId != null) {
       final selected = await _fetchLrclibById(selectedId);
       if (selected != null) return _store(key, selected);
     }
-    // Start network sources together, but preserve the quality order when
-    // selecting the result. LRCLIB can finish while a rich provider is being
-    // checked instead of adding its latency afterward.
-    final betterLyrics = _fetchBetterLyrics(title: metadata.title, artist: metadata.artist, duration: duration);
-    final amll = _fetchAmll(title: metadata.title, artist: metadata.artist);
-    final lrclib = _fetchLrclib(
-      title: metadata.title,
-      artist: metadata.artist,
-      album: album.trim(),
-      duration: duration,
+    final sources = [
+      ..._wordSources(metadata.title, metadata.artist, album, duration),
+      _fetchLrclib(title: metadata.title, artist: metadata.artist, album: album.trim(), duration: duration),
+    ];
+    // A slower provider must not hold up a real word-timed result.
+    final wordResult = Completer<LyricsDocument>();
+    final allResults = Future.wait(
+      sources.map((source) async {
+        final document = await source;
+        if (document != null &&
+            !document.isEmpty &&
+            document.timingQuality == LyricTimingQuality.word &&
+            !wordResult.isCompleted) {
+          wordResult.complete(document);
+        }
+        return document;
+      }),
     );
-
-    for (final source in [betterLyrics, amll, lrclib]) {
-      final document = await source;
-      if (document != null && (document.instrumental || !document.isEmpty)) return _store(key, document);
-    }
-    return null;
+    final document = await Future.any<LyricsDocument?>([
+      wordResult.future,
+      allResults.then(
+        (results) => results.nonNulls.where((result) => !result.isEmpty || result.instrumental).firstOrNull,
+      ),
+    ]);
+    return document == null ? null : _store(key, document);
   }
+
+  List<Future<LyricsDocument?>> _wordSources(String title, String artist, String album, Duration? duration) => [
+    _fetchBetterLyrics(title: title, artist: artist, album: album, duration: duration),
+    _fetchAmll(title: title, artist: artist),
+    _fetchBetterLyrics(title: title, artist: artist, album: album, duration: duration, qq: true),
+  ];
 
   Future<LyricsDocument?> _readSidecar(String trackId) async {
     if (trackId.startsWith('http://') || trackId.startsWith('https://')) return null;
@@ -151,15 +174,19 @@ class LyricsService {
   Future<LyricsDocument?> _fetchBetterLyrics({
     required String title,
     required String artist,
+    required String album,
     Duration? duration,
+    bool qq = false,
   }) async {
     if (title.isEmpty || artist.isEmpty) return null;
-    final query = <String, String>{'s': title, 'a': artist};
+    final query = <String, String>{'s': title, 'a': artist, if (album.trim().isNotEmpty) 'al': album.trim()};
     if (duration != null && duration.inSeconds > 0) query['d'] = '${duration.inSeconds}';
     final client = HttpClient()..connectionTimeout = _requestTimeout;
     try {
       final response =
-          await (await client.getUrl(Uri.https('lyrics-api.boidu.dev', '/getLyrics', query)).timeout(_requestTimeout))
+          await (await client
+                  .getUrl(Uri.https('api.betterlyrics.org', qq ? '/qq/getLyrics' : '/getLyrics', query))
+                  .timeout(_requestTimeout))
               .close()
               .timeout(_requestTimeout);
       if (response.statusCode != HttpStatus.ok) {
@@ -169,9 +196,11 @@ class LyricsService {
       final payload =
           jsonDecode(await utf8.decoder.bind(response).join().timeout(_requestTimeout)) as Map<String, dynamic>;
       final score = (payload['score'] as num?)?.toDouble();
-      final ttml = payload['ttml']?.toString() ?? '';
+      final ttml = payload[qq ? 'lyrics' : 'ttml']?.toString() ?? '';
       if (ttml.isEmpty || (score != null && score < 65)) return null;
-      final document = LyricsParser.parseTtml(ttml, source: 'Better Lyrics');
+      final document = qq
+          ? LyricsParser.parseQrc(ttml, source: 'QQ Music', title: title, artist: artist)
+          : LyricsParser.parseTtml(ttml, source: 'Better Lyrics');
       return document.timingQuality == LyricTimingQuality.word ? document : null;
     } catch (error) {
       debugPrint('Better Lyrics lookup failed: $error');
@@ -286,13 +315,10 @@ class LyricsService {
     if (cleaned.isEmpty) return const [];
     final client = _lrclibClient();
     try {
-      final found = await _getLrclibJson(client, Uri.https('lrclib.net', '/api/search', {'q': cleaned}));
+      final params = {'q': cleaned};
+      final found = await _getLrclibJson(client, Uri.https('lrclib.net', '/api/search', params));
       if (found is! List) return const [];
-      return found
-          .whereType<Map>()
-          .map((item) => LrclibCandidate.fromJson(Map<String, dynamic>.from(item)))
-          .where((candidate) => candidate.id > 0 && candidate.hasLyrics)
-          .toList(growable: false);
+      return compute(_parseSearchResults, found);
     } catch (error) {
       debugPrint('LRCLIB candidate search failed: $error');
       if (error is LyricsLookupException) rethrow;
@@ -300,6 +326,69 @@ class LyricsService {
     } finally {
       client.close(force: true);
     }
+  }
+
+  static List<LrclibCandidate> _parseSearchResults(List<dynamic> found) {
+    final candidates = <LrclibCandidate>[];
+    for (final item in found.whereType<Map>()) {
+      final raw = Map<String, dynamic>.from(item);
+      final document = _lrclibDocument(raw);
+      if (document == null) continue;
+      final candidate = LrclibCandidate.fromJson(raw, document: document);
+      if (candidate.id > 0) candidates.add(candidate);
+    }
+    return candidates;
+  }
+
+  Future<List<LrclibCandidate>> searchCandidates(
+    String query, {
+    required String title,
+    required String artist,
+    required String album,
+    required Duration? duration,
+  }) async {
+    final metadata = _lookupMetadata(title, artist);
+    final parts = query.split(' - ');
+    final lookup = parts.length == 2
+        ? (title: parts[1].trim(), artist: parts[0].trim())
+        : query == searchQueryForTrack(title, artist)
+        ? _manualWordLookup(metadata)
+        : null;
+    final alternative = lookup == null
+        ? Future.value(<LyricsDocument?>[])
+        : Future.wait(_wordSources(lookup.title, lookup.artist, album, duration));
+    List<LrclibCandidate> candidates = [];
+    LyricsLookupException? error;
+    try {
+      candidates = await searchLrclibCandidates(query);
+    } on LyricsLookupException catch (failure) {
+      error = failure;
+    }
+    final rich = (await alternative).nonNulls.where((document) => document.timingQuality == LyricTimingQuality.word);
+    final results = [
+      ...candidates,
+      for (final (index, document) in rich.indexed)
+        LrclibCandidate(
+          id: -index - 1,
+          trackName: lookup!.title,
+          artistName: lookup.artist,
+          albumName: '',
+          duration: Duration.zero,
+          instrumental: false,
+          hasSyncedLyrics: true,
+          hasPlainLyrics: false,
+          hasWordSync: true,
+          document: document,
+        ),
+    ];
+    if (results.isEmpty && error != null) throw error;
+    return results;
+  }
+
+  ({String title, String artist}) _manualWordLookup(({String title, String artist}) metadata) {
+    final separator = metadata.title.indexOf(' - ');
+    if (separator < 0) return metadata;
+    return (title: metadata.title.substring(separator + 3), artist: metadata.title.substring(0, separator));
   }
 
   Future<LyricsDocument?> selectLrclibCandidate({
@@ -310,10 +399,17 @@ class LyricsService {
     required Duration? duration,
     required LrclibCandidate candidate,
   }) async {
-    final document = await _fetchLrclibById(candidate.id);
+    final document = candidate.document ?? await _fetchLrclibById(candidate.id);
     if (document == null) return null;
     final key = _key(trackId, title, artist, album, duration);
-    await _writeManualSelection(key, candidate.id);
+    if (candidate.id <= 0) {
+      await _store('chosen_$key', document);
+    } else {
+      await _writeManualSelection(key, candidate.id);
+      await _deleteCache('chosen_$key');
+      final previousKey = _key(trackId, title, artist, album, duration, version: 4);
+      await _deleteCache('chosen_$previousKey');
+    }
     _memory[key] = document;
     return _store(key, document);
   }
@@ -411,12 +507,24 @@ class LyricsService {
     return null;
   }
 
-  LyricsDocument? _lrclibDocument(Map<String, dynamic> json, {String source = 'LRCLIB'}) {
+  static LyricsDocument? _lrclibDocument(Map<String, dynamic> json, {String source = 'LRCLIB'}) {
     if (json['instrumental'] == true) {
       return LyricsDocument(lines: [], timingQuality: LyricTimingQuality.plain, source: source, instrumental: true);
     }
+    final lyricsfile = json['lyricsfile'];
+    LyricsDocument? structured;
+    if (lyricsfile is String && lyricsfile.isNotEmpty) {
+      try {
+        final parsed = LyricsParser.parseLyricsfile(lyricsfile, source: source);
+        if (parsed.timingQuality == LyricTimingQuality.word && !parsed.isEmpty) return parsed;
+        if (!parsed.isEmpty) structured = parsed;
+      } catch (_) {
+        /* Older or invalid Lyricsfile entries still have legacy text. */
+      }
+    }
     final synced = json['syncedLyrics']?.toString().trim() ?? '';
     if (synced.isNotEmpty) return LyricsParser.parseLrc(synced, source: source);
+    if (structured != null) return structured;
     final plain = json['plainLyrics']?.toString().trim() ?? '';
     return plain.isEmpty ? null : LyricsParser.parsePlain(plain, source: source);
   }
@@ -458,11 +566,18 @@ class LyricsService {
     return best;
   }
 
-  Future<LyricsDocument?> _readCache(String key) async {
+  Future<LyricsDocument?> _readCache(String key, {bool refreshFallback = false}) async {
     try {
       final file = await _cacheFile(key);
       if (!await file.exists()) return null;
       final document = LyricsDocument.fromJson(jsonDecode(await file.readAsString()) as Map<String, dynamic>);
+      if (refreshFallback &&
+          document.source.startsWith('LRCLIB') &&
+          document.timingQuality != LyricTimingQuality.word &&
+          !document.instrumental &&
+          DateTime.now().difference(await file.lastModified()) >= _fallbackCacheDuration) {
+        return null;
+      }
       return document.isEmpty && !document.instrumental ? null : document;
     } catch (_) {
       return null;
@@ -515,11 +630,16 @@ class LyricsService {
     return File(p.join(support.path, 'lyrics', 'selection_$key.txt'));
   }
 
-  static String _key(String trackId, String title, String artist, String album, Duration? duration) => sha256
+  static String _key(
+    String trackId,
+    String title,
+    String artist,
+    String album,
+    Duration? duration, {
+    int version = _cacheVersion,
+  }) => sha256
       .convert(
-        utf8.encode(
-          '$_cacheVersion\u0000$trackId\u0000$title\u0000$artist\u0000$album\u0000${duration?.inSeconds ?? 0}',
-        ),
+        utf8.encode('$version\u0000$trackId\u0000$title\u0000$artist\u0000$album\u0000${duration?.inSeconds ?? 0}'),
       )
       .toString();
 

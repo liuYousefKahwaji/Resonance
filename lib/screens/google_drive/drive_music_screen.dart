@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/app/theme.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/screens/player/standalone_player_screen.dart';
 import 'package:resonance/services/google_drive/drive_music_models.dart';
@@ -194,6 +195,7 @@ class _DriveMusicScreenState extends State<DriveMusicScreen> {
       }
       final owner = service.drive.account!.id;
       final playback = context.read<PlayerHandler>().playStandaloneStream(
+        queueSurface: PlaybackQueueSurface.other,
         url: selected.streamUrl(owner),
         title: selected.title,
         artist: _path.isEmpty ? 'Google Drive' : _path.last.name,

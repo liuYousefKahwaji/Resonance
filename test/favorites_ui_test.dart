@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:resonance/core/audio/audio_service.dart';
+import 'package:resonance/models/playback_queue_snapshot.dart';
 import 'package:resonance/core/audio/playback_range.dart';
 import 'package:resonance/core/storage/file_service.dart';
 import 'package:resonance/services/favorites_repository.dart';
@@ -144,6 +145,9 @@ Finder _cue(IconData icon) =>
     find.byWidgetPredicate((widget) => widget is Icon && widget.icon == icon && widget.size == 18);
 
 class _FakePlayerHandler extends Fake implements PlayerHandler {
+  @override
+  final activeQueueSurface = ValueNotifier<PlaybackQueueSurface?>(null);
+
   @override
   final playbackRangeRevision = ValueNotifier<int>(0);
   @override

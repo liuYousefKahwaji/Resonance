@@ -13,6 +13,7 @@ import 'package:resonance/core/youtube/youtube_access_models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:resonance/core/audio/shuffle_order.dart';
 import 'package:resonance/core/storage/file_service.dart';
+import 'package:resonance/models/playback_queue_snapshot.dart';
 
 const unavailableUrl = 'https://www.youtube.com/watch?v=KCeYsyYo2gc';
 const previousUrl = 'https://www.youtube.com/watch?v=abcdefghijk';
@@ -125,6 +126,126 @@ void main() {
     await handler.toggleShuffle();
     expect(handler.playbackOrderMode, PlaybackOrderMode.off);
     expect(prefs.getBool('last_shuffle_random'), isFalse);
+  }, skip: !Platform.isWindows);
+
+  for (final mode in PlaybackOrderMode.values) {
+    test('explicit track requests take priority and return to the playlist in ${mode.name} mode', () async {
+      SharedPreferences.setMockInitialValues({});
+      final files = FileService();
+      final base = List.generate(
+        8,
+        (index) => 'https://www.youtube.com/watch?v=track${index.toString().padLeft(6, '0')}',
+      );
+      await files.writeTextToPlaylist(1, '#\n${base.join('\n')}\n');
+      await files.setActivePlaylistNumber(1);
+      final player = _RetainingPlayer();
+      final handler = PlayerHandler(
+        windowsPlayer: player,
+        streamResolver: (url) async => ResolvedYoutubeStream(
+          uri: Uri.parse('https://audio.test/${Uri.parse(url).queryParameters['v']}'),
+          accessRevision: 0,
+        ),
+      );
+      addTearDown(handler.dispose);
+      await handler.initialization;
+      await handler.loadTrack(base.first, 'Original', 'Artist');
+      for (var step = 0; step < mode.index; step++) {
+        await handler.toggleShuffle();
+      }
+      expect(handler.playbackOrderMode, mode);
+      final original = (await handler.playbackQueueSnapshot()).upcoming.map((entry) => entry.id).toList();
+      await files.writeTextToPlaylist(2, '#\n$previousUrl\n');
+      await files.setActivePlaylistNumber(2);
+      final next = PlaybackQueueEntry(id: unavailableUrl, title: 'Play Next', artist: 'Artist');
+      final added = PlaybackQueueEntry(id: previousUrl, title: 'Added', artist: 'Artist');
+      expect(handler.playNext(added, surface: PlaybackQueueSurface.library), isTrue);
+      expect(handler.playNext(next, surface: PlaybackQueueSurface.library), isTrue);
+      expect((await handler.playbackQueueSnapshot()).upcoming.map((entry) => entry.id), [
+        next.id,
+        added.id,
+        ...original,
+      ]);
+
+      for (final entry in [next, added]) {
+        final opens = player.opened.length;
+        await handler.next();
+        final end = DateTime.now().add(const Duration(seconds: 3));
+        while (player.opened.length == opens || handler.playbackVisualNotifier.value.loading) {
+          if (DateTime.now().isAfter(end)) fail('Queued track never loaded');
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        expect(handler.mediaItem.value!.id, entry.id);
+      }
+      await handler.next();
+      final resumed = handler.mediaItem.value!.id;
+      if (mode == PlaybackOrderMode.random) {
+        expect(resumed, isIn(base.skip(1)));
+      } else {
+        expect(resumed, original.first);
+      }
+      expect(
+        (await handler.playbackQueueSnapshot()).upcoming.any((entry) => entry.id == added.id || entry.id == next.id),
+        isFalse,
+      );
+    }, skip: !Platform.isWindows);
+  }
+
+  test('Play Next stays with its playlist or standalone session', () async {
+    SharedPreferences.setMockInitialValues({});
+    final files = FileService();
+    await files.writeTextToPlaylist(1, '#\n$previousUrl\n');
+    await files.setActivePlaylistNumber(1);
+    final player = _RetainingPlayer();
+    final handler = PlayerHandler(
+      windowsPlayer: player,
+      streamResolver: (url) async => ResolvedYoutubeStream(
+        uri: Uri.parse('https://audio.test/${Uri.parse(url).queryParameters['v']}'),
+        accessRevision: 0,
+      ),
+    );
+    addTearDown(handler.dispose);
+    await handler.initialization;
+    const library = PlaybackQueueSurface.library;
+    const discover = PlaybackQueueSurface.discover;
+    const search = PlaybackQueueSurface.search;
+    const localPick = PlaybackQueueEntry(id: unavailableUrl, title: 'Library request', artist: 'Artist');
+    const onlinePick = PlaybackQueueEntry(
+      id: 'https://www.youtube.com/watch?v=online12345',
+      title: 'Discover request',
+      artist: 'Artist',
+    );
+    Future<List<String>> queued() async =>
+        (await handler.playbackQueueSnapshot()).upcoming.map((entry) => entry.id).toList();
+
+    await handler.loadTrack(previousUrl, 'Library track', 'Artist');
+    expect(handler.activeQueueSurface.value, library);
+    expect(handler.playNext(localPick, surface: library), isTrue);
+    expect(handler.playNext(onlinePick, surface: discover), isFalse);
+    await handler.playStandaloneStream(
+      url: previousUrl,
+      title: 'Discover track',
+      artist: 'Artist',
+      relatedQueue: false,
+    );
+    expect(handler.activeQueueSurface.value, discover);
+    expect(await queued(), isNot(contains(localPick.id)));
+    expect(handler.playNext(onlinePick, surface: discover), isTrue);
+    expect(await queued(), contains(onlinePick.id));
+
+    await handler.loadTrack(previousUrl, 'Library track', 'Artist');
+    expect(handler.activeQueueSurface.value, library);
+    expect(await queued(), contains(localPick.id));
+    expect(await queued(), isNot(contains(onlinePick.id)));
+    await handler.playStandaloneStream(
+      url: previousUrl,
+      title: 'Search track',
+      artist: 'Artist',
+      relatedQueue: false,
+      queueSurface: search,
+    );
+    expect(handler.activeQueueSurface.value, search);
+    expect(await queued(), isNot(contains(onlinePick.id)));
+    expect(handler.playNext(onlinePick, surface: search), isTrue);
   }, skip: !Platform.isWindows);
 
   test('standalone stream shuffle visits its whole queue and Off restores collection order', () async {

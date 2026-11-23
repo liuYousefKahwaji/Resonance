@@ -1,6 +1,9 @@
+import 'package:resonance/models/youtube_track.dart';
 import 'package:flutter/foundation.dart';
 
 enum QueueLoopBehavior { off, one, all }
+
+enum PlaybackQueueSurface { library, discover, search, other }
 
 @immutable
 class PlaybackQueueEntry {
@@ -10,6 +13,13 @@ class PlaybackQueueEntry {
   final Uri? artworkUri;
 
   const PlaybackQueueEntry({required this.id, required this.title, required this.artist, this.artworkUri});
+
+  factory PlaybackQueueEntry.youtube(YoutubeTrack track) => PlaybackQueueEntry(
+    id: track.url,
+    title: track.title,
+    artist: track.artist,
+    artworkUri: track.thumbnailUrl == null ? null : Uri.tryParse(track.thumbnailUrl!),
+  );
 }
 
 @immutable
