@@ -53,6 +53,28 @@ void main() {
     expect(jade.colorScheme.primary, isNot(cobalt.colorScheme.primary));
   });
 
+  test('Vice City keeps its full palette in both brightness modes', () {
+    const style = ResonanceThemeStyle.viceCity;
+    expect(ResonanceThemeStyleLabel.fromStorage(style.storageName), style);
+    for (final brightness in Brightness.values) {
+      final theme = buildResonanceTheme(style, brightness, fullPalette: false, windowsNativeControls: true);
+      final full = buildResonanceTheme(style, brightness, windowsNativeControls: true);
+      final scheme = theme.colorScheme;
+      expect(theme.scaffoldBackgroundColor, full.scaffoldBackgroundColor);
+      expect(scheme, full.colorScheme);
+      expect(theme.extension<ViceCityTheme>(), isNotNull);
+      expect(theme.textTheme.bodyMedium?.fontFamily, 'Segoe UI');
+      for (final (foreground, background) in [
+        (scheme.onPrimary, scheme.primary),
+        (scheme.onSecondary, scheme.secondary),
+        (scheme.onTertiary, scheme.tertiary),
+        (scheme.onSurfaceVariant, scheme.surfaceContainerHighest),
+      ]) {
+        expect(_contrastRatio(foreground, background), greaterThanOrEqualTo(4.5));
+      }
+    }
+  });
+
   test('Obsidian full styling is purple while accent-only mode uses classic surfaces', () {
     for (final brightness in Brightness.values) {
       final full = buildResonanceTheme(ResonanceThemeStyle.obsidian, brightness);
@@ -109,11 +131,7 @@ void main() {
   });
 
   test('Custom theme responds to selected lightness', () {
-    final dim = buildResonanceTheme(
-      ResonanceThemeStyle.custom,
-      Brightness.dark,
-      customColor: const Color(0xFF005044),
-    );
+    final dim = buildResonanceTheme(ResonanceThemeStyle.custom, Brightness.dark, customColor: const Color(0xFF005044));
     final bright = buildResonanceTheme(
       ResonanceThemeStyle.custom,
       Brightness.dark,

@@ -46,7 +46,27 @@ BorderRadius resonanceBorderRadius(BuildContext context, double radius, {double?
 bool useWindowsNativeControls(BuildContext context) =>
     Theme.of(context).extension<ResonancePlatformTheme>()?.windowsNativeControls ?? false;
 
-enum ResonanceThemeStyle { obsidian, jade, cobalt, magma, voidTheme, quartz, aurum, custom }
+@immutable
+class ViceCityTheme extends ThemeExtension<ViceCityTheme> {
+  const ViceCityTheme({required this.shell, required this.playerSurface});
+
+  final LinearGradient shell;
+  final Color playerSurface;
+
+  @override
+  ViceCityTheme copyWith({LinearGradient? shell, Color? playerSurface}) =>
+      ViceCityTheme(shell: shell ?? this.shell, playerSurface: playerSurface ?? this.playerSurface);
+
+  @override
+  ViceCityTheme lerp(covariant ViceCityTheme? other, double t) => other == null
+      ? this
+      : ViceCityTheme(
+          shell: LinearGradient.lerp(shell, other.shell, t)!,
+          playerSurface: Color.lerp(playerSurface, other.playerSurface, t)!,
+        );
+}
+
+enum ResonanceThemeStyle { obsidian, jade, cobalt, magma, voidTheme, quartz, aurum, viceCity, custom }
 
 extension ResonanceThemeStyleLabel on ResonanceThemeStyle {
   String get label => switch (this) {
@@ -57,6 +77,7 @@ extension ResonanceThemeStyleLabel on ResonanceThemeStyle {
     ResonanceThemeStyle.voidTheme => 'Void',
     ResonanceThemeStyle.quartz => 'Quartz',
     ResonanceThemeStyle.aurum => 'Aurum',
+    ResonanceThemeStyle.viceCity => 'Vice City',
     ResonanceThemeStyle.custom => 'Custom',
   };
 
@@ -250,6 +271,22 @@ _Palette _palette(ResonanceThemeStyle style, Color customColor) => switch (style
     lightHighest: Color(0xFFEEDCA3),
     lightBorder: Color(0xFFD8BE73),
   ),
+  ResonanceThemeStyle.viceCity => const _Palette(
+    darkPrimary: Color(0xFFFFBE79),
+    darkSecondary: Color(0xFFFF9CD1),
+    darkBase: Color(0xFF1C1031),
+    darkSurface: Color(0xFF281438),
+    darkElevated: Color(0xFF391B49),
+    darkHighest: Color(0xFF4A2452),
+    darkBorder: Color(0xFF724779),
+    lightPrimary: Color(0xFF8D234F),
+    lightSecondary: Color(0xFF713278),
+    lightBase: Color(0xFFFFF0E9),
+    lightSurface: Color(0xFFFFF9F6),
+    lightElevated: Color(0xFFFFE4E4),
+    lightHighest: Color(0xFFF8CCE1),
+    lightBorder: Color(0xFFB980A1),
+  ),
   ResonanceThemeStyle.custom => _customPalette(customColor),
 };
 
@@ -266,32 +303,36 @@ ThemeData buildResonanceTheme(
   final primary = dark ? palette.darkPrimary : palette.lightPrimary;
   final secondary = dark ? palette.darkSecondary : palette.lightSecondary;
   final voidStyle = style == ResonanceThemeStyle.voidTheme;
-  final bgBase = fullPalette
+  final viceCity = style == ResonanceThemeStyle.viceCity;
+  final useFullPalette = viceCity || fullPalette;
+  final bgBase = useFullPalette
       ? (dark ? palette.darkBase : palette.lightBase)
       : dark
       ? (voidStyle ? const Color(0xFF000000) : const Color(0xFF0D0D14))
       : const Color(0xFFF3F4F6);
-  final bgSurface = fullPalette
+  final bgSurface = useFullPalette
       ? (dark ? palette.darkSurface : palette.lightSurface)
       : dark
       ? (voidStyle ? const Color(0xFF0A0A0A) : const Color(0xFF1A1A24))
       : Colors.white;
-  final bgElevated = fullPalette
+  final bgElevated = useFullPalette
       ? (dark ? palette.darkElevated : palette.lightElevated)
       : dark
       ? (voidStyle ? const Color(0xFF151515) : const Color(0xFF242430))
       : const Color(0xFFF8FAFC);
-  final bgHighest = fullPalette
+  final bgHighest = useFullPalette
       ? (dark ? palette.darkHighest : palette.lightHighest)
       : dark
       ? const Color(0xFF30303A)
       : const Color(0xFFE9ECF2);
-  final textPrimary = dark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A);
-  const textMuted = Color(0xFF64748B);
+  final textPrimary = viceCity
+      ? (dark ? const Color(0xFFFFF0F7) : const Color(0xFF2C142C))
+      : (dark ? const Color(0xFFE2E8F0) : const Color(0xFF0F172A));
+  final textMuted = viceCity ? (dark ? const Color(0xFFD9BBDA) : const Color(0xFF69445F)) : const Color(0xFF64748B);
   final onPrimary = ThemeData.estimateBrightnessForColor(primary) == Brightness.dark
       ? Colors.white
       : const Color(0xFF111318);
-  final border = fullPalette
+  final border = useFullPalette
       ? (dark ? palette.darkBorder : palette.lightBorder)
       : dark
       ? const Color(0xFF30303A)
@@ -307,7 +348,7 @@ ThemeData buildResonanceTheme(
       ? Color.alphaBlend(primary.withValues(alpha: dark ? 0.025 : 0.018), bgSurface)
       : bgSurface;
 
-  final scheme =
+  var scheme =
       ColorScheme.fromSeed(
         seedColor: primary,
         brightness: brightness,
@@ -323,6 +364,45 @@ ThemeData buildResonanceTheme(
         surfaceContainerHighest: bgHighest,
         surfaceContainerLow: appBackground,
       );
+  if (viceCity) {
+    scheme = scheme.copyWith(
+      onPrimary: dark ? const Color(0xFF3B1941) : Colors.white,
+      primaryContainer: dark ? const Color(0xFF5F3048) : const Color(0xFFFFD9C0),
+      onPrimaryContainer: dark ? const Color(0xFFFFDEC7) : const Color(0xFF4C1633),
+      onSecondary: dark ? const Color(0xFF47173D) : Colors.white,
+      secondaryContainer: dark ? const Color(0xFF58244D) : const Color(0xFFF8CAE3),
+      onSecondaryContainer: dark ? const Color(0xFFFFDEEF) : const Color(0xFF491939),
+      tertiary: dark ? const Color(0xFFBFC0FF) : const Color(0xFF45458C),
+      onTertiary: dark ? const Color(0xFF232159) : Colors.white,
+      tertiaryContainer: dark ? const Color(0xFF353068) : const Color(0xFFE4DDFF),
+      onTertiaryContainer: dark ? const Color(0xFFE6E1FF) : const Color(0xFF292357),
+      primaryFixed: const Color(0xFFFFD9C0),
+      primaryFixedDim: const Color(0xFFFFBE79),
+      onPrimaryFixed: const Color(0xFF3B1941),
+      onPrimaryFixedVariant: const Color(0xFF693144),
+      secondaryFixed: const Color(0xFFFFDCF0),
+      secondaryFixedDim: const Color(0xFFFF9CD1),
+      onSecondaryFixed: const Color(0xFF47173D),
+      onSecondaryFixedVariant: const Color(0xFF723568),
+      tertiaryFixed: const Color(0xFFE4DDFF),
+      tertiaryFixedDim: const Color(0xFFBFC0FF),
+      onTertiaryFixed: const Color(0xFF232159),
+      onTertiaryFixedVariant: const Color(0xFF45458C),
+      surfaceDim: dark ? const Color(0xFF1C1031) : const Color(0xFFF0CEDC),
+      surfaceBright: dark ? const Color(0xFF52285B) : const Color(0xFFFFF9F6),
+      surfaceContainerLowest: dark ? const Color(0xFF140C25) : const Color(0xFFFFFEFC),
+      surfaceContainer: dark ? const Color(0xFF311842) : const Color(0xFFFFEAE6),
+      outlineVariant: dark ? const Color(0xFF52325F) : const Color(0xFFE2B6CB),
+      surfaceTint: primary,
+      inverseSurface: dark ? const Color(0xFFFFEAE5) : const Color(0xFF311B3D),
+      onInverseSurface: dark ? const Color(0xFF34192F) : const Color(0xFFFFEAF2),
+      inversePrimary: dark ? palette.lightPrimary : palette.darkPrimary,
+      error: dark ? const Color(0xFFFFA59B) : const Color(0xFF9C293E),
+      onError: dark ? const Color(0xFF4E1020) : Colors.white,
+      errorContainer: dark ? const Color(0xFF63263D) : const Color(0xFFFFDAD9),
+      onErrorContainer: dark ? const Color(0xFFFFDDD8) : const Color(0xFF630D27),
+    );
+  }
 
   return ThemeData(
     brightness: brightness,
@@ -341,6 +421,18 @@ ThemeData buildResonanceTheme(
       ResonancePlatformTheme(windowsNativeControls: windowsNativeControls),
       ResonanceShapeTheme(cornerScale: rounderCorners ? 1.9 : 1),
       const ResonanceMotionTheme(),
+      if (viceCity)
+        ViceCityTheme(
+          shell: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: dark
+                ? const [Color(0xFF241853), Color(0xFF32133E), Color(0xFF412336)]
+                : const [Color(0xFFF0E3FF), Color(0xFFFFEDF5), Color(0xFFFFE3D0)],
+            stops: const [0, .55, 1],
+          ),
+          playerSurface: dark ? const Color(0xFF311A43) : const Color(0xFFFFE6EA),
+        ),
     ],
     appBarTheme: AppBarTheme(
       backgroundColor: windowsNativeControls ? appSurface : appBackground,
@@ -381,7 +473,7 @@ ThemeData buildResonanceTheme(
           : null,
       selectedTileColor: primary.withValues(alpha: dark ? 0.16 : 0.09),
     ),
-    iconTheme: const IconThemeData(color: textMuted),
+    iconTheme: IconThemeData(color: textMuted),
     dialogTheme: DialogThemeData(
       backgroundColor: appSurface,
       surfaceTintColor: Colors.transparent,
@@ -405,8 +497,8 @@ ThemeData buildResonanceTheme(
         borderRadius: BorderRadius.circular(controlRadius),
         borderSide: BorderSide(color: primary, width: 1.5),
       ),
-      labelStyle: const TextStyle(color: textMuted),
-      hintStyle: TextStyle(color: dark ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
+      labelStyle: TextStyle(color: textMuted),
+      hintStyle: TextStyle(color: viceCity ? textMuted : (dark ? const Color(0xFF64748B) : const Color(0xFF94A3B8))),
       contentPadding: windowsNativeControls ? const EdgeInsets.symmetric(horizontal: 11, vertical: 9) : null,
       prefixIconConstraints: windowsNativeControls ? const BoxConstraints(minWidth: 36, minHeight: 32) : null,
       suffixIconConstraints: windowsNativeControls ? const BoxConstraints(minWidth: 36, minHeight: 32) : null,
@@ -470,11 +562,11 @@ ThemeData buildResonanceTheme(
     dividerColor: border,
     dividerTheme: DividerThemeData(color: border, thickness: 1),
     textTheme: TextTheme(
-      titleLarge: TextStyle(color: textPrimary, fontWeight: FontWeight.w700, fontSize: 18),
+      titleLarge: TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w700),
       titleMedium: TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 15),
       bodyMedium: TextStyle(color: textPrimary, fontSize: 14),
-      bodySmall: const TextStyle(color: textMuted, fontSize: 12),
-      labelSmall: const TextStyle(color: textMuted, fontSize: 11, letterSpacing: 0.5),
+      bodySmall: TextStyle(color: textMuted, fontSize: 12),
+      labelSmall: TextStyle(color: textMuted, fontSize: 11, letterSpacing: 0.5),
     ),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: bgElevated,

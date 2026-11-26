@@ -605,19 +605,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     );
                   },
                 ),
-                _Divider(),
                 Consumer<ThemeProvider>(
                   builder: (context, themeProvider, child) {
-                    return _SettingsTile(
-                      icon: Icons.layers_rounded,
-                      title: context.tr("Full Theme Styling"),
-                      subtitle: themeProvider.fullThemePalette
-                          ? context.tr("Accent, backgrounds, surfaces, and borders")
-                          : context.tr("Accent colors only — classic Resonance styling"),
-                      trailing: Switch(
-                        value: themeProvider.fullThemePalette,
-                        onChanged: themeProvider.setFullThemePalette,
-                      ),
+                    if (themeProvider.themeStyle == ResonanceThemeStyle.viceCity) return const SizedBox.shrink();
+                    return Column(
+                      children: [
+                        _Divider(),
+                        _SettingsTile(
+                          icon: Icons.layers_rounded,
+                          title: context.tr("Full Theme Styling"),
+                          subtitle: themeProvider.fullThemePalette
+                              ? context.tr("Accent, backgrounds, surfaces, and borders")
+                              : context.tr("Accent colors only — classic Resonance styling"),
+                          trailing: Switch(
+                            value: themeProvider.fullThemePalette,
+                            onChanged: themeProvider.setFullThemePalette,
+                          ),
+                        ),
+                      ],
                     );
                   },
                 ),

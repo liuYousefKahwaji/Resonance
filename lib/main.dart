@@ -7,6 +7,7 @@ import 'dart:async';
 import 'package:resonance/widgets/library/modern_music_shell.dart';
 import 'package:resonance/widgets/player/compact_player.dart';
 import 'package:resonance/widgets/player/cinematic_intro.dart';
+import 'package:resonance/widgets/player/vice_city_intro.dart';
 import 'package:resonance/widgets/library/playlist_sort_dialog.dart';
 import 'package:resonance/widgets/library/favorite_tracks_button.dart';
 import 'dart:io';
@@ -43,6 +44,8 @@ import 'package:resonance/services/android_shared_content_service.dart';
 import 'package:resonance/services/android_playback_widget_service.dart';
 import 'package:resonance/widgets/library/import_track_button.dart';
 import 'package:resonance/widgets/library/track_list.dart';
+import 'package:resonance/widgets/library/playlist_scroll_controller.dart';
+import 'package:resonance/widgets/common/vice_city_title.dart';
 import 'package:resonance/widgets/player/album_cover.dart';
 import 'package:resonance/widgets/player/player_controls.dart';
 import 'package:resonance/widgets/player/upcoming_queue.dart';
@@ -441,7 +444,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
   StreamSubscription<Duration>? _introPositionSubscription;
   StreamSubscription<bool>? _introCompletionSubscription;
   int _introEpoch = 0;
-  final ScrollController _playlistScrollController = ScrollController();
+  final ScrollController _playlistScrollController = Platform.isWindows
+      ? PlaylistScrollController()
+      : ScrollController();
   int _trackPulse = 0;
   int _artworkRevision = 0;
   StreamSubscription<String>? _artworkSubscription;
@@ -1689,8 +1694,9 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
           themeAnimationCurve: Curves.easeInOutCubic,
           home: Builder(
             builder: (nestedContext) {
+              final viceCity = themeProvider.themeStyle == ResonanceThemeStyle.viceCity;
               if (_showIntro && !themeProvider.cinematicIntro) {
-                return _IntroOverlay(onDismiss: () => unawaited(_dismissIntro()));
+                return _IntroOverlay(viceCity: viceCity, onDismiss: () => unawaited(_dismissIntro()));
               }
               final content = _showOnboarding
                   ? OnboardingScreen(
@@ -1792,7 +1798,11 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
                 fit: StackFit.expand,
                 children: [
                   IgnorePointer(child: content),
-                  CinematicIntro(position: _introPosition, onDismiss: () => unawaited(_dismissIntro())),
+                  CinematicIntro(
+                    position: _introPosition,
+                    onDismiss: () => unawaited(_dismissIntro()),
+                    viceCity: viceCity,
+                  ),
                 ],
               );
             },
@@ -1877,8 +1887,8 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
                       child: child,
                     ),
                   ),
-                  child: Text(
-                    isStreamFocus ? context.tr("Discover") : context.tr("Library"),
+                  child: ViceCityTitle(
+                    isStreamFocus ? 'Discover' : 'Library',
                     key: ValueKey(focus),
                     style: theme.appBarTheme.titleTextStyle,
                   ),
@@ -1952,8 +1962,8 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
                   child: child,
                 ),
               ),
-              child: Text(
-                isStreamFocus ? context.tr("Discover") : context.tr("Resonance"),
+              child: ViceCityTitle(
+                isStreamFocus ? 'Discover' : 'Resonance',
                 key: ValueKey(focus),
                 style: TextStyle(
                   fontSize: 18,
@@ -3037,8 +3047,9 @@ EncodedPlaylistTransfer _encodeTransferManifest(Map<String, dynamic> json) {
 
 class _IntroOverlay extends StatefulWidget {
   final VoidCallback onDismiss;
+  final bool viceCity;
 
-  const _IntroOverlay({required this.onDismiss});
+  const _IntroOverlay({required this.onDismiss, required this.viceCity});
 
   @override
   State<_IntroOverlay> createState() => _IntroOverlayState();
@@ -3077,18 +3088,30 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
           return Opacity(
             opacity: reduceMotion ? 1 : exit,
             child: Container(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: const Alignment(0, -0.08),
-                  radius: 1.08,
-                  colors: [Color.lerp(const Color(0xFF15121D), primary, 0.09)!, const Color(0xFF07070B), Colors.black],
-                ),
-              ),
+              decoration: widget.viceCity
+                  ? null
+                  : BoxDecoration(
+                      gradient: RadialGradient(
+                        center: const Alignment(0, -0.08),
+                        radius: 1.08,
+                        colors: [
+                          Color.lerp(const Color(0xFF15121D), primary, 0.09)!,
+                          const Color(0xFF07070B),
+                          Colors.black,
+                        ],
+                      ),
+                    ),
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  Positioned.fill(child: CustomPaint(painter: _ResonancePainter(progress, primary, reduceMotion))),
-                  Center(
+                  if (widget.viceCity)
+                    Positioned.fill(child: ViceCityIntroBackdrop(clock: _controller))
+                  else
+                    Positioned.fill(child: CustomPaint(painter: _ResonancePainter(progress, primary, reduceMotion))),
+                  Align(
+                    alignment: widget.viceCity && ViceCityIntroBackdrop.isPortrait(context)
+                        ? const Alignment(0, -.45)
+                        : Alignment.center,
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -3124,16 +3147,21 @@ class _IntroOverlayState extends State<_IntroOverlay> with SingleTickerProviderS
                               opacity: wordReveal,
                               child: Transform.translate(
                                 offset: Offset(0, 10 * (1 - wordReveal)),
-                                child: Text(
-                                  context.tr("RESONANCE"),
-                                  style: TextStyle(
-                                    color: Color(0xFFF4F1FA),
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: AppStrings.of(context).locale.languageCode == 'ar' ? 0 : 6.2,
-                                    decoration: TextDecoration.none,
-                                  ),
-                                ),
+                                child: widget.viceCity
+                                    ? Semantics(
+                                        label: context.tr('Resonance'),
+                                        child: const ViceCityIntroWordmark(width: 220),
+                                      )
+                                    : Text(
+                                        context.tr("RESONANCE"),
+                                        style: TextStyle(
+                                          color: Color(0xFFF4F1FA),
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: AppStrings.of(context).locale.languageCode == 'ar' ? 0 : 6.2,
+                                          decoration: TextDecoration.none,
+                                        ),
+                                      ),
                               ),
                             ),
                           ),

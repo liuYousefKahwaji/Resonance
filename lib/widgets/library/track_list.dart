@@ -64,7 +64,6 @@ class TrackList extends StatefulWidget {
 }
 
 class _TrackListState extends State<TrackList> {
-  bool _isScrolling = false;
   final _blurStrength = ValueNotifier<double>(0);
   DateTime? _scrollStamp;
   final _search = TextEditingController();
@@ -219,22 +218,18 @@ class _TrackListState extends State<TrackList> {
     );
   }
 
-  bool _handleScroll(ScrollNotification notification) {
+  bool _handleScroll(ScrollNotification notification, {required bool blurEnabled}) {
     if (notification.depth != 0 || notification.metrics.axis != Axis.vertical) return false;
-    if (notification is ScrollUpdateNotification) {
+    if (blurEnabled && notification is ScrollUpdateNotification) {
       final now = DateTime.now();
       final seconds = _scrollStamp == null ? .016 : now.difference(_scrollStamp!).inMicroseconds / 1000000;
       _scrollStamp = now;
       final speed = (notification.scrollDelta ?? 0).abs() / seconds.clamp(.008, .1);
       _blurStrength.value = (_blurStrength.value * .55 + (speed / 2000).clamp(0.0, 1.0) * .45);
     }
-    final scrolling = notification is ScrollStartNotification || notification is ScrollUpdateNotification;
-    final stopped = notification is ScrollEndNotification;
-    if (scrolling && !_isScrolling) {
-      setState(() => _isScrolling = true);
-    } else if (stopped && _isScrolling) {
+    if (notification is ScrollEndNotification || !blurEnabled && _scrollStamp != null) {
       _scrollStamp = null;
-      setState(() => _isScrolling = false);
+      _blurStrength.value = 0;
     }
     return false;
   }
@@ -246,7 +241,7 @@ class _TrackListState extends State<TrackList> {
     }
 
     final query = _search.text.trim();
-    final indices = <int>[for (var i = 0; i < widget.tracks.length; i++) i];
+    List<int>? matches;
     if (query.isNotEmpty) {
       int rank(int i) {
         final path = widget.tracks[i];
@@ -254,12 +249,16 @@ class _TrackListState extends State<TrackList> {
         return trackSearchRank(query, metadata?.title ?? p.basenameWithoutExtension(path), metadata?.artist ?? '');
       }
 
-      indices.removeWhere((i) => rank(i) < 0);
-      indices.sort((a, b) {
+      matches = [
+        for (var i = 0; i < widget.tracks.length; i++)
+          if (rank(i) >= 0) i,
+      ];
+      matches.sort((a, b) {
         final comparison = rank(a).compareTo(rank(b));
         return comparison == 0 ? a.compareTo(b) : comparison;
       });
     }
+    final itemCount = matches?.length ?? widget.tracks.length;
     final list = ReorderableListView.builder(
       scrollController: widget.controller,
       buildDefaultDragHandles: false,
@@ -268,9 +267,9 @@ class _TrackListState extends State<TrackList> {
       // image work on lower-end phones. Desktop keeps the larger cache.
       cacheExtent: Platform.isAndroid ? 160 : 400,
       itemExtent: TrackList.itemExtent,
-      itemCount: indices.length,
+      itemCount: itemCount,
       itemBuilder: (context, visibleIndex) {
-        final index = indices[visibleIndex];
+        final index = matches?[visibleIndex] ?? visibleIndex;
         final trackPath = widget.tracks[index];
         return TrackTile(
           key: widget.itemKeyForIndex(widget.playlistNumber, index),
@@ -308,30 +307,35 @@ class _TrackListState extends State<TrackList> {
     );
     return Column(
       children: [
-        _searchBar(indices.length),
+        _searchBar(itemCount),
         Expanded(
-          child: indices.isEmpty
+          child: itemCount == 0
               ? Center(
                   child: Text(
                     _indexing ? context.tr("Searching tracks…") : context.tr("No matching tracks"),
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 )
-              : NotificationListener<ScrollNotification>(
-                  onNotification: _handleScroll,
-                  child: ValueListenableBuilder<bool>(
-                    valueListenable: ScrollEffectsPreferences.instance.motionBlurEnabled,
-                    child: list,
-                    builder: (context, motionBlurEnabled, child) => ValueListenableBuilder<double>(
-                      valueListenable: _blurStrength,
-                      child: child,
-                      builder: (context, strength, child) => TrackListMotionBlurSurface(
-                        enabled: motionBlurEnabled && _isScrolling,
-                        strength: strength,
-                        child: child!,
+              : ValueListenableBuilder<bool>(
+                  valueListenable: ScrollEffectsPreferences.instance.motionBlurEnabled,
+                  child: list,
+                  builder: (context, motionBlurEnabled, child) {
+                    final enabled = motionBlurEnabled && !MediaQuery.disableAnimationsOf(context);
+                    return NotificationListener<ScrollNotification>(
+                      onNotification: enabled || _blurStrength.value > 0
+                          ? (notification) => _handleScroll(notification, blurEnabled: enabled)
+                          : null,
+                      child: ValueListenableBuilder<double>(
+                        valueListenable: _blurStrength,
+                        child: child,
+                        builder: (context, strength, child) => TrackListMotionBlurSurface(
+                          enabled: enabled && strength > 0,
+                          strength: strength,
+                          child: child!,
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
         ),
       ],

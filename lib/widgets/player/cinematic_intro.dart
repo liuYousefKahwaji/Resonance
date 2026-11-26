@@ -2,12 +2,14 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:resonance/l10n/app_strings.dart';
+import 'package:resonance/widgets/player/vice_city_intro.dart';
 
 /// The timeline follows the existing 3.03-second sound, never a replacement.
 class CinematicIntro extends StatefulWidget {
-  const CinematicIntro({super.key, required this.position, required this.onDismiss});
+  const CinematicIntro({super.key, required this.position, required this.onDismiss, this.viceCity = false});
   final ValueListenable<Duration> position;
   final VoidCallback onDismiss;
+  final bool viceCity;
   @override
   State<CinematicIntro> createState() => _CinematicIntroState();
 }
@@ -63,6 +65,7 @@ class _CinematicIntroState extends State<CinematicIntro> with SingleTickerProvid
     final reduced = MediaQuery.disableAnimationsOf(context);
     final colors = Theme.of(context).colorScheme;
     final mobile = MediaQuery.sizeOf(context).width < 600;
+    final viceCity = widget.viceCity;
     return Semantics(
       label: context.tr('Resonance'),
       button: true,
@@ -75,23 +78,27 @@ class _CinematicIntroState extends State<CinematicIntro> with SingleTickerProvid
           child: Stack(
             alignment: Alignment.center,
             children: [
-              Positioned.fill(
-                child: RepaintBoundary(
-                  child: CustomPaint(
-                    key: const Key('cinematic-ribbons'),
-                    painter: _SoundMark(_clock, colors.primary, reduced, mobile ? 13 : 25),
-                  ),
-                ),
-              ),
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: RadialGradient(radius: .85, colors: [Colors.transparent, const Color(0x99000000)]),
+              if (viceCity)
+                Positioned.fill(child: ViceCityIntroBackdrop(clock: _clock))
+              else ...[
+                Positioned.fill(
+                  child: RepaintBoundary(
+                    child: CustomPaint(
+                      key: const Key('cinematic-ribbons'),
+                      painter: _SoundMark(_clock, colors.primary, reduced, mobile ? 13 : 25),
                     ),
                   ),
                 ),
-              ),
+                const Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: RadialGradient(radius: .85, colors: [Colors.transparent, Color(0x99000000)]),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               AnimatedBuilder(
                 animation: _clock,
                 child: Padding(
@@ -99,21 +106,23 @@ class _CinematicIntroState extends State<CinematicIntro> with SingleTickerProvid
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const SizedBox(height: 70),
+                      if (!viceCity) const SizedBox(height: 70),
                       FittedBox(
                         fit: BoxFit.scaleDown,
-                        child: Text(
-                          context.tr('Resonance'),
-                          textScaler: TextScaler.noScaling,
-                          style: TextStyle(
-                            fontSize: mobile ? 48 : 86,
-                            height: 1.12,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                            decoration: TextDecoration.none,
-                            letterSpacing: -.8,
-                          ),
-                        ),
+                        child: viceCity
+                            ? ViceCityIntroWordmark(width: mobile ? 300 : 530)
+                            : Text(
+                                context.tr('Resonance'),
+                                textScaler: TextScaler.noScaling,
+                                style: TextStyle(
+                                  fontSize: mobile ? 48 : 86,
+                                  height: 1.12,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                  decoration: TextDecoration.none,
+                                  letterSpacing: -.8,
+                                ),
+                              ),
                       ),
                       const SizedBox(height: 16),
                       Container(width: 44, height: 2, color: colors.primary.withValues(alpha: .85)),
@@ -125,9 +134,16 @@ class _CinematicIntroState extends State<CinematicIntro> with SingleTickerProvid
                   final reveal = reduced ? 1.0 : Curves.easeOutQuart.transform(((t - .32) / .24).clamp(0.0, 1.0));
                   final settle = Curves.easeOutCubic.transform(((t - .45) / .45).clamp(0.0, 1.0));
                   final exit = reduced ? 1.0 : 1 - Curves.easeInCubic.transform(((t - .94) / .06).clamp(0.0, 1.0));
-                  return Opacity(
-                    opacity: reveal * exit,
-                    child: Transform.scale(scale: reduced ? 1 : 1.14 - .14 * settle, child: title),
+                  return Align(
+                    alignment: viceCity
+                        ? (ViceCityIntroBackdrop.isPortrait(context)
+                              ? const Alignment(0, -.53)
+                              : const Alignment(0, -.12))
+                        : Alignment.center,
+                    child: Opacity(
+                      opacity: reveal * exit,
+                      child: Transform.scale(scale: reduced ? 1 : 1.14 - .14 * settle, child: title),
+                    ),
                   );
                 },
               ),
@@ -137,7 +153,7 @@ class _CinematicIntroState extends State<CinematicIntro> with SingleTickerProvid
                   onPressed: widget.onDismiss,
                   child: Text(
                     context.tr('tap to skip'),
-                    style: const TextStyle(color: Color(0xFFB7BCC5), fontSize: 12),
+                    style: TextStyle(color: viceCity ? const Color(0xFFFFE5DE) : const Color(0xFFB7BCC5), fontSize: 12),
                   ),
                 ),
               ),

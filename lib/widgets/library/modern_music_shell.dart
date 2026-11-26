@@ -2,6 +2,8 @@ import 'package:resonance/widgets/player/player_surface.dart';
 import 'package:flutter/material.dart';
 import 'package:resonance/l10n/app_strings.dart';
 import 'package:resonance/app/resonance_motion.dart';
+import 'package:resonance/app/theme.dart';
+import 'package:resonance/widgets/common/vice_city_title.dart';
 import 'listening_page_view.dart';
 
 /// Presentation only: navigation and playlist ownership stay in MainApp.
@@ -53,7 +55,8 @@ class _ModernMusicShellState extends State<ModernMusicShell> {
     builder: (context, constraints) {
       final wide = constraints.maxWidth >= 850;
       final colors = Theme.of(context).colorScheme;
-      final labels = [context.tr('Discover'), context.tr('Search'), context.tr('Library')];
+      const destinations = ['Discover', 'Search', 'Library'];
+      final labels = [for (final destination in destinations) context.tr(destination)];
       const icons = [Icons.explore_outlined, Icons.search_rounded, Icons.library_music_outlined];
       Widget navigation(int index, {bool compact = false}) {
         final active = widget.selected == index;
@@ -155,8 +158,8 @@ class _ModernMusicShellState extends State<ModernMusicShell> {
                                 Image.asset('assets/icon/icon.png', width: 28, height: 28),
                                 const SizedBox(width: 10),
                                 Expanded(
-                                  child: Text(
-                                    context.tr('Resonance'),
+                                  child: ViceCityTitle(
+                                    'Resonance',
                                     style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
                                   ),
                                 ),
@@ -310,7 +313,8 @@ class _ModernMusicShellState extends State<ModernMusicShell> {
       final content = widget.enableMobileSwipes && widget.pageBuilder != null
           ? ListeningPageView(selected: widget.selected, onSelected: widget.onSelected, builder: widget.pageBuilder!)
           : widget.content;
-      return SafeArea(
+      final viceCity = Theme.of(context).extension<ViceCityTheme>();
+      final layout = SafeArea(
         bottom: false,
         child: Column(
           children: [
@@ -328,8 +332,8 @@ class _ModernMusicShellState extends State<ModernMusicShell> {
                               Expanded(
                                 child: Semantics(
                                   header: true,
-                                  child: Text(
-                                    labels[widget.selected],
+                                  child: ViceCityTitle(
+                                    destinations[widget.selected],
                                     style: TextStyle(
                                       fontSize: wide ? 26 : 24,
                                       fontWeight: FontWeight.w700,
@@ -375,6 +379,12 @@ class _ModernMusicShellState extends State<ModernMusicShell> {
           ],
         ),
       );
+      return viceCity == null
+          ? layout
+          : DecoratedBox(
+              decoration: BoxDecoration(gradient: viceCity.shell),
+              child: layout,
+            );
     },
   );
 }

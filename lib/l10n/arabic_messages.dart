@@ -1,5 +1,6 @@
 /// Arabic UI translations. Placeholders match the English message templates.
 const arabicMessages = <String, String>{
+  'Vice City': 'فايس سيتي',
   'Line-synced': 'متزامنة مع الأسطر',
   'Length': 'المدة',
   'Timing': 'المزامنة',
